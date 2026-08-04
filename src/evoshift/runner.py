@@ -14,7 +14,12 @@ from evoshift.audit import state_fingerprint
 from evoshift.benchmarks.base import BenchmarkAdapter, sample_fingerprint
 from evoshift.config import EvoShiftConfig
 from evoshift.evaluation import compute_stream_metrics, score_feedback_sample, score_sample
-from evoshift.evolution import ExperienceCritic, PageHinkleyShiftDetector
+from evoshift.evolution import (
+    CandidateEvidencePool,
+    ExperienceCritic,
+    FeedbackTrustModel,
+    PageHinkleyShiftDetector,
+)
 from evoshift.evolution.replay import ReplayVerifier
 from evoshift.memory import MemoryManager, apply_policy_patch
 from evoshift.memory.policy import propose_bounded_policy_patch
@@ -30,6 +35,7 @@ from evoshift.schemas import (
     PromotionDecision,
     RunManifest,
     RunMode,
+    ShiftReport,
 )
 from evoshift.storage import SQLiteStore
 
@@ -144,19 +150,35 @@ class EvoShiftRunner:
             memory = MemoryManager(store)
             agent = MemoryAgent(client, self.config.provider, memory)
             critic = ExperienceCritic(client, self.config.provider, self.config.evolution)
-            detector = PageHinkleyShiftDetector(self.config.shift)
+            trust_model = FeedbackTrustModel(self.config.evolution)
+            detectors: Dict[str, PageHinkleyShiftDetector] = {}
+            regime_starts: Dict[str, int] = {}
             verifier = ReplayVerifier(
                 agent,
                 self.config.evolution,
                 protected_phases=self.config.benchmark.protected_phases,
             )
+            candidate_pool = CandidateEvidencePool(
+                min_observations=self.config.evolution.candidate_min_observations,
+                min_new_observations=(self.config.evolution.candidate_min_new_observations),
+                cooldown_episodes=self.config.evolution.candidate_cooldown_episodes,
+            )
+            candidate_pool.seed_accepted(memory.active())
             behavior = behavior_for(self.config.algorithm)
             episodes: List[Episode] = []
             failures: List[FailureRecord] = []
             decisions: List[PromotionDecision] = []
             rollbacks = 0
+            feedback_quarantined = 0
+            candidate_observations = 0
+            candidate_deferred = 0
+            candidate_replay_attempts = 0
+            candidate_duplicate_active = 0
+            shift_detection_events = 0
+            policy_evolution_suppressed_by_memory = 0
 
             for index, sample in enumerate(samples):
+                memory_promoted_this_episode = False
                 active_before = memory.active()
                 prediction = await agent.solve(
                     sample,
@@ -172,7 +194,35 @@ class EvoShiftRunner:
                     if active_before and prediction.retrieved
                     else (1.0 if active_before else 0.0)
                 )
-                shift = detector.update(feedback_score.primary, novelty, index, sample.domain)
+                assessment = trust_model.assess(sample)
+                feedback_eligible = (
+                    assessment.trust >= self.config.evolution.min_feedback_trust_for_candidate
+                )
+                detector = detectors.setdefault(
+                    sample.domain,
+                    PageHinkleyShiftDetector(self.config.shift),
+                )
+                if assessment.trust >= self.config.evolution.min_feedback_trust_for_drift:
+                    shift = detector.update(
+                        feedback_score.primary,
+                        novelty,
+                        index,
+                        sample.domain,
+                    )
+                    if shift.detected:
+                        regime_starts[sample.domain] = index
+                        shift_detection_events += 1
+                else:
+                    shift = ShiftReport(
+                        detector="feedback_trust_gate",
+                        domain=sample.domain,
+                        episode_index=index,
+                        novelty=novelty,
+                        reason=(
+                            f"feedback quarantined: trust={assessment.trust:.3f} "
+                            f"source={assessment.source}"
+                        ),
+                    )
                 episode = Episode(
                     episode_id=f"ep-{uuid.uuid4().hex[:16]}",
                     run_id=run_id,
@@ -181,6 +231,9 @@ class EvoShiftRunner:
                     output=prediction.output,
                     score=score,
                     feedback_score=feedback_score,
+                    feedback_trust=assessment.trust,
+                    feedback_eligible=feedback_eligible,
+                    feedback_trust_reason=assessment.reason,
                     selected_memory_ids=selected_ids,
                     policy_version=policy.version,
                     usage=prediction.usage,
@@ -190,7 +243,11 @@ class EvoShiftRunner:
                 store.save_episode(episode)
                 artifacts.append_episode(episode)
 
-                if not self.frozen_audit:
+                if (
+                    not self.frozen_audit
+                    and assessment.trust
+                    >= self.config.evolution.min_feedback_trust_for_memory_update
+                ):
                     credited_ids = prediction.output.applied_memory_ids or selected_ids
                     retired = memory.record_outcome(credited_ids, feedback_score.success, policy)
                     for item in retired:
@@ -202,10 +259,25 @@ class EvoShiftRunner:
                             item.memory_id,
                             payload,
                         )
+                elif not self.frozen_audit:
+                    feedback_quarantined += 1
+                    store.record_event(
+                        run_id,
+                        "feedback_quarantined",
+                        episode.episode_id,
+                        {
+                            "source": assessment.source,
+                            "trust": assessment.trust,
+                            "reason": assessment.reason,
+                        },
+                    )
 
-                should_extract = not feedback_score.success or (
-                    policy.learn_from_success_every > 0
-                    and (index + 1) % policy.learn_from_success_every == 0
+                should_extract = feedback_eligible and (
+                    not feedback_score.success
+                    or (
+                        policy.learn_from_success_every > 0
+                        and (index + 1) % policy.learn_from_success_every == 0
+                    )
                 )
                 if (
                     self.config.evolution.enabled
@@ -223,15 +295,15 @@ class EvoShiftRunner:
                         failure.model_dump(mode="json"),
                     )
                     if failure.proposed_memory is not None:
-                        candidate = memory.stage(failure.proposed_memory, policy)
-                        store.record_event(
-                            run_id,
-                            "memory_staged",
-                            f"{candidate.memory_id}@v{candidate.version}",
-                            {"status": candidate.status.value},
-                        )
-                        if candidate.status != MemoryStatus.REJECTED:
-                            if not behavior.verify_before_promotion:
+                        if not behavior.verify_before_promotion:
+                            candidate = memory.stage(failure.proposed_memory, policy)
+                            store.record_event(
+                                run_id,
+                                "memory_staged",
+                                f"{candidate.memory_id}@v{candidate.version}",
+                                {"status": candidate.status.value},
+                            )
+                            if candidate.status != MemoryStatus.REJECTED:
                                 active = memory.activate(candidate, 0.0, 0.0, 0.0)
                                 store.record_event(
                                     run_id,
@@ -239,22 +311,97 @@ class EvoShiftRunner:
                                     f"{active.memory_id}@v{active.version}",
                                     {"algorithm": self.config.algorithm.value},
                                 )
-                            elif len(episodes) >= self.config.evolution.min_validation_examples:
-                                decision = await verifier.validate_memory(
-                                    candidate, episodes, policy
+                        else:
+                            candidate_observations += 1
+                            evidence = candidate_pool.observe(
+                                failure.proposed_memory,
+                                index,
+                            )
+                            ready, readiness_reason = candidate_pool.readiness(
+                                evidence,
+                                index,
+                            )
+                            if not ready:
+                                candidate_deferred += 1
+                                if readiness_reason == "duplicate_of_active_memory":
+                                    candidate_duplicate_active += 1
+                                store.record_event(
+                                    run_id,
+                                    "candidate_deferred",
+                                    evidence.signature,
+                                    {
+                                        "reason": readiness_reason,
+                                        "observation_count": evidence.observation_count,
+                                        "last_validation_observation_count": (
+                                            evidence.last_validation_observation_count
+                                        ),
+                                    },
                                 )
-                                decisions.append(decision)
-                                store.save_validation(run_id, decision)
-                                artifacts.append_decision(decision)
-                                if decision.promote:
-                                    memory.activate(
-                                        candidate,
-                                        decision.result.mean_delta,
-                                        decision.result.ci_low,
-                                        decision.result.regression_rate,
+                            else:
+                                regime_start = regime_starts.get(sample.domain)
+                                replay_buffer, _ = verifier.memory_buffer(
+                                    evidence.candidate,
+                                    episodes,
+                                    regime_start_index=regime_start,
+                                )
+                                if (
+                                    len(replay_buffer)
+                                    < self.config.evolution.min_validation_examples
+                                ):
+                                    candidate_deferred += 1
+                                    store.record_event(
+                                        run_id,
+                                        "candidate_deferred",
+                                        evidence.signature,
+                                        {
+                                            "reason": "insufficient_trusted_replay_buffer",
+                                            "observation_count": evidence.observation_count,
+                                            "replay_count": len(replay_buffer),
+                                            "regime_start_index": regime_start,
+                                        },
                                     )
                                 else:
-                                    memory.reject(candidate)
+                                    candidate = memory.stage(evidence.candidate, policy)
+                                    store.record_event(
+                                        run_id,
+                                        "memory_staged",
+                                        f"{candidate.memory_id}@v{candidate.version}",
+                                        {
+                                            "status": candidate.status.value,
+                                            "candidate_signature": evidence.signature,
+                                            "observation_count": evidence.observation_count,
+                                        },
+                                    )
+                                    candidate_pool.mark_validated(evidence, index)
+                                    if candidate.status != MemoryStatus.REJECTED:
+                                        candidate_replay_attempts += 1
+                                        decision = await verifier.validate_memory(
+                                            candidate,
+                                            episodes,
+                                            policy,
+                                            regime_start_index=regime_start,
+                                        )
+                                        decisions.append(decision)
+                                        store.save_validation(run_id, decision)
+                                        artifacts.append_decision(decision)
+                                        if decision.promote:
+                                            memory.activate(
+                                                candidate,
+                                                decision.result.mean_delta,
+                                                decision.result.ci_low,
+                                                decision.result.regression_rate,
+                                            )
+                                            candidate_pool.mark_accepted(evidence)
+                                            memory_promoted_this_episode = True
+                                        else:
+                                            memory.reject(candidate)
+
+                if (
+                    shift.detected
+                    and memory_promoted_this_episode
+                    and not self.config.evolution.policy_evolve_if_memory_promoted
+                ):
+                    policy_evolution_suppressed_by_memory += 1
 
                 if (
                     shift.detected
@@ -262,6 +409,10 @@ class EvoShiftRunner:
                     and self.config.evolution.enabled
                     and self.config.evolution.policy_evolution_enabled
                     and self.config.evolution.policy_evolve_on_shift
+                    and (
+                        self.config.evolution.policy_evolve_if_memory_promoted
+                        or not memory_promoted_this_episode
+                    )
                     and behavior.evolve_policy
                     and failures
                     and len(episodes) >= self.config.evolution.min_validation_examples
@@ -269,7 +420,29 @@ class EvoShiftRunner:
                     recent_failures = failures[-self.config.evolution.validation_window :]
                     patch = propose_bounded_policy_patch(policy, recent_failures, shift)
                     challenger = apply_policy_patch(policy, patch)
-                    decision = await verifier.validate_policy(challenger, policy, episodes)
+                    regime_start = regime_starts.get(sample.domain)
+                    replay_buffer, _ = verifier.policy_buffer(
+                        episodes,
+                        regime_start_index=regime_start,
+                    )
+                    if len(replay_buffer) < self.config.evolution.min_validation_examples:
+                        store.record_event(
+                            run_id,
+                            "policy_patch_deferred",
+                            patch.patch_id,
+                            {
+                                "reason": "insufficient_trusted_replay_buffer",
+                                "replay_count": len(replay_buffer),
+                                "regime_start_index": regime_start,
+                            },
+                        )
+                        continue
+                    decision = await verifier.validate_policy(
+                        challenger,
+                        policy,
+                        episodes,
+                        regime_start_index=regime_start,
+                    )
                     decisions.append(decision)
                     store.save_validation(run_id, decision)
                     artifacts.append_decision(decision)
@@ -310,7 +483,15 @@ class EvoShiftRunner:
             )
             if self.frozen_audit:
                 metrics["promotion_precision"] = None
+            memory_decisions = [
+                decision for decision in decisions if decision.result.candidate_type == "memory"
+            ]
+            policy_decisions = [
+                decision for decision in decisions if decision.result.candidate_type == "policy"
+            ]
             promoted = sum(int(decision.promote) for decision in decisions)
+            promoted_memories = sum(int(decision.promote) for decision in memory_decisions)
+            promoted_policies = sum(int(decision.promote) for decision in policy_decisions)
             metrics.update(
                 {
                     "algorithm": self.config.algorithm.value,
@@ -323,9 +504,27 @@ class EvoShiftRunner:
                     "config_hash": self.config.fingerprint(),
                     "dataset_hash": dataset_hash,
                     "evolution": {
+                        "validation_decisions": len(decisions),
                         "candidates_evaluated": len(decisions),
                         "candidates_promoted": promoted,
                         "candidates_rejected": len(decisions) - promoted,
+                        "memory_candidates_evaluated": len(memory_decisions),
+                        "memory_candidates_promoted": promoted_memories,
+                        "memory_candidates_rejected": (len(memory_decisions) - promoted_memories),
+                        "policy_candidates_evaluated": len(policy_decisions),
+                        "policy_candidates_promoted": promoted_policies,
+                        "policy_candidates_rejected": (len(policy_decisions) - promoted_policies),
+                        "policy_evolution_suppressed_by_memory": (
+                            policy_evolution_suppressed_by_memory
+                        ),
+                        "candidate_observations": candidate_observations,
+                        "candidate_replay_attempts": candidate_replay_attempts,
+                        "candidate_deferred": candidate_deferred,
+                        "candidate_duplicate_active": candidate_duplicate_active,
+                        "feedback_quarantined": feedback_quarantined,
+                        "detector_domains": len(detectors),
+                        "shift_detection_events": shift_detection_events,
+                        "domains_with_detected_shift": len(regime_starts),
                         "memory_rollbacks": rollbacks,
                         "final_active_memories": len(final_memories),
                         "final_policy_version": policy.version,

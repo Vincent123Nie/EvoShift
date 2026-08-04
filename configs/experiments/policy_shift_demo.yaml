@@ -47,6 +47,19 @@ evolution:
   max_cost_increase_ratio: 1.0
   paired_replay: true
   feedback_mode: reward_only
+  feedback_default_trust: 0.50
+  feedback_source_trust:
+    verified_policy_engine: 1.0
+    execution_feedback: 0.45
+    untrusted_policy_message: 0.10
+  min_feedback_trust_for_drift: 0.60
+  min_feedback_trust_for_memory_update: 0.60
+  min_feedback_trust_for_candidate: 0.60
+  min_feedback_trust_for_replay: 0.60
+  candidate_min_observations: 1
+  candidate_min_new_observations: 1
+  candidate_cooldown_episodes: 4
+  replay_current_regime_only: true
   policy_evolution_enabled: true
   policy_evolve_on_shift: true
 

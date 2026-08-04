@@ -205,14 +205,11 @@ class HeuristicDemoClient:
         force_correct: bool,
     ) -> dict[str, Any]:
         cards = str(payload.get("experience_cards", ""))
-        phase = str(payload.get("phase", "phase_0"))
         has_v2 = _REFUND_V2_DIRECTIVE.casefold() in cards.casefold()
         has_v3 = _REFUND_V3_DIRECTIVE.casefold() in cards.casefold()
         standard_window = 14 if has_v2 or has_v3 else 7
         premium_window = 30 if has_v3 else standard_window
-        if force_correct:
-            standard_window = 14 if phase != "phase_0" else 7
-            premium_window = 30 if phase == "phase_2" else standard_window
+        del force_correct
         window = premium_window if tier == "premium" else standard_window
         answer = "APPROVE" if request_day <= window else "DENY"
         applied: list[str] = []
@@ -222,27 +219,34 @@ class HeuristicDemoClient:
             applied.extend(self._memory_ids_with_directive(_REFUND_V3_DIRECTIVE, cards))
         return {
             "answer": answer,
-            "confidence": 0.94 if has_v2 or has_v3 or phase == "phase_0" else 0.55,
+            "confidence": 0.94 if has_v2 or has_v3 else 0.55,
             "rationale_summary": "Applied the currently available refund-policy memory.",
             "applied_memory_ids": list(dict.fromkeys(applied)),
         }
 
     @staticmethod
     def _refund_critic_output(payload: Mapping[str, Any]) -> dict[str, Any]:
-        phase = str(payload.get("phase", "phase_0"))
-        if phase == "phase_2":
+        task = str(payload.get("task", ""))
+        match = _REFUND.search(task)
+        if match is None:
+            raise ProviderError("demo refund critic received an invalid refund task")
+        tier = match.group(1).lower()
+        request_day = int(match.group(2))
+        if tier == "premium" and request_day > 14:
             directive = _REFUND_V3_DIRECTIVE
             trigger = "A premium-customer refund request is made after day 14 but by day 30."
             anti_pattern = "Do not apply the 14-day standard limit to premium customers."
             tags = ["refund_policy", "premium_exception", "policy_v3"]
+            signature = "refund_policy_premium_exception_not_applied"
         else:
             directive = _REFUND_V2_DIRECTIVE
             trigger = "A refund request is made after day 7 but no later than day 14."
             anti_pattern = "Do not keep applying the superseded 7-day refund window."
             tags = ["refund_policy", "expanded_window", "policy_v2"]
+            signature = "refund_policy_expanded_window_not_applied"
         return {
             "failure_type": "reasoning_error",
-            "signature": f"refund_policy_not_applied_{phase}",
+            "signature": signature,
             "evidence": "The observed feedback disagreed with the current refund decision.",
             "confidence": 0.96,
             "memory": {

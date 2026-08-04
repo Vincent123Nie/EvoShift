@@ -52,7 +52,9 @@ cache behavior remain behind `LLMClient`.
 | `MemoryAgent` | Retrieval, context injection, solve/self-refine calls, structured answer parsing | Memory promotion decisions |
 | `MemoryManager` | Versioned memory lifecycle, deduplication, retrieval, online utility updates | LLM calls |
 | `ExperienceCritic` | Typed failure attribution and procedural-memory proposal | Direct activation of its proposal |
+| `FeedbackTrustModel` | Observable-source trust prior and adaptation eligibility | Hidden oracle correctness or same-source inference |
 | `PageHinkleyShiftDetector` | Online performance/novelty alarm and cooldown | Mutation generation |
+| `CandidateEvidencePool` | Candidate signature aggregation, retry cooldown, active-duplicate suppression | Promotion scoring |
 | `ReplayVerifier` | Same-example champion/challenger replay and protected-buffer construction | Threshold policy |
 | `PromotionGate` | Statistical, regression, and resource gates | Candidate generation |
 | `ResponsesClient` | `/responses`, retry, parsing, idempotency, cache and budget integration | Benchmark semantics |
@@ -90,15 +92,17 @@ sequenceDiagram
     L-->>A: normalized GenerationResponse
     A-->>R: AgentPrediction
     R->>R: score hidden oracle and observable feedback
-    R->>D: update(observable reward, retrieval novelty)
+    R->>R: assess observable feedback provenance
+    R->>D: update trusted observable reward and retrieval novelty
     D-->>R: ShiftReport
     R->>S: persist Episode and trace
     alt failed episode and evolution enabled
         R->>C: attribute failure
         C->>L: GenerationRequest(purpose=experience_critic)
         L-->>C: typed JSON candidate
-        C-->>R: FailureRecord + shadow MemoryItem
-        R->>V: paired replay champion vs candidate
+        C-->>R: FailureRecord + proposed MemoryItem
+        R->>R: aggregate candidate evidence and apply retry schedule
+        R->>V: current-regime paired replay plus protected history
         V->>A: repeated control/challenger solves
         V-->>R: PromotionDecision
         R->>S: activate or reject candidate
@@ -114,8 +118,11 @@ sequenceDiagram
 `Episode.score` stores hidden-oracle capability, while
 `Episode.feedback_score` stores the observation used by the online learner.
 They are identical for ordinary clean benchmarks and intentionally differ in
-feedback-robustness experiments. The foreground `Episode.usage` covers the
-user-facing solve path. The separate
+feedback-robustness experiments. `Episode.feedback_trust` records the
+observable provenance prior, and `feedback_eligible` records candidate-path
+eligibility. Component-specific thresholds independently gate drift, memory
+credit, candidate generation, and replay. The foreground `Episode.usage` covers
+the user-facing solve path. The separate
 budget ledger covers provider calls made by solve, critic, and replay when the
 client is connected to it. This distinction prevents a report from silently
 hiding adaptation overhead.
@@ -126,19 +133,23 @@ The fast loop runs at episode granularity:
 
 1. retrieve active memories;
 2. answer and score;
-3. update the success/failure posterior of memories credited by the solver;
-4. on an eligible outcome, attribute the failure and stage a memory candidate;
-5. verify, activate, or reject that candidate;
-6. retire an active memory whose posterior utility remains too low after enough
+3. assess feedback provenance and quarantine low-trust adaptation signals;
+4. update the success/failure posterior of memories credited by the solver;
+5. on an eligible outcome, attribute the failure and aggregate candidate evidence;
+6. when scheduled, stage and verify the candidate against current-regime and
+   protected replay;
+7. activate or reject the candidate;
+8. retire an active memory whose posterior utility remains too low after enough
    uses.
 
 The slow loop is gated by detected distribution shift:
 
-1. aggregate recent typed failures;
-2. construct an allowlisted `PolicyPatch` against the active version;
-3. materialize a schema-validated challenger policy;
-4. compare champion and challenger on the same replay buffer;
-5. activate the new version only if every promotion gate passes.
+1. run only when the shift is not already resolved by a newly promoted fast-loop memory;
+2. aggregate recent typed failures;
+3. construct an allowlisted `PolicyPatch` against the active version;
+4. materialize a schema-validated challenger policy;
+5. compare champion and challenger on the same replay buffer;
+6. activate the new version only if every promotion gate passes.
 
 The distinction prevents expensive global policy search after every isolated
 mistake while still allowing local experience acquisition.

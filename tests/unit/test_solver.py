@@ -7,6 +7,7 @@ from evoshift.config import ProviderConfig
 from evoshift.memory import MemoryManager
 from evoshift.schemas import (
     BenchmarkSample,
+    GenerationRequest,
     GenerationResponse,
     MemoryItem,
     MemoryStatus,
@@ -55,4 +56,8 @@ async def test_memory_agent_injects_retrieved_experience(tmp_path: Path) -> None
     assert prediction.output.answer == "4"
     assert prediction.output.applied_memory_ids == ["m1"]
     assert len(prediction.retrieved) == 1
+    request = client.requests[0]
+    assert isinstance(request, GenerationRequest)
+    user_payload = str(request.messages[-1]["content"])
+    assert '"phase"' not in user_payload
     store.close()

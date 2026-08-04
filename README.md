@@ -56,6 +56,10 @@ validation decision, event, and rollback is persisted with provenance.
 - Provenance-domain-scoped BM25 retrieval with Beta posterior utility,
   UCB-style exploration, MMR diversity, token budgeting, versioning,
   deduplication, and rollback.
+- Observable-provenance feedback trust gates for drift, memory credit,
+  candidate generation, and replay, with explicit quarantine metrics.
+- Per-domain post-alarm-reset drift detectors, candidate evidence scheduling,
+  current-regime ordinary replay, and cross-regime protected replay.
 - Paired bootstrap promotion gates with protected-slice and resource checks.
 - Immutable run artifacts, SQLite audit state, sweeps, paired run comparison,
   and Markdown/JSON reports.
@@ -155,15 +159,21 @@ python -m build
 python scripts/verify_bbh_manifest.py
 ```
 
-Verified locally on 2026-08-04:
+Verified locally on 2026-08-05:
 
-- 77 tests passed;
-- branch-aware coverage: 82.86% (`fail_under = 80`);
+- 96 tests passed;
+- branch-aware coverage: 82.77% (`fail_under = 80`);
 - Ruff and strict mypy passed;
 - source and wheel distributions built successfully;
+- every experiment, benchmark fragment, provider fragment, and sweep YAML
+  passed schema/loading validation;
 - the OpenAI-compatible provider contract suite passed, and an opt-in live
   smoke against a private compatible gateway returned exactly `OK`;
 - four BBH task files and 16 public smoke samples passed integrity checks.
+
+The final deterministic evidence includes a 60-run same-stream baseline sweep
+and a 100-run named ablation sweep. These diagnose algorithm semantics and
+resource tradeoffs; they are not public-model or SOTA results.
 
 The live smoke proves protocol compatibility only. It is not a benchmark result.
 
@@ -192,6 +202,7 @@ dataset hash, and comparison artifact.
 - [Limitations](docs/limitations.md)
 - [Interview defense notes](docs/interview_notes.md)
 - [Results template](docs/results_template.md)
+- [Robust-feedback experiment](docs/experiment_robust_feedback_promotion.md)
 
 ## Security
 

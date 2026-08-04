@@ -83,7 +83,6 @@ class ExperienceCritic:
         payload = {
             "task": episode.sample.prompt,
             "domain": episode.sample.domain,
-            "phase": episode.sample.phase,
             "agent_answer": episode.output.answer,
             "confidence": episode.output.confidence,
             "rationale_summary": episode.output.rationale_summary,

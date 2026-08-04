@@ -51,9 +51,20 @@ evolution:
   max_cost_increase_ratio: 0.30
   paired_replay: true
   feedback_mode: reward_only
+  feedback_default_trust: 1.0
+  feedback_source_trust: {}
+  min_feedback_trust_for_drift: 0.60
+  min_feedback_trust_for_memory_update: 0.60
+  min_feedback_trust_for_candidate: 0.60
+  min_feedback_trust_for_replay: 0.60
+  candidate_min_observations: 1
+  candidate_min_new_observations: 1
+  candidate_cooldown_episodes: 4
+  replay_current_regime_only: true
   max_candidates_per_round: 1
   policy_evolution_enabled: true
   policy_evolve_on_shift: true
+  policy_evolve_if_memory_promoted: false
 
 benchmark:
   kind: synthetic_shift

@@ -44,21 +44,27 @@ Only after `y_hat_t` is scored may feedback influence `M_(t+1)` or `pi_(t+1)`.
 for sample in stream:
     memories = retrieve(sample.prompt, active_memory, champion_policy)
     prediction = solve(sample, memories)
-    reward = evaluator(sample.reference, prediction.answer)
-    update_memory_posteriors(prediction.applied_memory_ids, reward)
-    shift = detector.update(1 - reward, retrieval_novelty)
+    oracle_score = hidden_evaluator(sample.reference, prediction.answer)
+    feedback_score = observable_evaluator(sample.feedback, prediction.answer)
+    trust = assess_observable_provenance(sample.feedback_source)
 
-    if eligible_for_experience_extraction:
-        failure = critic(sample, prediction, reward, active_memory, shift)
-        candidate = stage(failure.proposed_memory)
-        if candidate is not rejected:
-            decision = paired_replay(candidate, champion)
+    if trust >= memory_update_threshold:
+        update_memory_posteriors(prediction.applied_memory_ids, feedback_score)
+    if trust >= drift_threshold:
+        shift = detector[sample.domain].update(feedback_score, retrieval_novelty)
+
+    if trust >= candidate_threshold and eligible_for_experience_extraction:
+        failure = critic(sample, prediction, feedback_score, active_memory, shift)
+        evidence = candidate_pool.observe(failure.proposed_memory)
+        if candidate_pool.ready(evidence):
+            candidate = stage(evidence.candidate)
+            decision = paired_replay(candidate, current_regime, protected_history)
             activate(candidate) if decision.promote else reject(candidate)
 
-    if shift.detected and recent_failures:
+    if shift.detected and recent_failures and not memory_promoted_this_episode:
         patch = deterministic_bounded_mutation(champion_policy, recent_failures)
         challenger = apply_and_validate(patch)
-        decision = paired_replay(challenger, champion_policy)
+        decision = paired_replay(challenger, current_regime, protected_history)
         champion_policy = challenger if decision.promote else champion_policy
 ```
 
@@ -158,6 +164,24 @@ Once memory exists, a query for which no memory is eligible has novelty `1.0`;
 this makes an out-of-domain transition visible to the drift detector instead of
 silently reporting zero novelty.
 
+## Observable feedback trust
+
+`FeedbackTrustModel` reads only `metadata.feedback_source`. A configured source
+receives its declared trust prior; an unknown source receives
+`feedback_default_trust`. Hidden fields such as `feedback_kind`,
+`feedback_corrupted`, the benchmark reference, and the phase identifier are not
+inputs to the online decision.
+
+Four independent thresholds gate drift, memory posterior updates, candidate
+generation, and replay. This prevents an observation that is acceptable for a
+low-risk statistic from automatically becoming a long-lived memory label.
+
+This is provenance-aware admission, not a learned trust model. It assumes the
+source identity is meaningful and difficult to forge. Clean and corrupted
+events sharing one source require temporal consistency, cross-evidence
+agreement, and a dynamic reliability posterior, which are not implemented in
+this iteration.
+
 ## Online drift detection
 
 VERA applies Page-Hinkley to bounded loss and augments it with an EWMA of
@@ -186,8 +210,10 @@ novelty_ewma_t = a * novelty_t + (1 - a) * novelty_ewma_(t-1)
 ```
 
 and triggers when its configured threshold is crossed under the same
-eligibility conditions. On detection, Page-Hinkley cumulative state resets and
-a cooldown prevents immediate repeated policy mutations.
+eligibility conditions. Each domain owns an independent detector. On detection,
+Page-Hinkley cumulative state resets and a cooldown prevents immediate repeated
+policy mutations. Metrics separately report the number of detector domains,
+the number of domains with at least one alarm, and the total alarm-event count.
 
 Why Page-Hinkley in the MVP:
 
@@ -205,7 +231,7 @@ detectors are valid ablations rather than assumed improvements.
 
 After an eligible failure, the critic receives a bounded structured view:
 
-- task, domain, and stream phase;
+- task and domain, but not the benchmark phase identifier;
 - agent answer, confidence, and short rationale summary;
 - reward and allowed feedback;
 - selected memory IDs and summaries of a few active memories;
@@ -242,6 +268,14 @@ utility counts. Otherwise it receives a stable SHA-256-derived ID.
 Every staged candidate remains `SHADOW`; normal retrieval only sees `ACTIVE`
 items. This keeps model suggestions from becoming behavior before validation.
 
+Before staging, `CandidateEvidencePool` groups candidates with the same
+normalized typed content signature. The first observation may enter replay;
+the replay examples, rather than an arbitrary second failure, supply the
+multi-example validation evidence. After a rejected validation, a candidate
+must accumulate the configured number of new observations and pass a cooldown
+before retrying. A signature already represented by an active memory is
+suppressed without another paid replay.
+
 The current deduplication is intentionally simple and can both under-merge
 paraphrases and over-merge lexically similar but semantically different rules.
 An embedding or entailment-based deduplicator is a future comparison, not an
@@ -252,11 +286,16 @@ assumed replacement.
 The replay buffer mixes adaptation relevance with backward-compatibility
 protection:
 
-- roughly two thirds are recent ordinary episodes ranked by lexical similarity
-  to the candidate trigger/scope, breaking ties by recency;
+- roughly two thirds are ordinary episodes from the current detected regime,
+  ranked by lexical similarity to the candidate trigger/scope and then recency;
 - up to roughly one third come from configured protected phases or explicitly
-  protected examples;
+  protected examples, including protected examples from earlier regimes;
 - remaining slots are filled by recent episodes.
+
+This asymmetry is intentional. Superseded ordinary labels must not veto a real
+policy update, while invariant safety cases must remain valid across updates.
+The historical-replay ablation is retained because it produced severe
+old-rule leakage on PolicyShift.
 
 For a memory candidate, the control uses the current active memory set and the
 challenger receives the shadow candidate as a forced extra card. With
@@ -328,7 +367,11 @@ Applying a stale patch or changing a non-evolvable field raises an error.
 
 This design trades search breadth for auditability. A later implementation can
 add Bayesian optimization, bandits, or an LLM proposer while retaining the
-same typed mutation and replay gate.
+same typed mutation and replay gate. When a fast-loop memory is promoted on the
+same episode as a shift alarm, the slow loop is suppressed by default. The
+memory is the lower-cost targeted adaptation; running both loops was measured
+to add replay calls without changing first-pass performance. The behavior is a
+configurable ablation through `policy_evolve_if_memory_promoted`.
 
 ## Online utility and rollback
 
@@ -365,6 +408,9 @@ The canonical report supports:
 - post-shift gain against a sample-aligned baseline;
 - backward transfer and forgetting when a performance matrix is supplied;
 - promotion precision;
+- source-trust quarantine and clean-quarantine rates;
+- total shift-alarm events and affected domains;
+- separate memory and policy validation/promotion counts;
 - tokens, cost, and p50/p95 latency.
 
 Two caveats matter:

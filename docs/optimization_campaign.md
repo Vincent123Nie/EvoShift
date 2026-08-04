@@ -79,17 +79,47 @@ successfully falsified an overstated adaptation claim and provides the required
 measurement surface for the next algorithm iteration. Do not treat the demo
 numbers as model-quality or SOTA evidence.
 
-### Iteration 2 hypothesis
+## Iteration 2: provenance-gated, regime-aware promotion
 
-The next branch combines two changes that address the strongest observed
-failure without changing hidden-oracle access:
+- Branch: `codex/robust-feedback-promotion`
+- Experiment record: [experiment_robust_feedback_promotion.md](experiment_robust_feedback_promotion.md)
+- Status: implementation and repeated-seed deterministic evaluation complete;
+  final quality gate passed with 96 tests, 82.77% branch coverage, Ruff,
+  formatting, strict mypy, package build, and schema/loading validation for all
+  experiment, benchmark, provider, and sweep YAML files.
 
-1. aggregate candidate evidence and enforce a cooldown/minimum-new-evidence
-   threshold so the same semantic card is not replayed on every failure;
-2. estimate feedback trust from observable provenance, temporal consistency,
-   and repeated agreement, then weight or quarantine low-trust replay labels.
+The branch adds observable-source trust gating, per-domain drift detectors,
+post-alarm baseline reset, content-signature candidate evidence aggregation,
+current-regime ordinary replay, cross-regime protected replay, duplicate-active
+suppression, and separate memory/policy validation counters.
 
-Primary adoption metrics are changed-case success, old-rule leakage, clean
-adaptation delay, attack-following rate, false promotion, total requests, and
-total tokens. UCB versus Thompson sampling remains deferred until several
-competing active memories exist.
+The first schedule required two identical candidate observations before replay.
+That looked safer but duplicated evidence already supplied by the replay buffer:
+
+| Variant | Score | Changed success | Old leakage | Requests | Tokens |
+|---|---:|---:|---:|---:|---:|
+| Two observations | 0.9444 | 0.7143 | 0.2857 | 194 | 59,899 |
+| One observation + paired replay | 0.9722 | 0.8571 | 0.1429 | 132 | 42,417 |
+
+The adopted schedule allows the first candidate into shadow replay, while
+cooldown and minimum-new-evidence rules still control retries after rejection.
+When that fast-loop memory passes, the same episode's slow retrieval-policy
+validation is suppressed. A 100-run ablation showed that always running the
+slow loop preserved score but raised clean mean requests from 132 to 190.
+
+The strongest ablation result concerns temporal validity. Replaying historical
+ordinary examples instead of current-regime ordinary examples reduced clean
+changed-case success from `0.8571` to `0.0429`, raised old-rule leakage from
+`0.1429` to `0.9571`, and increased mean requests to `649.8`. Protected
+invariants must cross regimes; superseded ordinary labels must not.
+
+Removing the provenance trust gate under combined corruption reduced mean
+score from `0.9639` to `0.9361` and increased mean requests from `128.0` to
+`342.6`. This supports the gate only under the stated source-separation
+assumption. The implementation does not yet infer temporal consistency or
+same-source reliability; those remain Iteration 3 rather than being implied by
+this result.
+
+Adoption decision: keep the one-observation verified schedule, regime-aware
+replay, trust gate, and fast-loop suppression. UCB versus Thompson sampling
+remains deferred until several competing active memories exist.

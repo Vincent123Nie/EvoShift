@@ -231,6 +231,9 @@ class Episode(StrictModel):
     output: SolverOutput
     score: ScoreBundle
     feedback_score: Optional[ScoreBundle] = None
+    feedback_trust: float = Field(default=1.0, ge=0.0, le=1.0)
+    feedback_eligible: bool = True
+    feedback_trust_reason: str = "default_trust"
     selected_memory_ids: List[str] = Field(default_factory=list)
     policy_version: int = Field(default=1, ge=1)
     usage: LLMUsage = Field(default_factory=LLMUsage)

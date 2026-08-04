@@ -227,9 +227,18 @@ memory credit, failure extraction, and replay. Ordinary benchmarks leave
 `feedback_reference` unset, making both channels identical. PolicyShift sets it
 explicitly to test noise and attacks without redefining ground truth.
 
+Before adaptation, `FeedbackTrustModel` assigns a trust prior using only the
+observable `feedback_source`. Independent thresholds gate drift, memory credit,
+candidate generation, and replay. `feedback_kind`, `feedback_corrupted`, the
+hidden oracle label, and the phase identifier are benchmark annotations and
+must not enter the online trust decision. The implemented model is a configured
+provenance prior, not a learned same-source reliability estimator.
+
 The report includes oracle/feedback agreement, false-positive and
-false-negative feedback rates, annotated noise rate, and score gap. This
-separation is required before claiming robustness to unreliable feedback.
+false-negative feedback rates, annotated noise rate, score gap, mean trust,
+eligible-feedback rate, corrupted-feedback quarantine rate, and clean-feedback
+quarantine rate. This separation is required before claiming robustness to
+unreliable feedback.
 
 ### 5.2 PolicyShift benchmark
 
@@ -256,6 +265,12 @@ PolicyShift reports changed-case success, old-rule leakage, invariant
 retention, future-change success, premature-update rate, corrupted-feedback
 following, and attack-following rates in addition to the standard stream
 metrics.
+
+Ordinary replay examples are restricted to the current detected regime.
+Protected invariant examples may cross regime boundaries. Report
+`shift_detection_events` separately from `domains_with_detected_shift`; the
+former counts alarms, while the latter counts domains that experienced at least
+one alarm.
 
 ## 6. Metric definitions
 

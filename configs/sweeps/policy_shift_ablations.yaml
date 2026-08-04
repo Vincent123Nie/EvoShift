@@ -1,0 +1,22 @@
+base_config: configs/experiments/policy_shift_demo.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_rate: [0.0, 0.10]
+variants:
+  full: {}
+  no_trust_gate:
+    evolution.feedback_source_trust:
+      verified_policy_engine: 1.0
+      execution_feedback: 1.0
+      untrusted_policy_message: 1.0
+  delayed_two_evidence:
+    evolution.candidate_min_observations: 2
+  historical_replay:
+    evolution.replay_current_regime_only: false
+  always_slow_loop:
+    evolution.policy_evolve_if_memory_promoted: true
+# 5 variants * 5 seeds * 2 noise levels * 2 attack levels = 100 runs.
+max_runs: 100

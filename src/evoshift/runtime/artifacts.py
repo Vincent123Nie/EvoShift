@@ -73,6 +73,9 @@ class RunArtifacts:
             "policy_version": episode.policy_version,
             "score": episode.score.model_dump(mode="json"),
             "feedback_score": episode.adaptation_score.model_dump(mode="json"),
+            "feedback_trust": episode.feedback_trust,
+            "feedback_eligible": episode.feedback_eligible,
+            "feedback_trust_reason": episode.feedback_trust_reason,
             "usage": episode.usage.model_dump(mode="json"),
             "shift": episode.shift.model_dump(mode="json") if episode.shift else None,
         }

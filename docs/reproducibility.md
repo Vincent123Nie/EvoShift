@@ -100,6 +100,18 @@ comparisons:
 evoshift sweep --spec configs/sweeps/policy_shift_baselines.yaml
 ```
 
+Run the named one-factor robustness and scheduling ablations:
+
+```bash
+evoshift sweep --spec configs/sweeps/policy_shift_ablations.yaml
+```
+
+Sweep rows retain a `variant` name and aggregate total score, changed-case
+success, old-rule leakage, invariant retention, attack following, corruption
+quarantine, recovery, shift events, memory promotions, complete requests, and
+complete tokens. `matrix.json` is the machine-readable source; `report.md` is a
+compact review surface.
+
 The demo provider is still deterministic scaffolding, not model-quality
 evidence. Its purpose is to expose whether the state machine accepts true
 updates, follows corrupted feedback, or incorrectly protects superseded rules.
@@ -333,6 +345,10 @@ Tunable values include:
 - memory token budget, write threshold, dedup threshold;
 - Page-Hinkley `delta`, threshold, minimum instances, novelty EWMA and cooldown;
 - replay window and protected quota through phase configuration;
+- feedback source priors and component-specific trust thresholds;
+- candidate minimum observations, minimum new evidence, and retry cooldown;
+- current-regime versus historical ordinary replay;
+- whether slow policy evolution still runs after same-episode memory promotion;
 - bootstrap samples/confidence;
 - minimum gain, CI lower bound, regression and cost gates;
 - rollback utility threshold and minimum uses.

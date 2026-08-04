@@ -23,3 +23,22 @@ def test_detector_can_use_novelty_signal() -> None:
     report = detector.update(1.0, 0.8, 2)
     assert report.detected
     assert "novelty" in report.reason
+
+
+def test_detector_restarts_its_baseline_after_an_alarm() -> None:
+    detector = PageHinkleyShiftDetector(
+        ShiftConfig(
+            min_instances=3,
+            threshold=0.5,
+            delta=0.0,
+            novelty_threshold=1.0,
+            cooldown_episodes=0,
+        )
+    )
+    detector.update(1.0, 0.0, 0)
+    detector.update(1.0, 0.0, 1)
+    report = detector.update(0.0, 0.0, 2)
+
+    assert report.detected
+    assert detector.state()["count"] == 0.0
+    assert detector.state()["mean_loss"] == 0.0

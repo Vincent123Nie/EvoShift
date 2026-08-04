@@ -393,6 +393,11 @@ def feedback_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
             "false_positive_feedback_rate": 0.0,
             "false_negative_feedback_rate": 0.0,
             "mean_absolute_score_gap": 0.0,
+            "mean_trust": 0.0,
+            "eligible_feedback_rate": 0.0,
+            "quarantined_feedback_n": 0,
+            "corrupted_feedback_quarantine_rate": 0.0,
+            "clean_feedback_quarantine_rate": 0.0,
             "annotated_noise_rate": 0.0,
             "clean_episodes": 0,
             "noise_episodes": 0,
@@ -414,6 +419,15 @@ def feedback_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
     clean = sum(kind == "clean" for kind in kinds)
     noise = sum(kind == "noise" for kind in kinds)
     attack = sum(kind == "attack" for kind in kinds)
+    quarantined = [episode for episode in episodes if not episode.feedback_eligible]
+    corrupted = [
+        episode for episode in episodes if bool(episode.sample.metadata.get("feedback_corrupted"))
+    ]
+    annotated_clean = [
+        episode
+        for episode in episodes
+        if not bool(episode.sample.metadata.get("feedback_corrupted"))
+    ]
     return {
         "mean_score": statistics.fmean(score.primary for score in visible),
         "success_rate": statistics.fmean(float(score.success) for score in visible),
@@ -423,6 +437,21 @@ def feedback_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
         "mean_absolute_score_gap": statistics.fmean(
             abs(feedback.primary - episode.score.primary)
             for episode, feedback in zip(episodes, visible)
+        ),
+        "mean_trust": statistics.fmean(episode.feedback_trust for episode in episodes),
+        "eligible_feedback_rate": statistics.fmean(
+            float(episode.feedback_eligible) for episode in episodes
+        ),
+        "quarantined_feedback_n": len(quarantined),
+        "corrupted_feedback_quarantine_rate": (
+            statistics.fmean(float(not episode.feedback_eligible) for episode in corrupted)
+            if corrupted
+            else 0.0
+        ),
+        "clean_feedback_quarantine_rate": (
+            statistics.fmean(float(not episode.feedback_eligible) for episode in annotated_clean)
+            if annotated_clean
+            else 0.0
         ),
         "annotated_noise_rate": (noise + attack) / len(episodes),
         "clean_episodes": clean,

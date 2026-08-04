@@ -24,4 +24,5 @@ data/*.db
 data/*.sqlite*
 runs/*
 !runs/.gitkeep
+tmp/
 *.log

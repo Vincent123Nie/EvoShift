@@ -50,8 +50,13 @@ class PageHinkleyShiftDetector:
         elif self.cooldown_remaining > 0:
             reason = "detector cooldown"
         if detected:
+            # Start a fresh baseline for the new regime. Keeping the historical
+            # mean after an alarm repeatedly redetects the same sustained shift.
+            self.count = 0
+            self.mean_loss = 0.0
             self.cumulative = 0.0
             self.minimum = 0.0
+            self.novelty_ewma = 0.0
             self.cooldown_remaining = self.config.cooldown_episodes
         return ShiftReport(
             detected=detected,

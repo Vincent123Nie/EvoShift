@@ -23,6 +23,8 @@ def select_replay_buffer(
     *,
     query: str = "",
     protected_phases: Sequence[str] = (),
+    min_feedback_trust: float = 0.0,
+    regime_start_index: int | None = None,
 ) -> Tuple[List[Episode], List[bool]]:
     """Build a deterministic related/protected replay mixture.
 
@@ -35,13 +37,21 @@ def select_replay_buffer(
         raise ValueError("replay window must be positive")
     if not episodes:
         return [], []
+    eligible = [episode for episode in episodes if episode.feedback_trust >= min_feedback_trust]
+    if not eligible:
+        return [], []
     protected_set = set(protected_phases)
     protected = [
         episode
-        for episode in episodes
+        for episode in eligible
         if episode.sample.phase in protected_set or bool(episode.sample.metadata.get("protected"))
     ]
-    ordinary = [episode for episode in episodes if episode not in protected]
+    ordinary = [
+        episode
+        for episode in eligible
+        if episode not in protected
+        and (regime_start_index is None or episode.index >= regime_start_index)
+    ]
     query_tokens = tokenize(query)
 
     def relevance(episode: Episode) -> Tuple[float, int]:
@@ -53,11 +63,15 @@ def select_replay_buffer(
     protected_quota = min(len(protected), max(1, math.floor(window / 3)))
     related_quota = max(0, window - protected_quota)
     selected = ordinary[:related_quota] + protected[:protected_quota]
-    if len(selected) < min(window, len(episodes)):
+    ordinary_ids = {episode.episode_id for episode in ordinary}
+    available = ordinary + [
+        episode for episode in protected if episode.episode_id not in ordinary_ids
+    ]
+    if len(selected) < min(window, len(available)):
         selected_ids = {episode.episode_id for episode in selected}
-        remaining = sorted(episodes, key=lambda episode: episode.index, reverse=True)
+        remaining = sorted(available, key=lambda episode: episode.index, reverse=True)
         selected.extend(episode for episode in remaining if episode.episode_id not in selected_ids)
-        selected = selected[:window]
+        selected = selected[: min(window, len(available))]
     selected.sort(key=lambda episode: episode.index)
     mask = [
         episode.sample.phase in protected_set or bool(episode.sample.metadata.get("protected"))
@@ -79,17 +93,53 @@ class ReplayVerifier:
         self.protected_phases = tuple(protected_phases)
         self.gate = PromotionGate(config)
 
+    def memory_buffer(
+        self,
+        candidate: MemoryItem,
+        episodes: Sequence[Episode],
+        *,
+        regime_start_index: int | None = None,
+    ) -> Tuple[List[Episode], List[bool]]:
+        return select_replay_buffer(
+            episodes,
+            self.config.validation_window,
+            query=f"{candidate.trigger} {candidate.scope}",
+            protected_phases=self.protected_phases,
+            min_feedback_trust=self.config.min_feedback_trust_for_replay,
+            regime_start_index=(
+                regime_start_index if self.config.replay_current_regime_only else None
+            ),
+        )
+
+    def policy_buffer(
+        self,
+        episodes: Sequence[Episode],
+        *,
+        regime_start_index: int | None = None,
+    ) -> Tuple[List[Episode], List[bool]]:
+        return select_replay_buffer(
+            episodes,
+            self.config.validation_window,
+            query="",
+            protected_phases=self.protected_phases,
+            min_feedback_trust=self.config.min_feedback_trust_for_replay,
+            regime_start_index=(
+                regime_start_index if self.config.replay_current_regime_only else None
+            ),
+        )
+
     async def validate_memory(
         self,
         candidate: MemoryItem,
         episodes: Sequence[Episode],
         policy: PolicyGenome,
+        *,
+        regime_start_index: int | None = None,
     ) -> PromotionDecision:
-        buffer, protected_mask = select_replay_buffer(
+        buffer, protected_mask = self.memory_buffer(
+            candidate,
             episodes,
-            self.config.validation_window,
-            query=f"{candidate.trigger} {candidate.scope}",
-            protected_phases=self.protected_phases,
+            regime_start_index=regime_start_index,
         )
         control_scores: List[float] = []
         candidate_scores: List[float] = []
@@ -135,12 +185,12 @@ class ReplayVerifier:
         candidate: PolicyGenome,
         champion: PolicyGenome,
         episodes: Sequence[Episode],
+        *,
+        regime_start_index: int | None = None,
     ) -> PromotionDecision:
-        buffer, protected_mask = select_replay_buffer(
+        buffer, protected_mask = self.policy_buffer(
             episodes,
-            self.config.validation_window,
-            query="",
-            protected_phases=self.protected_phases,
+            regime_start_index=regime_start_index,
         )
         control_scores: List[float] = []
         candidate_scores: List[float] = []

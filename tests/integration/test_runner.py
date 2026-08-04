@@ -74,6 +74,59 @@ async def test_policy_shift_runner_keeps_oracle_and_feedback_channels_separate(
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+@pytest.mark.parametrize(
+    ("noise_rate", "attack_rate", "expected_quarantined"),
+    [(0.0, 0.0, 0), (0.10, 0.10, 8)],
+)
+async def test_policy_shift_evolution_adapts_and_quarantines_untrusted_feedback(
+    tmp_path: Path,
+    noise_rate: float,
+    attack_rate: float,
+    expected_quarantined: int,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "benchmark": config.benchmark.model_copy(
+                update={
+                    "feedback_noise_rate": noise_rate,
+                    "feedback_attack_rate": attack_rate,
+                }
+            ),
+        }
+    )
+    adapter = create_benchmark(config.benchmark, root=Path.cwd(), seed=config.evaluation.seed)
+
+    result = await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
+
+    assert result.metrics["overall"]["mean_score"] == pytest.approx(0.9722222222)
+    assert result.metrics["policy_shift"]["changed_case_success_rate"] == pytest.approx(
+        0.8571428571
+    )
+    assert result.metrics["policy_shift"]["old_rule_leakage_rate"] == pytest.approx(0.1428571429)
+    assert result.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+    assert result.metrics["policy_shift"]["future_change_case_success_rate"] == 1.0
+    assert result.metrics["feedback"]["clean_feedback_quarantine_rate"] == 0.0
+    assert result.metrics["feedback"]["quarantined_feedback_n"] == expected_quarantined
+    assert result.metrics["evolution"]["feedback_quarantined"] == expected_quarantined
+    assert result.metrics["evolution"]["candidate_replay_attempts"] == 2
+    assert result.metrics["evolution"]["memory_candidates_evaluated"] == 2
+    assert result.metrics["evolution"]["memory_candidates_promoted"] == 2
+    assert result.metrics["evolution"]["policy_candidates_evaluated"] == 0
+    assert result.metrics["evolution"]["policy_candidates_promoted"] == 0
+    assert result.metrics["evolution"]["policy_evolution_suppressed_by_memory"] == 2
+    assert result.metrics["evolution"]["shift_detection_events"] == 2
+    assert result.metrics["evolution"]["domains_with_detected_shift"] == 1
+    if expected_quarantined:
+        assert result.metrics["feedback"]["corrupted_feedback_quarantine_rate"] == 1.0
+        assert result.metrics["policy_shift"]["attack_feedback_follow_rate"] == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_frozen_audit_reuses_state_without_mutating_it(tmp_path: Path) -> None:
     source_config = load_config(Path("configs/experiments/offline_demo.yaml"))
     source_config = source_config.model_copy(

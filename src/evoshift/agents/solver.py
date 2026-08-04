@@ -109,7 +109,6 @@ class MemoryAgent:
         task_payload = {
             "sample_id": sample.sample_id,
             "domain": sample.domain,
-            "phase": sample.phase,
             "task": sample.prompt,
             "experience_cards": context,
             "retrieval_novelty": novelty,

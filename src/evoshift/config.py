@@ -76,14 +76,35 @@ class EvolutionConfig(ConfigModel):
     max_cost_increase_ratio: float = Field(default=0.30, ge=0.0)
     paired_replay: bool = True
     feedback_mode: str = "reward_only"
+    feedback_default_trust: float = Field(default=1.0, ge=0.0, le=1.0)
+    feedback_source_trust: Dict[str, float] = Field(default_factory=dict)
+    min_feedback_trust_for_drift: float = Field(default=0.60, ge=0.0, le=1.0)
+    min_feedback_trust_for_memory_update: float = Field(default=0.60, ge=0.0, le=1.0)
+    min_feedback_trust_for_candidate: float = Field(default=0.60, ge=0.0, le=1.0)
+    min_feedback_trust_for_replay: float = Field(default=0.60, ge=0.0, le=1.0)
+    candidate_min_observations: int = Field(default=1, ge=1, le=1000)
+    candidate_min_new_observations: int = Field(default=1, ge=1, le=1000)
+    candidate_cooldown_episodes: int = Field(default=4, ge=0, le=10000)
+    replay_current_regime_only: bool = True
     max_candidates_per_round: int = Field(default=1, ge=1, le=8)
     policy_evolution_enabled: bool = True
     policy_evolve_on_shift: bool = True
+    policy_evolve_if_memory_promoted: bool = False
 
     @model_validator(mode="after")
     def validate_feedback_mode(self) -> "EvolutionConfig":
         if self.feedback_mode not in {"reward_only", "grader_feedback", "reference_upper_bound"}:
             raise ValueError("unsupported feedback_mode")
+        invalid_sources = sorted(
+            source
+            for source, trust in self.feedback_source_trust.items()
+            if not source.strip() or not 0.0 <= trust <= 1.0
+        )
+        if invalid_sources:
+            raise ValueError(
+                "feedback_source_trust requires non-empty sources and values in [0, 1]: "
+                + ", ".join(invalid_sources)
+            )
         return self
 
 

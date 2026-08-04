@@ -221,22 +221,26 @@ def test_feedback_metrics_quantify_false_adaptation_signals() -> None:
     correct_but_rejected = _episode(0, 1.0, "stream").model_copy(
         update={
             "feedback_score": ScoreBundle(primary=0.0, success=False),
+            "feedback_trust": 0.2,
+            "feedback_eligible": False,
             "sample": BenchmarkSample(
                 sample_id="sample-0",
                 prompt="question",
                 reference="answer",
-                metadata={"feedback_kind": "noise"},
+                metadata={"feedback_kind": "noise", "feedback_corrupted": True},
             ),
         }
     )
     wrong_but_accepted = _episode(1, 0.0, "stream").model_copy(
         update={
             "feedback_score": ScoreBundle(primary=1.0, success=True),
+            "feedback_trust": 0.9,
+            "feedback_eligible": True,
             "sample": BenchmarkSample(
                 sample_id="sample-1",
                 prompt="question",
                 reference="answer",
-                metadata={"feedback_kind": "attack"},
+                metadata={"feedback_kind": "attack", "feedback_corrupted": True},
             ),
         }
     )
@@ -247,6 +251,10 @@ def test_feedback_metrics_quantify_false_adaptation_signals() -> None:
     assert metrics["false_positive_feedback_rate"] == 0.5
     assert metrics["false_negative_feedback_rate"] == 0.5
     assert metrics["annotated_noise_rate"] == 1.0
+    assert metrics["mean_trust"] == pytest.approx(0.55)
+    assert metrics["eligible_feedback_rate"] == 0.5
+    assert metrics["quarantined_feedback_n"] == 1
+    assert metrics["corrupted_feedback_quarantine_rate"] == 0.5
     assert metrics["noise_episodes"] == 1
     assert metrics["attack_episodes"] == 1
 

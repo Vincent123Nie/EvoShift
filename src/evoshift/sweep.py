@@ -4,7 +4,7 @@ import csv
 import itertools
 import json
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
@@ -16,6 +16,27 @@ from evoshift.config import load_config
 from evoshift.runner import EvoShiftRunner
 from evoshift.schemas import Algorithm
 
+_AGGREGATE_FIELDS = {
+    "mean_score": "score",
+    "auac": "auac",
+    "cumulative_regret": "cumulative_regret",
+    "changed_case_success_rate": "changed_case_success",
+    "old_rule_leakage_rate": "old_rule_leakage",
+    "invariant_retention_rate": "invariant_retention",
+    "future_change_case_success_rate": "future_change_success",
+    "premature_update_rate": "premature_update",
+    "corrupted_feedback_follow_rate": "corrupted_feedback_follow",
+    "attack_feedback_follow_rate": "attack_feedback_follow",
+    "corrupted_feedback_quarantine_rate": "corrupted_feedback_quarantine",
+    "clean_feedback_quarantine_rate": "clean_feedback_quarantine",
+    "mean_recovery_steps": "mean_recovery_steps",
+    "unrecovered_shifts": "unrecovered_shifts",
+    "shift_detection_events": "shift_detection_events",
+    "memory_candidates_promoted": "memory_candidates_promoted",
+    "total_requests": "total_requests",
+    "total_tokens": "total_tokens",
+}
+
 
 @dataclass(frozen=True)
 class SweepSpec:
@@ -23,6 +44,7 @@ class SweepSpec:
     algorithms: Sequence[Algorithm]
     seeds: Sequence[int]
     grid: Mapping[str, Sequence[Any]]
+    variants: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     max_runs: int = 100
 
 
@@ -30,7 +52,7 @@ def load_sweep_spec(path: Path, root: Path) -> SweepSpec:
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
         raise ValueError("sweep spec must be a YAML mapping")
-    allowed = {"base_config", "algorithms", "seeds", "grid", "max_runs"}
+    allowed = {"base_config", "algorithms", "seeds", "grid", "variants", "max_runs"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ValueError(f"unknown sweep fields: {', '.join(unknown)}")
@@ -49,10 +71,16 @@ def load_sweep_spec(path: Path, root: Path) -> SweepSpec:
         not isinstance(values, list) or not values for values in grid.values()
     ):
         raise ValueError("sweep grid values must be non-empty lists")
+    variants = payload.get("variants", {})
+    if not isinstance(variants, dict) or any(
+        not isinstance(name, str) or not name.strip() or not isinstance(parameters, dict)
+        for name, parameters in variants.items()
+    ):
+        raise ValueError("sweep variants must map non-empty names to parameter mappings")
     maximum = int(payload.get("max_runs", 100))
     if maximum < 1:
         raise ValueError("max_runs must be positive")
-    spec = SweepSpec(base, algorithms, seeds, grid, maximum)
+    spec = SweepSpec(base, algorithms, seeds, grid, variants, maximum)
     if len(expand_sweep(spec)) > maximum:
         raise ValueError(f"sweep expands beyond max_runs={maximum}")
     return spec
@@ -66,14 +94,27 @@ def expand_sweep(spec: SweepSpec) -> List[Dict[str, Any]]:
     keys = sorted(spec.grid)
     values = [spec.grid[key] for key in keys]
     combinations = itertools.product(*values) if values else [()]
+    variants = spec.variants or {"default": {}}
     assignments: List[Dict[str, Any]] = []
     for combination in combinations:
-        parameters = dict(zip(keys, combination))
-        for algorithm in spec.algorithms:
-            for seed in spec.seeds:
-                assignments.append(
-                    {"algorithm": algorithm.value, "seed": seed, "parameters": parameters}
+        grid_parameters = dict(zip(keys, combination))
+        for variant, variant_parameters in variants.items():
+            overlap = sorted(set(grid_parameters) & set(variant_parameters))
+            if overlap:
+                raise ValueError(
+                    f"sweep variant {variant!r} overlaps grid fields: {', '.join(overlap)}"
                 )
+            parameters = {**grid_parameters, **variant_parameters}
+            for algorithm in spec.algorithms:
+                for seed in spec.seeds:
+                    assignments.append(
+                        {
+                            "algorithm": algorithm.value,
+                            "seed": seed,
+                            "variant": variant,
+                            "parameters": parameters,
+                        }
+                    )
     return assignments
 
 
@@ -101,11 +142,19 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         adapter = create_benchmark(config.benchmark, root=root, seed=config.evaluation.seed)
         result = await EvoShiftRunner(config, adapter, workdir=root).run()
         budget = _read_total_budget(result.run_dir)
+        policy_shift = result.metrics.get("policy_shift", {})
+        feedback = result.metrics.get("feedback", {})
+        evolution = result.metrics.get("evolution", {})
+        recovery_steps = result.metrics.get("recovery_steps", {})
+        recovered = [
+            float(value) for value in recovery_steps.values() if isinstance(value, (int, float))
+        ]
         rows.append(
             {
                 "run_id": result.run_id,
                 "run_dir": str(result.run_dir),
                 "algorithm": assignment["algorithm"],
+                "variant": assignment["variant"],
                 "seed": assignment["seed"],
                 "parameters": assignment["parameters"],
                 "mean_score": result.metrics["overall"]["mean_score"],
@@ -116,6 +165,25 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "total_tokens": budget["total_tokens"],
                 "total_requests": budget["requests"],
                 "cost_usd": budget["cost_usd"],
+                "changed_case_success_rate": policy_shift.get("changed_case_success_rate"),
+                "old_rule_leakage_rate": policy_shift.get("old_rule_leakage_rate"),
+                "invariant_retention_rate": policy_shift.get("invariant_retention_rate"),
+                "future_change_case_success_rate": policy_shift.get(
+                    "future_change_case_success_rate"
+                ),
+                "premature_update_rate": policy_shift.get("premature_update_rate"),
+                "corrupted_feedback_follow_rate": policy_shift.get(
+                    "corrupted_feedback_follow_rate"
+                ),
+                "attack_feedback_follow_rate": policy_shift.get("attack_feedback_follow_rate"),
+                "corrupted_feedback_quarantine_rate": feedback.get(
+                    "corrupted_feedback_quarantine_rate"
+                ),
+                "clean_feedback_quarantine_rate": feedback.get("clean_feedback_quarantine_rate"),
+                "mean_recovery_steps": statistics.fmean(recovered) if recovered else None,
+                "unrecovered_shifts": sum(value is None for value in recovery_steps.values()),
+                "shift_detection_events": evolution.get("shift_detection_events"),
+                "memory_candidates_promoted": evolution.get("memory_candidates_promoted"),
             }
         )
     aggregates = aggregate_sweep(rows)
@@ -132,25 +200,31 @@ def aggregate_sweep(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     grouped: Dict[str, List[Mapping[str, Any]]] = {}
     for row in rows:
         key = json.dumps(
-            {"algorithm": row["algorithm"], "parameters": row["parameters"]},
+            {
+                "algorithm": row["algorithm"],
+                "variant": row.get("variant", "default"),
+                "parameters": row["parameters"],
+            },
             sort_keys=True,
         )
         grouped.setdefault(key, []).append(row)
     output = []
     for key, group in grouped.items():
         identity = json.loads(key)
-        scores = [float(row["mean_score"]) for row in group]
-        total_tokens = [float(row["total_tokens"]) for row in group]
-        output.append(
-            {
-                **identity,
-                "n_seeds": len(group),
-                "score_mean": statistics.fmean(scores),
-                "score_std": statistics.stdev(scores) if len(scores) > 1 else 0.0,
-                "total_tokens_mean": statistics.fmean(total_tokens),
-                "run_ids": [row["run_id"] for row in group],
-            }
-        )
+        aggregate: Dict[str, Any] = {
+            **identity,
+            "n_seeds": len(group),
+            "run_ids": [row["run_id"] for row in group],
+        }
+        for source, prefix in _AGGREGATE_FIELDS.items():
+            values = [
+                float(row[source]) for row in group if isinstance(row.get(source), (int, float))
+            ]
+            if not values:
+                continue
+            aggregate[f"{prefix}_mean"] = statistics.fmean(values)
+            aggregate[f"{prefix}_std"] = statistics.stdev(values) if len(values) > 1 else 0.0
+        output.append(aggregate)
     return sorted(output, key=lambda item: (-item["score_mean"], item["algorithm"]))
 
 
@@ -158,6 +232,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     fields = [
         "run_id",
         "algorithm",
+        "variant",
         "seed",
         "parameters",
         "mean_score",
@@ -168,6 +243,19 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "total_tokens",
         "total_requests",
         "cost_usd",
+        "changed_case_success_rate",
+        "old_rule_leakage_rate",
+        "invariant_retention_rate",
+        "future_change_case_success_rate",
+        "premature_update_rate",
+        "corrupted_feedback_follow_rate",
+        "attack_feedback_follow_rate",
+        "corrupted_feedback_quarantine_rate",
+        "clean_feedback_quarantine_rate",
+        "mean_recovery_steps",
+        "unrecovered_shifts",
+        "shift_detection_events",
+        "memory_candidates_promoted",
         "run_dir",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -183,18 +271,32 @@ def _write_sweep_markdown(path: Path, aggregates: Iterable[Mapping[str, Any]]) -
     lines = [
         "# EvoShift sweep report",
         "",
-        "| Algorithm | Parameters | Seeds | Score mean | Score std | Mean total tokens |",
-        "|---|---|---:|---:|---:|---:|",
+        (
+            "| Algorithm | Variant | Parameters | Seeds | Score | Changed | Old leakage | "
+            "Invariant | Attack follow | Corrupt quarantine | Recovery | Requests | Tokens |"
+        ),
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for item in aggregates:
         lines.append(
-            "| {} | `{}` | {} | {:.4f} | {:.4f} | {:.1f} |".format(
+            (
+                "| {} | {} | `{}` | {} | {:.4f}±{:.4f} | {} | {} | {} | {} | {} | "
+                "{} | {:.1f} | {:.1f} |"
+            ).format(
                 item["algorithm"],
+                item["variant"],
                 json.dumps(item["parameters"], sort_keys=True),
                 item["n_seeds"],
                 item["score_mean"],
                 item["score_std"],
-                item["total_tokens_mean"],
+                _format_mean(item, "changed_case_success"),
+                _format_mean(item, "old_rule_leakage"),
+                _format_mean(item, "invariant_retention"),
+                _format_mean(item, "attack_feedback_follow"),
+                _format_mean(item, "corrupted_feedback_quarantine"),
+                _format_mean(item, "mean_recovery_steps"),
+                item.get("total_requests_mean", 0.0),
+                item.get("total_tokens_mean", 0.0),
             )
         )
     lines.extend(
@@ -206,6 +308,16 @@ def _write_sweep_markdown(path: Path, aggregates: Iterable[Mapping[str, Any]]) -
         ]
     )
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _format_mean(item: Mapping[str, Any], prefix: str) -> str:
+    value = item.get(f"{prefix}_mean")
+    spread = item.get(f"{prefix}_std")
+    if not isinstance(value, (int, float)):
+        return "N/A"
+    if not isinstance(spread, (int, float)):
+        spread = 0.0
+    return f"{value:.4f}±{spread:.4f}"
 
 
 __all__ = ["SweepSpec", "aggregate_sweep", "expand_sweep", "load_sweep_spec", "run_sweep"]

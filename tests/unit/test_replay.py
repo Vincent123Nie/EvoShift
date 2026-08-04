@@ -15,7 +15,13 @@ from evoshift.schemas import (
 )
 
 
-def _episode(index: int, phase: str, prompt: str, protected: bool = False) -> Episode:
+def _episode(
+    index: int,
+    phase: str,
+    prompt: str,
+    protected: bool = False,
+    trust: float = 1.0,
+) -> Episode:
     return Episode(
         episode_id=f"e{index}",
         run_id="r",
@@ -29,6 +35,7 @@ def _episode(index: int, phase: str, prompt: str, protected: bool = False) -> Ep
         ),
         output=SolverOutput(answer="x"),
         score=ScoreBundle(primary=1.0, success=True),
+        feedback_trust=trust,
     )
 
 
@@ -45,6 +52,29 @@ def test_replay_buffer_mixes_related_and_protected_examples() -> None:
     assert len(selected) == 3
     assert any(mask)
     assert {episode.index for episode in selected} >= {0, 1}
+
+
+def test_replay_buffer_filters_untrusted_feedback_and_old_regime_examples() -> None:
+    episodes = [
+        _episode(0, "old", "refund day 10", protected=False),
+        _episode(1, "old", "refund invariant", protected=True),
+        _episode(10, "current", "refund day 10", protected=False),
+        _episode(11, "current", "refund corrupted", protected=False, trust=0.1),
+        _episode(12, "current", "refund invariant current", protected=True),
+    ]
+
+    selected, mask = select_replay_buffer(
+        episodes,
+        5,
+        query="refund",
+        min_feedback_trust=0.6,
+        regime_start_index=10,
+    )
+
+    assert {episode.index for episode in selected} == {1, 10, 12}
+    assert 0 not in {episode.index for episode in selected}
+    assert 11 not in {episode.index for episode in selected}
+    assert sum(mask) == 2
 
 
 class _FeedbackAgent:

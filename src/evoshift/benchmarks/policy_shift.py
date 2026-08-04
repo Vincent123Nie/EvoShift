@@ -197,7 +197,7 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
             return self._flip(oracle), "attack", "untrusted_policy_message"
         if rng.random() < self.feedback_noise_rate:
             return self._flip(oracle), "noise", "execution_feedback"
-        return oracle, "clean", "policy_oracle"
+        return oracle, "clean", "verified_policy_engine"
 
     @staticmethod
     def _flip(label: str) -> str:

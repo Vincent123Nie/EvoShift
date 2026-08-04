@@ -23,6 +23,30 @@ def test_sweep_cartesian_product() -> None:
     assignments = expand_sweep(spec)
     assert len(assignments) == 8
     assert {item["algorithm"] for item in assignments} == {"static", "evoshift"}
+    assert {item["variant"] for item in assignments} == {"default"}
+
+
+def test_sweep_expands_named_ablation_variants() -> None:
+    spec = SweepSpec(
+        base_config=Path("base.yaml"),
+        algorithms=[Algorithm.EVOSHIFT],
+        seeds=[1, 2],
+        grid={"benchmark.feedback_noise_rate": [0.0, 0.1]},
+        variants={
+            "full": {},
+            "historical_replay": {"evolution.replay_current_regime_only": False},
+        },
+        max_runs=8,
+    )
+
+    assignments = expand_sweep(spec)
+
+    assert len(assignments) == 8
+    assert {item["variant"] for item in assignments} == {"full", "historical_replay"}
+    historical = [item for item in assignments if item["variant"] == "historical_replay"]
+    assert all(
+        item["parameters"]["evolution.replay_current_regime_only"] is False for item in historical
+    )
 
 
 def test_sweep_spec_blocks_accidental_overspend(tmp_path: Path) -> None:
@@ -61,16 +85,24 @@ def test_sweep_aggregation_reports_seed_variance() -> None:
     rows = [
         {
             "algorithm": "evoshift",
+            "variant": "full",
             "parameters": {},
             "mean_score": 0.7,
+            "changed_case_success_rate": 0.5,
+            "old_rule_leakage_rate": 0.5,
             "total_tokens": 10,
+            "total_requests": 4,
             "run_id": "a",
         },
         {
             "algorithm": "evoshift",
+            "variant": "full",
             "parameters": {},
             "mean_score": 0.9,
+            "changed_case_success_rate": 0.9,
+            "old_rule_leakage_rate": 0.1,
             "total_tokens": 14,
+            "total_requests": 6,
             "run_id": "b",
         },
     ]
@@ -78,6 +110,10 @@ def test_sweep_aggregation_reports_seed_variance() -> None:
     assert aggregate["score_mean"] == pytest.approx(0.8)
     assert aggregate["score_std"] > 0
     assert aggregate["total_tokens_mean"] == 12
+    assert aggregate["total_requests_mean"] == 5
+    assert aggregate["changed_case_success_mean"] == pytest.approx(0.7)
+    assert aggregate["old_rule_leakage_mean"] == pytest.approx(0.3)
+    assert aggregate["variant"] == "full"
 
 
 @pytest.mark.asyncio
@@ -105,5 +141,9 @@ async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
     matrix = json.loads((destination / "matrix.json").read_text(encoding="utf-8"))
     assert len(matrix["runs"]) == 1
     assert matrix["runs"][0]["parameters"] == {"policy.top_k": 2}
-    assert "run_id,algorithm,seed" in (destination / "matrix.csv").read_text(encoding="utf-8")
+    assert matrix["runs"][0]["variant"] == "default"
+    assert "mean_recovery_steps" in matrix["runs"][0]
+    assert "run_id,algorithm,variant,seed" in (destination / "matrix.csv").read_text(
+        encoding="utf-8"
+    )
     assert "Only same-model" in (destination / "report.md").read_text(encoding="utf-8")
