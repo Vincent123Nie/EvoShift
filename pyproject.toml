@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-hf = ["datasets>=2.20,<5"]
+hf = ["datasets>=2.20,<6"]
 dev = [
   "build>=1.2,<2",
   "mypy>=1.11,<2",
