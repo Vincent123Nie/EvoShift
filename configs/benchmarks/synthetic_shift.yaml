@@ -1,0 +1,12 @@
+benchmark:
+  kind: synthetic_shift
+  name: deterministic_synthetic_shift
+  path: null
+  split: test
+  # Base examples per phase. Two protected old-domain probes are appended to
+  # every post-shift phase by the factory.
+  phase_size: 16
+  limit: 0
+  shuffle: false
+  protected_phases:
+    - phase_0_addition

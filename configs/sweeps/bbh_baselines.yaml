@@ -1,0 +1,9 @@
+base_config: configs/experiments/evoshift_bbh_full.yaml
+algorithms:
+  - static
+  - self_refine
+  - reflexion
+  - evoshift
+seeds: [41, 42, 43]
+grid: {}
+max_runs: 12

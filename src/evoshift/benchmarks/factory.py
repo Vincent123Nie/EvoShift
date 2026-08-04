@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from evoshift.benchmarks.base import BenchmarkAdapter
+from evoshift.benchmarks.bbh import DEFAULT_BBH_REVISION, BBHBenchmarkAdapter
+from evoshift.benchmarks.huggingface import HuggingFaceBenchmarkAdapter
+from evoshift.benchmarks.jsonl import JSONLBenchmarkAdapter
+from evoshift.benchmarks.synthetic import SyntheticShiftBenchmark
+from evoshift.config import BenchmarkConfig
+from evoshift.errors import DatasetError
+from evoshift.schemas import BenchmarkSample
+
+
+def create_benchmark(
+    config: BenchmarkConfig,
+    *,
+    root: Path | None = None,
+    seed: int = 42,
+    cache_dir: Path | None = None,
+) -> BenchmarkAdapter:
+    """Construct a benchmark adapter from the project's strict BenchmarkConfig."""
+
+    project_root = root or Path.cwd()
+    kind = config.kind.strip().lower().replace("-", "_")
+    if kind in {"jsonl", "json_lines"}:
+        if not config.path:
+            raise DatasetError("JSONL benchmark requires benchmark.path")
+        jsonl_path = _resolve_path(Path(config.path), project_root)
+        return JSONLBenchmarkAdapter(
+            jsonl_path,
+            limit=config.limit,
+            shuffle=config.shuffle,
+            seed=seed,
+        )
+    if kind in {"synthetic", "synthetic_shift"}:
+        return SyntheticShiftBenchmark(
+            seed=seed,
+            phase_size=config.phase_size or 12,
+            protected_phases=config.protected_phases or ["phase_0_addition"],
+            protected_probes_per_phase=2,
+            shuffle_within_phase=config.shuffle,
+            limit=config.limit,
+        )
+    if kind in {"bbh", "big_bench_hard"}:
+        configured_cache = cache_dir or Path(config.path or "data/benchmarks/bbh")
+        resolved_cache = _resolve_path(configured_cache, project_root)
+        return BBHBenchmarkAdapter(
+            resolved_cache,
+            revision=config.revision or DEFAULT_BBH_REVISION,
+            subsets=config.subsets,
+            limit=config.limit,
+            phase_size=config.phase_size,
+            shuffle=config.shuffle,
+            seed=seed,
+            protected_phases=config.protected_phases,
+        )
+    if kind in {"hf", "huggingface", "hugging_face"}:
+        return HuggingFaceBenchmarkAdapter(
+            config.name,
+            split=config.split,
+            subsets=config.subsets,
+            revision=config.revision,
+            limit=config.limit,
+            shuffle=config.shuffle,
+            seed=seed,
+            protected_phases=config.protected_phases,
+        )
+    raise DatasetError(f"unsupported benchmark kind: {config.kind!r}")
+
+
+def load_benchmark(
+    config: BenchmarkConfig,
+    *,
+    root: Path | None = None,
+    seed: int = 42,
+    cache_dir: Path | None = None,
+) -> list[BenchmarkSample]:
+    return create_benchmark(
+        config,
+        root=root,
+        seed=seed,
+        cache_dir=cache_dir,
+    ).load()
+
+
+def _resolve_path(path: Path, root: Path) -> Path:
+    return path if path.is_absolute() else root / path

@@ -1,0 +1,6 @@
+provider:
+  kind: demo
+  model: evoshift-demo
+  max_output_tokens: 512
+  reasoning_effort: null
+

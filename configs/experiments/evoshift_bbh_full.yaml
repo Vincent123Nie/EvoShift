@@ -1,0 +1,47 @@
+project: evoshift-bbh-full
+algorithm: evoshift
+provider:
+  kind: responses
+  base_url: https://api.openai.com/v1
+  api_key_env: EVOSHIFT_OPENAI_API_KEY
+  model: gpt-5.6
+  max_output_tokens: 512
+  reasoning_effort: low
+budget:
+  max_requests: 5000
+  max_total_tokens: 8000000
+  max_cost_usd: 200.0
+storage:
+  cache_enabled: true
+  isolate_runs: true
+benchmark:
+  kind: bbh
+  name: bbh_shift_full
+  path: data/benchmarks/bbh
+  revision: 9ee07bd481feebf959a6b59d61ea57bdcf30964d
+  subsets:
+    - boolean_expressions
+    - date_understanding
+    - disambiguation_qa
+    - multistep_arithmetic_two
+    - causal_judgement
+    - navigate
+    - tracking_shuffled_objects_five_objects
+    - word_sorting
+  phase_size: 32
+  shuffle: true
+  protected_phases:
+    - phase_00_boolean_expressions
+    - phase_01_date_understanding
+evolution:
+  validation_window: 16
+  min_validation_examples: 8
+  bootstrap_samples: 2000
+  confidence_level: 0.95
+  min_mean_gain: 0.03
+  min_ci_lower_bound: 0.0
+  max_regression_rate: 0.10
+  max_protected_slice_regression: 0.02
+  max_cost_increase_ratio: 0.30
+  paired_replay: true
+  feedback_mode: reward_only

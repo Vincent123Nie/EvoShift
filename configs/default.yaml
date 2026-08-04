@@ -1,0 +1,96 @@
+project: evoshift
+algorithm: evoshift
+
+provider:
+  kind: responses
+  base_url: https://api.openai.com/v1
+  api_key_env: EVOSHIFT_OPENAI_API_KEY
+  model: gpt-5.6
+  timeout_seconds: 120
+  max_retries: 4
+  retry_base_seconds: 1.0
+  max_output_tokens: 512
+  reasoning_effort: low
+  allow_sampling_params: false
+  send_metadata: false
+  # Set these to the actual provider prices to enable dollar-denominated gates.
+  input_price_per_million: 0.0
+  output_price_per_million: 0.0
+
+budget:
+  max_requests: 1000
+  max_total_tokens: 2000000
+  max_cost_usd: 50.0
+
+storage:
+  database_path: data/evoshift.sqlite3
+  cache_path: data/llm_cache.sqlite3
+  runs_dir: runs
+  cache_enabled: true
+  isolate_runs: true
+
+shift:
+  enabled: true
+  delta: 0.02
+  threshold: 2.5
+  min_instances: 8
+  novelty_threshold: 0.75
+  novelty_ewma_alpha: 0.2
+  cooldown_episodes: 8
+
+evolution:
+  enabled: true
+  validation_window: 12
+  min_validation_examples: 4
+  bootstrap_samples: 1000
+  confidence_level: 0.90
+  min_mean_gain: 0.03
+  min_ci_lower_bound: -0.01
+  max_regression_rate: 0.15
+  max_protected_slice_regression: 0.05
+  max_cost_increase_ratio: 0.30
+  paired_replay: true
+  feedback_mode: reward_only
+  max_candidates_per_round: 1
+  policy_evolution_enabled: true
+  policy_evolve_on_shift: true
+
+benchmark:
+  kind: synthetic_shift
+  name: deterministic_synthetic_shift
+  path: null
+  split: test
+  revision: ""
+  subsets: []
+  limit: 0
+  shuffle: false
+  phase_size: 16
+  protected_phases:
+    - phase_0_addition
+
+evaluation:
+  seed: 42
+  bootstrap_samples: 2000
+  confidence_level: 0.95
+  recovery_fraction: 0.90
+  report_every: 10
+
+policy:
+  version: 1
+  top_k: 4
+  memory_token_budget: 900
+  bm25_k1: 1.5
+  bm25_b: 0.75
+  relevance_weight: 0.62
+  utility_weight: 0.28
+  exploration_weight: 0.10
+  mmr_lambda: 0.75
+  write_confidence_threshold: 0.55
+  dedup_similarity_threshold: 0.86
+  rollback_utility_threshold: 0.35
+  rollback_min_uses: 8
+  critic_on_failure: true
+  learn_from_success_every: 0
+  prompt_versions:
+    solver: v1
+    critic: v1

@@ -1,0 +1,63 @@
+project: evoshift-offline-demo
+algorithm: evoshift
+
+provider:
+  kind: demo
+  model: evoshift-demo
+  max_output_tokens: 512
+  reasoning_effort: null
+
+budget:
+  max_requests: 250
+  max_total_tokens: 500000
+  max_cost_usd: 0.0
+
+storage:
+  cache_enabled: false
+  isolate_runs: true
+  runs_dir: runs
+
+benchmark:
+  kind: synthetic_shift
+  name: deterministic_synthetic_shift
+  path: null
+  phase_size: 6
+  protected_phases:
+    - phase_0_addition
+
+shift:
+  enabled: true
+  min_instances: 4
+  threshold: 0.60
+  delta: 0.0
+  novelty_threshold: 0.80
+  cooldown_episodes: 2
+
+evolution:
+  enabled: true
+  validation_window: 4
+  min_validation_examples: 4
+  bootstrap_samples: 500
+  confidence_level: 0.90
+  min_mean_gain: 0.15
+  min_ci_lower_bound: 0.0
+  max_regression_rate: 0.25
+  max_protected_slice_regression: 0.0
+  max_cost_increase_ratio: 2.0
+  paired_replay: true
+  feedback_mode: reward_only
+  policy_evolution_enabled: true
+  policy_evolve_on_shift: true
+
+evaluation:
+  seed: 42
+  bootstrap_samples: 1000
+  confidence_level: 0.95
+  recovery_fraction: 0.90
+
+policy:
+  top_k: 3
+  memory_token_budget: 700
+  write_confidence_threshold: 0.50
+  rollback_min_uses: 4
+  rollback_utility_threshold: 0.30

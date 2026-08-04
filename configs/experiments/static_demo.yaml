@@ -1,0 +1,17 @@
+project: evoshift-static-demo
+algorithm: static
+provider:
+  kind: demo
+  model: evoshift-demo
+  reasoning_effort: null
+storage:
+  cache_enabled: false
+  isolate_runs: true
+benchmark:
+  kind: synthetic_shift
+  name: deterministic_synthetic_shift
+  path: null
+  phase_size: 6
+  protected_phases: [phase_0_addition]
+evolution:
+  enabled: false

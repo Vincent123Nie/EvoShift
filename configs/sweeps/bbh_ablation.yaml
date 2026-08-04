@@ -1,0 +1,11 @@
+base_config: configs/experiments/evoshift_bbh_full.yaml
+algorithms:
+  - evoshift
+seeds: [41, 42, 43]
+grid:
+  policy.top_k: [2, 4]
+  policy.utility_weight: [0.15, 0.28]
+  evolution.min_mean_gain: [0.0, 0.03]
+# 1 algorithm * 3 seeds * 2 * 2 * 2 = 24 runs.
+max_runs: 24
+

@@ -1,0 +1,91 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from evoshift.schemas import Algorithm
+from evoshift.sweep import (
+    SweepSpec,
+    aggregate_sweep,
+    expand_sweep,
+    load_sweep_spec,
+    run_sweep,
+)
+
+
+def test_sweep_cartesian_product() -> None:
+    spec = SweepSpec(
+        base_config=Path("base.yaml"),
+        algorithms=[Algorithm.STATIC, Algorithm.EVOSHIFT],
+        seeds=[1, 2],
+        grid={"policy.top_k": [2, 4]},
+    )
+    assignments = expand_sweep(spec)
+    assert len(assignments) == 8
+    assert {item["algorithm"] for item in assignments} == {"static", "evoshift"}
+
+
+def test_sweep_spec_blocks_accidental_overspend(tmp_path: Path) -> None:
+    spec = tmp_path / "sweep.yaml"
+    spec.write_text(
+        "base_config: configs/default.yaml\n"
+        "algorithms: [static, evoshift]\n"
+        "seeds: [1, 2]\n"
+        "grid:\n  policy.top_k: [1, 2]\n"
+        "max_runs: 3\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="max_runs"):
+        load_sweep_spec(spec, Path.cwd())
+
+
+def test_sweep_aggregation_reports_seed_variance() -> None:
+    rows = [
+        {
+            "algorithm": "evoshift",
+            "parameters": {},
+            "mean_score": 0.7,
+            "total_tokens": 10,
+            "run_id": "a",
+        },
+        {
+            "algorithm": "evoshift",
+            "parameters": {},
+            "mean_score": 0.9,
+            "total_tokens": 14,
+            "run_id": "b",
+        },
+    ]
+    aggregate = aggregate_sweep(rows)[0]
+    assert aggregate["score_mean"] == pytest.approx(0.8)
+    assert aggregate["score_std"] > 0
+    assert aggregate["total_tokens_mean"] == 12
+
+
+@pytest.mark.asyncio
+async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "project: sweep-test\n"
+        "algorithm: static\n"
+        "provider:\n  kind: demo\n  model: evoshift-demo\n  reasoning_effort: null\n"
+        "storage:\n  cache_enabled: false\n  isolate_runs: true\n"
+        "benchmark:\n  kind: synthetic_shift\n  path: null\n  phase_size: 2\n"
+        "evolution:\n  enabled: false\n",
+        encoding="utf-8",
+    )
+    spec = SweepSpec(
+        base_config=base,
+        algorithms=[Algorithm.STATIC],
+        seeds=[7],
+        grid={"policy.top_k": [2]},
+        max_runs=1,
+    )
+
+    destination = await run_sweep(spec, tmp_path)
+
+    matrix = json.loads((destination / "matrix.json").read_text(encoding="utf-8"))
+    assert len(matrix["runs"]) == 1
+    assert matrix["runs"][0]["parameters"] == {"policy.top_k": 2}
+    assert "run_id,algorithm,seed" in (destination / "matrix.csv").read_text(encoding="utf-8")
+    assert "Only same-model" in (destination / "report.md").read_text(encoding="utf-8")

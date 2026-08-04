@@ -1,0 +1,9 @@
+benchmark:
+  kind: jsonl
+  name: demo_stream
+  path: examples/demo_stream.jsonl
+  split: test
+  limit: 0
+  shuffle: false
+  protected_phases:
+    - phase_0_addition

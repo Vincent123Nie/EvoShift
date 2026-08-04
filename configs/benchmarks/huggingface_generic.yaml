@@ -1,0 +1,13 @@
+benchmark:
+  kind: huggingface
+  # Replace name/subsets/revision with any dataset supported by `datasets`.
+  # The adapter infers common prompt and reference fields and fails clearly
+  # when explicit mapping is needed.
+  name: hotpot_qa
+  path: null
+  split: validation
+  subsets:
+    - distractor
+  revision: ""
+  limit: 100
+  shuffle: false

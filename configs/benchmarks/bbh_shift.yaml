@@ -1,0 +1,27 @@
+benchmark:
+  kind: bbh
+  name: big_bench_hard_shift
+  path: data/benchmarks/bbh
+  split: test
+  # Immutable upstream source used by the built-in SHA-256 manifest.
+  revision: 9ee07bd481feebf959a6b59d61ea57bdcf30964d
+  # Each ordered subset becomes one contiguous phase. This ordering creates
+  # interpretable shifts across symbolic, temporal, linguistic, arithmetic,
+  # causal, spatial, state-tracking, and lexical reasoning.
+  subsets:
+    - boolean_expressions
+    - date_understanding
+    - disambiguation_qa
+    - multistep_arithmetic_two
+    - causal_judgement
+    - navigate
+    - tracking_shuffled_objects_five_objects
+    - word_sorting
+  # Deterministically sample this many examples inside each task/phase.
+  phase_size: 32
+  limit: 0
+  shuffle: true
+  # Retain the earliest domains as protected slices for regression reporting.
+  protected_phases:
+    - phase_00_boolean_expressions
+    - phase_01_date_understanding

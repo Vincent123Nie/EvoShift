@@ -1,0 +1,11 @@
+provider:
+  kind: responses
+  # Override with EVOSHIFT_OPENAI_BASE_URL for a compatible reverse proxy.
+  base_url: https://api.openai.com/v1
+  api_key_env: EVOSHIFT_OPENAI_API_KEY
+  model: gpt-5.6
+  timeout_seconds: 120
+  max_retries: 4
+  reasoning_effort: low
+  allow_sampling_params: false
+  send_metadata: false
