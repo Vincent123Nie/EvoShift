@@ -11,11 +11,13 @@ from evoshift.evaluation import (
     compute_stream_metrics,
     cumulative_regret,
     exact_match_score,
+    feedback_metrics,
     forgetting,
     multiple_choice_score,
     normalized_exact_match_score,
     numeric_score,
     phase_metrics,
+    policy_shift_metrics,
     post_shift_gain,
     promotion_precision,
     recovery_steps,
@@ -106,6 +108,20 @@ def test_score_sample_is_stable_public_dispatch_api() -> None:
     assert result.primary == 1.0
     assert result.success is True
     assert result.metrics == {"numeric": 1.0}
+
+
+def test_observable_feedback_can_differ_from_hidden_oracle() -> None:
+    from evoshift.evaluation import score_feedback_sample
+
+    sample = BenchmarkSample(
+        sample_id="policy-1",
+        prompt="Return APPROVE or DENY",
+        reference="APPROVE",
+        metadata={"feedback_reference": "DENY", "feedback_kind": "noise"},
+    )
+
+    assert score_sample(sample, "APPROVE").success is True
+    assert score_feedback_sample(sample, "APPROVE").success is False
 
 
 def test_online_metrics_and_phase_aggregation() -> None:
@@ -199,6 +215,119 @@ def test_retrieval_metrics_separate_selection_from_solver_application() -> None:
         "episodes_with_applied_memory": 1,
         "applied_memory_episode_rate": 0.5,
     }
+
+
+def test_feedback_metrics_quantify_false_adaptation_signals() -> None:
+    correct_but_rejected = _episode(0, 1.0, "stream").model_copy(
+        update={
+            "feedback_score": ScoreBundle(primary=0.0, success=False),
+            "sample": BenchmarkSample(
+                sample_id="sample-0",
+                prompt="question",
+                reference="answer",
+                metadata={"feedback_kind": "noise"},
+            ),
+        }
+    )
+    wrong_but_accepted = _episode(1, 0.0, "stream").model_copy(
+        update={
+            "feedback_score": ScoreBundle(primary=1.0, success=True),
+            "sample": BenchmarkSample(
+                sample_id="sample-1",
+                prompt="question",
+                reference="answer",
+                metadata={"feedback_kind": "attack"},
+            ),
+        }
+    )
+
+    metrics = feedback_metrics([correct_but_rejected, wrong_but_accepted])
+
+    assert metrics["oracle_success_agreement_rate"] == 0.0
+    assert metrics["false_positive_feedback_rate"] == 0.5
+    assert metrics["false_negative_feedback_rate"] == 0.5
+    assert metrics["annotated_noise_rate"] == 1.0
+    assert metrics["noise_episodes"] == 1
+    assert metrics["attack_episodes"] == 1
+
+
+def test_policy_shift_metrics_measure_leakage_retention_and_attack_following() -> None:
+    changed_attack = _episode(0, 0.0, "phase_1").model_copy(
+        update={
+            "feedback_score": ScoreBundle(primary=1.0, success=True),
+            "sample": BenchmarkSample(
+                sample_id="changed-attack",
+                prompt="policy",
+                reference="APPROVE",
+                metadata={
+                    "benchmark": "policy_shift",
+                    "policy_changed_case": True,
+                    "feedback_corrupted": True,
+                    "feedback_kind": "attack",
+                },
+            ),
+        }
+    )
+    changed_noise = _episode(1, 1.0, "phase_1").model_copy(
+        update={
+            "feedback_score": ScoreBundle(primary=0.0, success=False),
+            "sample": BenchmarkSample(
+                sample_id="changed-noise",
+                prompt="policy",
+                reference="APPROVE",
+                metadata={
+                    "benchmark": "policy_shift",
+                    "policy_changed_case": True,
+                    "feedback_corrupted": True,
+                    "feedback_kind": "noise",
+                },
+            ),
+        }
+    )
+    invariant = _episode(2, 1.0, "phase_1").model_copy(
+        update={
+            "sample": BenchmarkSample(
+                sample_id="invariant",
+                prompt="policy",
+                reference="DENY",
+                metadata={
+                    "benchmark": "policy_shift",
+                    "policy_changed_case": False,
+                    "protected": True,
+                    "feedback_corrupted": False,
+                    "feedback_kind": "clean",
+                },
+            )
+        }
+    )
+    future_change = _episode(3, 0.0, "phase_1").model_copy(
+        update={
+            "sample": BenchmarkSample(
+                sample_id="future-change",
+                prompt="policy",
+                reference="DENY",
+                metadata={
+                    "benchmark": "policy_shift",
+                    "policy_changed_case": False,
+                    "protected": False,
+                    "future_change_case": True,
+                    "feedback_corrupted": False,
+                    "feedback_kind": "clean",
+                },
+            )
+        }
+    )
+
+    metrics = policy_shift_metrics([changed_attack, changed_noise, invariant, future_change])
+
+    assert metrics["changed_case_success_rate"] == 0.5
+    assert metrics["old_rule_leakage_rate"] == 0.5
+    assert metrics["invariant_retention_rate"] == 1.0
+    assert metrics["future_change_case_success_rate"] == 0.0
+    assert metrics["premature_update_rate"] == 1.0
+    assert metrics["corrupted_feedback_follow_rate"] == 0.5
+    assert metrics["attack_oracle_success_rate"] == 0.0
+    assert metrics["attack_feedback_follow_rate"] == 1.0
 
 
 def test_promotion_precision_uses_only_promoted_candidates() -> None:

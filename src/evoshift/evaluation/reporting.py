@@ -147,6 +147,14 @@ def render_markdown_report(
     if isinstance(continual, Mapping):
         lines.extend(["## Continual learning", "", _metric_table(continual), ""])
 
+    feedback = safe.get("feedback")
+    if isinstance(feedback, Mapping):
+        lines.extend(["## Observable feedback", "", _metric_table(feedback), ""])
+
+    policy_shift = safe.get("policy_shift")
+    if isinstance(policy_shift, Mapping):
+        lines.extend(["## Policy shift", "", _metric_table(policy_shift), ""])
+
     retrieval = safe.get("retrieval")
     if isinstance(retrieval, Mapping):
         lines.extend(["## Memory retrieval", "", _metric_table(retrieval), ""])

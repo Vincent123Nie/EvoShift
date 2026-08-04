@@ -14,6 +14,11 @@ from evoshift.benchmarks.huggingface import (
     HuggingFaceBenchmarkAdapter,
 )
 from evoshift.benchmarks.jsonl import JSONLBenchmarkAdapter
+from evoshift.benchmarks.policy_shift import (
+    POLICY_PHASES,
+    PolicyShiftBenchmark,
+    PolicyShiftBenchmarkAdapter,
+)
 from evoshift.benchmarks.synthetic import (
     SYNTHETIC_PHASES,
     SyntheticShiftBenchmark,
@@ -26,6 +31,7 @@ __all__ = [
     "BBH_REPOSITORY",
     "DEFAULT_BBH_REVISION",
     "DEFAULT_BBH_SUBSETS",
+    "POLICY_PHASES",
     "SYNTHETIC_PHASES",
     "BBHBenchmarkAdapter",
     "BenchmarkAdapter",
@@ -33,6 +39,8 @@ __all__ = [
     "HFBenchmarkAdapter",
     "HuggingFaceBenchmarkAdapter",
     "JSONLBenchmarkAdapter",
+    "PolicyShiftBenchmark",
+    "PolicyShiftBenchmarkAdapter",
     "SyntheticShiftBenchmark",
     "SyntheticShiftBenchmarkAdapter",
     "create_benchmark",

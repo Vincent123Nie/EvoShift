@@ -6,7 +6,7 @@ import math
 import statistics
 from collections import OrderedDict
 from collections.abc import Sequence
-from typing import Any, Union
+from typing import Any, Callable, Union
 
 from evoshift.schemas import Episode, PromotionDecision
 
@@ -382,6 +382,117 @@ def retrieval_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
     }
 
 
+def feedback_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
+    """Compare learner-visible feedback with hidden oracle evaluation."""
+
+    if not episodes:
+        return {
+            "mean_score": 0.0,
+            "success_rate": 0.0,
+            "oracle_success_agreement_rate": 0.0,
+            "false_positive_feedback_rate": 0.0,
+            "false_negative_feedback_rate": 0.0,
+            "mean_absolute_score_gap": 0.0,
+            "annotated_noise_rate": 0.0,
+            "clean_episodes": 0,
+            "noise_episodes": 0,
+            "attack_episodes": 0,
+        }
+    visible = [episode.adaptation_score for episode in episodes]
+    agreement = sum(
+        feedback.success == episode.score.success for episode, feedback in zip(episodes, visible)
+    )
+    false_positive = sum(
+        feedback.success and not episode.score.success
+        for episode, feedback in zip(episodes, visible)
+    )
+    false_negative = sum(
+        episode.score.success and not feedback.success
+        for episode, feedback in zip(episodes, visible)
+    )
+    kinds = [str(episode.sample.metadata.get("feedback_kind", "clean")) for episode in episodes]
+    clean = sum(kind == "clean" for kind in kinds)
+    noise = sum(kind == "noise" for kind in kinds)
+    attack = sum(kind == "attack" for kind in kinds)
+    return {
+        "mean_score": statistics.fmean(score.primary for score in visible),
+        "success_rate": statistics.fmean(float(score.success) for score in visible),
+        "oracle_success_agreement_rate": agreement / len(episodes),
+        "false_positive_feedback_rate": false_positive / len(episodes),
+        "false_negative_feedback_rate": false_negative / len(episodes),
+        "mean_absolute_score_gap": statistics.fmean(
+            abs(feedback.primary - episode.score.primary)
+            for episode, feedback in zip(episodes, visible)
+        ),
+        "annotated_noise_rate": (noise + attack) / len(episodes),
+        "clean_episodes": clean,
+        "noise_episodes": noise,
+        "attack_episodes": attack,
+    }
+
+
+def policy_shift_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
+    """Oracle metrics for policy updates, invariant retention, and corrupted feedback."""
+
+    policy_episodes = [
+        episode
+        for episode in episodes
+        if episode.sample.metadata.get("benchmark") == "policy_shift"
+    ]
+    if not policy_episodes:
+        return {}
+
+    def rate(items: Sequence[Episode], predicate: Callable[[Episode], bool]) -> float:
+        return statistics.fmean(float(predicate(item)) for item in items) if items else 0.0
+
+    changed = [
+        episode
+        for episode in policy_episodes
+        if bool(episode.sample.metadata.get("policy_changed_case"))
+    ]
+    protected = [
+        episode for episode in policy_episodes if bool(episode.sample.metadata.get("protected"))
+    ]
+    future_change = [
+        episode
+        for episode in policy_episodes
+        if bool(episode.sample.metadata.get("future_change_case"))
+    ]
+    corrupted = [
+        episode
+        for episode in policy_episodes
+        if bool(episode.sample.metadata.get("feedback_corrupted"))
+    ]
+    noise = [
+        episode
+        for episode in policy_episodes
+        if episode.sample.metadata.get("feedback_kind") == "noise"
+    ]
+    attacks = [
+        episode
+        for episode in policy_episodes
+        if episode.sample.metadata.get("feedback_kind") == "attack"
+    ]
+    return {
+        "n": len(policy_episodes),
+        "changed_case_n": len(changed),
+        "changed_case_success_rate": rate(changed, lambda item: item.score.success),
+        "old_rule_leakage_rate": rate(changed, lambda item: not item.score.success),
+        "invariant_n": len(protected),
+        "invariant_retention_rate": rate(protected, lambda item: item.score.success),
+        "future_change_case_n": len(future_change),
+        "future_change_case_success_rate": rate(future_change, lambda item: item.score.success),
+        "premature_update_rate": rate(future_change, lambda item: not item.score.success),
+        "corrupted_feedback_n": len(corrupted),
+        "corrupted_feedback_follow_rate": rate(
+            corrupted, lambda item: item.adaptation_score.success
+        ),
+        "noise_oracle_success_rate": rate(noise, lambda item: item.score.success),
+        "attack_oracle_success_rate": rate(attacks, lambda item: item.score.success),
+        "attack_feedback_follow_rate": rate(attacks, lambda item: item.adaptation_score.success),
+    }
+
+
 def _align_baseline(episodes: Sequence[Episode], baseline: Sequence[Episode]) -> list[Episode]:
     by_sample = {episode.sample.sample_id: episode for episode in baseline}
     if len(by_sample) != len(baseline):
@@ -418,9 +529,13 @@ def compute_stream_metrics(
         "auac": area_under_adaptation_curve(rewards) if rewards else 0.0,
         "cumulative_regret": cumulative_regret(rewards) if rewards else 0.0,
         "shift_indices": boundaries,
+        "feedback": feedback_metrics(episodes),
         "retrieval": retrieval_metrics(episodes),
         "resources": usage_metrics(episodes),
     }
+    policy_report = policy_shift_metrics(episodes)
+    if policy_report:
+        report["policy_shift"] = policy_report
 
     recovery: dict[str, int | None] = {}
     for boundary in boundaries:
@@ -464,11 +579,13 @@ __all__ = [
     "backward_transfer",
     "compute_stream_metrics",
     "cumulative_regret",
+    "feedback_metrics",
     "forgetting",
     "infer_shift_indices",
     "mean_score",
     "percentile",
     "phase_metrics",
+    "policy_shift_metrics",
     "post_shift_gain",
     "promotion_precision",
     "recovery_steps",

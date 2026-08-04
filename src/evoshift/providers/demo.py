@@ -16,6 +16,19 @@ _ADDITION = re.compile(r"Compute\s+(-?\d+)\s*\+\s*(-?\d+)\.", re.I)
 _AFFINE = re.compile(r"Compute\s+F\((-?\d+),\s*(-?\d+)\)", re.I)
 _CONDITIONAL = re.compile(r"Given\s+x=(-?\d+)\s+and\s+y=(-?\d+)", re.I)
 _SYMBOLIC = re.compile(r"for\s+x=(-?\d+),\s*y=(-?\d+)", re.I)
+_REFUND = re.compile(
+    r"customer_tier=(STANDARD|PREMIUM);\s*request_day=(\d+)",
+    re.I,
+)
+
+_REFUND_V2_DIRECTIVE = (
+    "For refund decisions, approve both standard and premium customers when "
+    "request_day is at most 14; deny later requests."
+)
+_REFUND_V3_DIRECTIVE = (
+    "For refund decisions, premium customers are approved through request_day 30, "
+    "while the standard-customer limit remains 14 days."
+)
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,14 @@ class HeuristicDemoClient:
 
     def _solver_output(self, payload: Mapping[str, Any], *, force_correct: bool) -> dict[str, Any]:
         task = str(payload.get("task", ""))
+        refund = _REFUND.search(task)
+        if refund:
+            return self._refund_solver_output(
+                payload,
+                tier=refund.group(1).lower(),
+                request_day=int(refund.group(2)),
+                force_correct=force_correct,
+            )
         rule_name, x, y = self._parse_task(task)
         cards = str(payload.get("experience_cards", ""))
         learned = self._has_matching_card(rule_name, cards)
@@ -154,6 +175,8 @@ class HeuristicDemoClient:
 
     def _critic_output(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         task = str(payload.get("task", ""))
+        if _REFUND.search(task):
+            return self._refund_critic_output(payload)
         rule_name, _, _ = self._parse_task(task)
         rule = _RULES[rule_name]
         failure_type = "format_error" if rule_name == "symbolic" else "reasoning_error"
@@ -170,6 +193,66 @@ class HeuristicDemoClient:
                 "anti_pattern": rule.anti_pattern,
                 "evidence": "Distilled from a failed SyntheticShift episode.",
                 "tags": list(rule.tags),
+            },
+        }
+
+    def _refund_solver_output(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        tier: str,
+        request_day: int,
+        force_correct: bool,
+    ) -> dict[str, Any]:
+        cards = str(payload.get("experience_cards", ""))
+        phase = str(payload.get("phase", "phase_0"))
+        has_v2 = _REFUND_V2_DIRECTIVE.casefold() in cards.casefold()
+        has_v3 = _REFUND_V3_DIRECTIVE.casefold() in cards.casefold()
+        standard_window = 14 if has_v2 or has_v3 else 7
+        premium_window = 30 if has_v3 else standard_window
+        if force_correct:
+            standard_window = 14 if phase != "phase_0" else 7
+            premium_window = 30 if phase == "phase_2" else standard_window
+        window = premium_window if tier == "premium" else standard_window
+        answer = "APPROVE" if request_day <= window else "DENY"
+        applied: list[str] = []
+        if has_v2:
+            applied.extend(self._memory_ids_with_directive(_REFUND_V2_DIRECTIVE, cards))
+        if has_v3 and tier == "premium":
+            applied.extend(self._memory_ids_with_directive(_REFUND_V3_DIRECTIVE, cards))
+        return {
+            "answer": answer,
+            "confidence": 0.94 if has_v2 or has_v3 or phase == "phase_0" else 0.55,
+            "rationale_summary": "Applied the currently available refund-policy memory.",
+            "applied_memory_ids": list(dict.fromkeys(applied)),
+        }
+
+    @staticmethod
+    def _refund_critic_output(payload: Mapping[str, Any]) -> dict[str, Any]:
+        phase = str(payload.get("phase", "phase_0"))
+        if phase == "phase_2":
+            directive = _REFUND_V3_DIRECTIVE
+            trigger = "A premium-customer refund request is made after day 14 but by day 30."
+            anti_pattern = "Do not apply the 14-day standard limit to premium customers."
+            tags = ["refund_policy", "premium_exception", "policy_v3"]
+        else:
+            directive = _REFUND_V2_DIRECTIVE
+            trigger = "A refund request is made after day 7 but no later than day 14."
+            anti_pattern = "Do not keep applying the superseded 7-day refund window."
+            tags = ["refund_policy", "expanded_window", "policy_v2"]
+        return {
+            "failure_type": "reasoning_error",
+            "signature": f"refund_policy_not_applied_{phase}",
+            "evidence": "The observed feedback disagreed with the current refund decision.",
+            "confidence": 0.96,
+            "memory": {
+                "kind": "procedural",
+                "trigger": trigger,
+                "scope": "customer_support/refund_policy",
+                "directive": directive,
+                "anti_pattern": anti_pattern,
+                "evidence": "Distilled from an observed PolicyShift feedback event.",
+                "tags": tags,
             },
         }
 
@@ -212,6 +295,11 @@ class HeuristicDemoClient:
     @staticmethod
     def _matching_memory_ids(rule_name: str, cards: str) -> list[str]:
         directive = _RULES[rule_name].directive.casefold()
+        return HeuristicDemoClient._memory_ids_with_directive(directive, cards)
+
+    @staticmethod
+    def _memory_ids_with_directive(directive: str, cards: str) -> list[str]:
+        directive = directive.casefold()
         matches = list(_EXPERIENCE_ID.finditer(cards))
         selected: list[str] = []
         for index, match in enumerate(matches):

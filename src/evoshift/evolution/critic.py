@@ -87,7 +87,7 @@ class ExperienceCritic:
             "agent_answer": episode.output.answer,
             "confidence": episode.output.confidence,
             "rationale_summary": episode.output.rationale_summary,
-            "reward": episode.score.primary,
+            "reward": episode.adaptation_score.primary,
             "feedback": visible_feedback,
             "retrieved_memory_ids": episode.selected_memory_ids,
             "active_memories": memory_summary,
@@ -128,11 +128,14 @@ class ExperienceCritic:
 
     def _visible_feedback(self, episode: Episode) -> str:
         if self.evolution.feedback_mode == "reward_only":
-            return "success" if episode.score.success else "failure"
+            return "success" if episode.adaptation_score.success else "failure"
         if self.evolution.feedback_mode == "grader_feedback":
-            return episode.score.feedback
+            return episode.adaptation_score.feedback
         return json.dumps(
-            {"grader_feedback": episode.score.feedback, "reference": episode.sample.reference},
+            {
+                "grader_feedback": episode.adaptation_score.feedback,
+                "reference": episode.sample.reference,
+            },
             ensure_ascii=False,
         )
 

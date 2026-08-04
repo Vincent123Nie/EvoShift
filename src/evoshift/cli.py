@@ -141,6 +141,7 @@ def benchmark_list() -> None:
     table.add_column("Network")
     rows = [
         ("synthetic_shift", "Deterministic CI and shift/rollback validation", "no"),
+        ("policy_shift", "Policy updates with noisy/adversarial feedback", "no"),
         ("jsonl", "User or exported public dataset in normalized JSONL", "no"),
         ("bbh", "Pinned BIG-Bench Hard task-family shift stream", "first pull"),
         ("huggingface", "Generic Hugging Face dataset field mapper", "first pull"),

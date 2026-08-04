@@ -14,6 +14,7 @@ from evoshift.benchmarks import (
     DEFAULT_BBH_REVISION,
     BBHBenchmarkAdapter,
     JSONLBenchmarkAdapter,
+    PolicyShiftBenchmark,
     SyntheticShiftBenchmark,
     create_benchmark,
 )
@@ -96,6 +97,82 @@ def test_synthetic_shift_is_reproducible_and_has_protected_probes() -> None:
             seed=123, phase_size=4, protected_probes_per_phase=1
         ).fingerprint()
     )
+
+
+def test_policy_shift_separates_oracle_from_observed_feedback() -> None:
+    adapter = PolicyShiftBenchmark(
+        seed=123,
+        phase_size=8,
+        feedback_noise_rate=1.0,
+        feedback_attack_rate=1.0,
+    )
+
+    first = adapter.load()
+    second = adapter.load()
+
+    assert first == second
+    assert len(first) == 24
+    assert {sample.phase for sample in first} == {"phase_0", "phase_1", "phase_2"}
+    assert {sample.metadata["policy_version"] for sample in first} == {"v1", "v2", "v3"}
+    assert all(
+        str(sample.metadata["policy_version"]) not in sample.prompt
+        and str(sample.metadata["policy_version"]) not in sample.sample_id
+        for sample in first
+    )
+    assert all(sample.metadata["feedback_reference"] != sample.reference for sample in first)
+    assert {sample.metadata["feedback_kind"] for sample in first} == {"noise", "attack"}
+    assert any(sample.metadata["protected"] for sample in first)
+    assert any(sample.metadata["policy_changed_case"] for sample in first)
+    assert any(sample.metadata["future_change_case"] for sample in first)
+
+    for sample in first:
+        tier = str(sample.metadata["customer_tier"])
+        window = int(sample.metadata[f"{tier}_window"])
+        expected = "APPROVE" if int(sample.metadata["request_day"]) <= window else "DENY"
+        assert sample.reference == expected
+
+
+def test_policy_shift_distinguishes_transition_protected_and_future_cases() -> None:
+    samples = PolicyShiftBenchmark(
+        seed=7,
+        phase_size=24,
+        feedback_noise_rate=0.0,
+        feedback_attack_rate=0.0,
+    ).load()
+    by_phase = {
+        phase: [sample for sample in samples if sample.phase == phase]
+        for phase in ("phase_0", "phase_1", "phase_2")
+    }
+
+    assert not any(sample.metadata["transition_case"] for sample in by_phase["phase_0"])
+    assert any(sample.metadata["future_change_case"] for sample in by_phase["phase_0"])
+    assert any(sample.metadata["transition_case"] for sample in by_phase["phase_1"])
+    assert any(sample.metadata["future_change_case"] for sample in by_phase["phase_1"])
+    assert any(sample.metadata["transition_case"] for sample in by_phase["phase_2"])
+    assert not any(sample.metadata["future_change_case"] for sample in by_phase["phase_2"])
+
+    for sample in samples:
+        transition = bool(sample.metadata["transition_case"])
+        protected = bool(sample.metadata["protected"])
+        future = bool(sample.metadata["future_change_case"])
+        assert sum((transition, protected, future)) == 1
+        assert sample.metadata["policy_changed_case"] is transition
+
+
+def test_policy_shift_factory_uses_noise_configuration(tmp_path: Path) -> None:
+    config = BenchmarkConfig(
+        kind="policy_shift",
+        path=None,
+        phase_size=8,
+        feedback_noise_rate=0.25,
+        feedback_attack_rate=0.50,
+    )
+
+    adapter = create_benchmark(config, root=tmp_path, seed=9)
+
+    assert isinstance(adapter, PolicyShiftBenchmark)
+    assert adapter.feedback_noise_rate == 0.25
+    assert adapter.feedback_attack_rate == 0.50
 
 
 def _fake_bbh_payload() -> bytes:

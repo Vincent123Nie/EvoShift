@@ -48,6 +48,32 @@ async def test_demo_runner_evolves_and_writes_auditable_artifacts(tmp_path: Path
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_policy_shift_runner_keeps_oracle_and_feedback_channels_separate(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/static_policy_shift_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "benchmark": config.benchmark.model_copy(
+                update={"phase_size": 8, "feedback_noise_rate": 1.0}
+            ),
+        }
+    )
+    adapter = create_benchmark(config.benchmark, root=Path.cwd(), seed=config.evaluation.seed)
+
+    result = await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
+
+    assert result.metrics["feedback"]["annotated_noise_rate"] == 1.0
+    assert result.metrics["feedback"]["oracle_success_agreement_rate"] == 0.0
+    predictions = (result.run_dir / "predictions.jsonl").read_text(encoding="utf-8")
+    assert '"feedback_score"' in predictions
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_frozen_audit_reuses_state_without_mutating_it(tmp_path: Path) -> None:
     source_config = load_config(Path("configs/experiments/offline_demo.yaml"))
     source_config = source_config.model_copy(

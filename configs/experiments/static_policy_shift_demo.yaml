@@ -1,0 +1,40 @@
+project: static-policy-shift-demo
+algorithm: static
+
+provider:
+  kind: demo
+  model: evoshift-demo
+  max_output_tokens: 512
+  reasoning_effort: null
+
+budget:
+  max_requests: 200
+  max_total_tokens: 500000
+  max_cost_usd: 0.0
+
+storage:
+  cache_enabled: false
+  isolate_runs: true
+  runs_dir: runs
+
+benchmark:
+  kind: policy_shift
+  name: enterprise_refund_policy_shift
+  path: null
+  phase_size: 24
+  shuffle: false
+  feedback_noise_rate: 0.10
+  feedback_attack_rate: 0.10
+
+evolution:
+  enabled: false
+  policy_evolution_enabled: false
+  policy_evolve_on_shift: false
+
+evaluation:
+  seed: 42
+  bootstrap_samples: 2000
+  confidence_level: 0.95
+
+policy:
+  allow_cross_domain_transfer: false

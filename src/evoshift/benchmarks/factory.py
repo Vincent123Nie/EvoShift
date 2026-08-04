@@ -6,6 +6,7 @@ from evoshift.benchmarks.base import BenchmarkAdapter
 from evoshift.benchmarks.bbh import DEFAULT_BBH_REVISION, BBHBenchmarkAdapter
 from evoshift.benchmarks.huggingface import HuggingFaceBenchmarkAdapter
 from evoshift.benchmarks.jsonl import JSONLBenchmarkAdapter
+from evoshift.benchmarks.policy_shift import PolicyShiftBenchmark
 from evoshift.benchmarks.synthetic import SyntheticShiftBenchmark
 from evoshift.config import BenchmarkConfig
 from evoshift.errors import DatasetError
@@ -39,6 +40,15 @@ def create_benchmark(
             phase_size=config.phase_size or 12,
             protected_phases=config.protected_phases or ["phase_0_addition"],
             protected_probes_per_phase=2,
+            shuffle_within_phase=config.shuffle,
+            limit=config.limit,
+        )
+    if kind in {"policy_shift", "enterprise_policy_shift"}:
+        return PolicyShiftBenchmark(
+            seed=seed,
+            phase_size=config.phase_size or 24,
+            feedback_noise_rate=config.feedback_noise_rate,
+            feedback_attack_rate=config.feedback_attack_rate,
             shuffle_within_phase=config.shuffle,
             limit=config.limit,
         )

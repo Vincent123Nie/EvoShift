@@ -13,7 +13,7 @@ from evoshift.agents.baselines import behavior_for
 from evoshift.audit import state_fingerprint
 from evoshift.benchmarks.base import BenchmarkAdapter, sample_fingerprint
 from evoshift.config import EvoShiftConfig
-from evoshift.evaluation import compute_stream_metrics, score_sample
+from evoshift.evaluation import compute_stream_metrics, score_feedback_sample, score_sample
 from evoshift.evolution import ExperienceCritic, PageHinkleyShiftDetector
 from evoshift.evolution.replay import ReplayVerifier
 from evoshift.memory import MemoryManager, apply_policy_patch
@@ -165,13 +165,14 @@ class EvoShiftRunner:
                     self_refine=behavior.self_refine,
                 )
                 score = score_sample(sample, prediction.output.answer)
+                feedback_score = score_feedback_sample(sample, prediction.output.answer)
                 selected_ids = [item.item.memory_id for item in prediction.retrieved]
                 novelty = (
                     1.0 - max(item.relevance for item in prediction.retrieved)
                     if active_before and prediction.retrieved
                     else (1.0 if active_before else 0.0)
                 )
-                shift = detector.update(score.primary, novelty, index, sample.domain)
+                shift = detector.update(feedback_score.primary, novelty, index, sample.domain)
                 episode = Episode(
                     episode_id=f"ep-{uuid.uuid4().hex[:16]}",
                     run_id=run_id,
@@ -179,6 +180,7 @@ class EvoShiftRunner:
                     sample=sample,
                     output=prediction.output,
                     score=score,
+                    feedback_score=feedback_score,
                     selected_memory_ids=selected_ids,
                     policy_version=policy.version,
                     usage=prediction.usage,
@@ -190,7 +192,7 @@ class EvoShiftRunner:
 
                 if not self.frozen_audit:
                     credited_ids = prediction.output.applied_memory_ids or selected_ids
-                    retired = memory.record_outcome(credited_ids, score.success, policy)
+                    retired = memory.record_outcome(credited_ids, feedback_score.success, policy)
                     for item in retired:
                         rollbacks += 1
                         payload = {"reason": "posterior utility below rollback threshold"}
@@ -201,7 +203,7 @@ class EvoShiftRunner:
                             payload,
                         )
 
-                should_extract = not score.success or (
+                should_extract = not feedback_score.success or (
                     policy.learn_from_success_every > 0
                     and (index + 1) % policy.learn_from_success_every == 0
                 )
