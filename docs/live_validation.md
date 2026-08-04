@@ -30,6 +30,12 @@ The provider smoke returned exactly `OK` from model alias `gpt-5.6`. On the
 16-example BBH smoke stream all four methods scored `1.0`, so the stream was
 saturated and useful only for protocol validation.
 
+The login shell exposed the gateway key but not its base-URL override. A smoke
+using the repository's safe official default therefore did not exercise the
+private reverse proxy. Supplying both `EVOSHIFT_OPENAI_API_KEY` and
+`EVOSHIFT_OPENAI_BASE_URL` at runtime made the compatible gateway path pass;
+neither value is stored in run artifacts or Git.
+
 With response caching disabled, the external request counts were:
 
 | Method | Foreground examples | External requests |
@@ -76,6 +82,55 @@ d249a1602f0a58846d7d0dd5084f22b725cd1ab4995dea4401edb2bf76ea5da4
 
 The audit store recorded zero validations, zero promotions, zero rollbacks,
 and `promotion_precision = null`/N/A.
+
+### Provenance-scope regression validation
+
+The first audit exposed a serving defect: with only one active memory, any
+nonzero BM25 overlap normalized to relevance `1.0`, and utility/UCB could also
+select a zero-overlap memory. Generic task wording therefore made the causal
+card appear on every unseen domain.
+
+The fix records the creating episode's domain as deterministic
+`source_domains`, gates retrieval to matching provenance domains by default,
+filters zero-overlap unscoped candidates, and exposes
+`allow_cross_domain_transfer=true` only as an explicit ablation. For the legacy
+source run used here, `source_domains` was backfilled from the episode/domain
+trace referenced by the memory's provenance ID.
+
+An offline retrieval replay over the same source and held-out samples produced:
+
+| Retrieval policy | Source selections | Held-out selections |
+|---|---:|---:|
+| Provenance scoped | 8/64, all `causal_judgement` | 0/64 |
+| Cross-domain ablation | 56/64 | 64/64 |
+
+The scoped path therefore retained every target-domain sample while removing
+all observed unrelated retrieval. This is a retrieval separation result, not
+an accuracy result.
+
+The fix was then re-evaluated with fresh provider calls from clean commit
+`01aaf69c494218a2d4c921951c08d07ce4f8ad97`:
+
+| Method | Run | Score | Input tokens | Total tokens | Retrieval episodes |
+|---|---|---:|---:|---:|---:|
+| Static control | `20260804T135712Z-static-73988af6` | 0.953125 | 36,354 | 43,860 | 0/64 |
+| Frozen scoped state | `20260804T140229Z-audit-d6345c63` | 0.953125 | 36,354 | 43,777 | 0/64 |
+
+The paired mean gain and 95% bootstrap interval were both exactly zero. Input
+tokens were identical, proving that the earlier 8,414-token memory-context
+overhead was removed; the 83-token total reduction came only from ordinary
+output-length variation. Both runs used the same model, dataset hash, Git
+commit, clean worktree, disabled cache policy, and 64 uncached requests, so
+`evoshift compare` reported `comparable_for_claims=true` with no warnings.
+
+The frozen state hash was unchanged before and after evaluation:
+
+```text
+10af9513a16f0a26e5b3bd6e736e44bb8746bdc2d422a583827034f8c75fae4d
+```
+
+This validates removal of measured negative transfer and cost overhead. It
+does not show that the learned memory improves unseen-domain accuracy.
 
 ## Defects found by the live run
 

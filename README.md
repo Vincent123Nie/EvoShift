@@ -53,8 +53,9 @@ validation decision, event, and rollback is persisted with provenance.
   manifest, and canary validation.
 - Generic Hugging Face and JSONL adapters plus a deterministic distribution
   shift benchmark.
-- BM25 retrieval with Beta posterior utility, UCB-style exploration, MMR
-  diversity, token budgeting, versioning, deduplication, and rollback.
+- Provenance-domain-scoped BM25 retrieval with Beta posterior utility,
+  UCB-style exploration, MMR diversity, token budgeting, versioning,
+  deduplication, and rollback.
 - Paired bootstrap promotion gates with protected-slice and resource checks.
 - Immutable run artifacts, SQLite audit state, sweeps, paired run comparison,
   and Markdown/JSON reports.
@@ -156,8 +157,8 @@ python scripts/verify_bbh_manifest.py
 
 Verified locally on 2026-08-04:
 
-- 72 tests passed;
-- branch-aware coverage: 82.89% (`fail_under = 80`);
+- 77 tests passed;
+- branch-aware coverage: 82.86% (`fail_under = 80`);
 - Ruff and strict mypy passed;
 - source and wheel distributions built successfully;
 - the OpenAI-compatible provider contract suite passed, and an opt-in live
