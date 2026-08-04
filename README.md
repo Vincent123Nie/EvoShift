@@ -111,7 +111,9 @@ evoshift run --config configs/experiments/evoshift_bbh_smoke.yaml
 
 For formal comparisons, use the same BBH config and override only the algorithm
 and preregistered ablation fields. The full stream and bounded sweep specs are
-under `configs/experiments/` and `configs/sweeps/`.
+under `configs/experiments/` and `configs/sweeps/`. The committed BBH experiment
+configs disable the shared LLM cache so run order cannot create zero-cost,
+zero-latency results for later methods.
 
 ## Frozen held-out audit
 
@@ -149,16 +151,17 @@ ruff format --check .
 mypy src/evoshift
 pytest --cov=evoshift --cov-report=term-missing
 python -m build
+python scripts/verify_bbh_manifest.py
 ```
 
 Verified locally on 2026-08-04:
 
-- 71 tests passed;
-- branch-aware coverage: 82.90% (`fail_under = 80`);
+- 72 tests passed;
+- branch-aware coverage: 82.89% (`fail_under = 80`);
 - Ruff and strict mypy passed;
 - source and wheel distributions built successfully;
-- the OpenAI-compatible provider contract suite passed; the paid live smoke is
-  intentionally opt-in and must be rerun against an available endpoint;
+- the OpenAI-compatible provider contract suite passed, and an opt-in live
+  smoke against a private compatible gateway returned exactly `OK`;
 - four BBH task files and 16 public smoke samples passed integrity checks.
 
 The live smoke proves protocol compatibility only. It is not a benchmark result.
@@ -182,6 +185,7 @@ dataset hash, and comparison artifact.
 - [Algorithm](docs/algorithm.md)
 - [Evaluation protocol](docs/evaluation.md)
 - [Research landscape](docs/research_landscape.md)
+- [Live API engineering validation](docs/live_validation.md)
 - [Reproducibility](docs/reproducibility.md)
 - [Security](docs/security.md)
 - [Limitations](docs/limitations.md)

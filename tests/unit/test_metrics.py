@@ -7,6 +7,7 @@ import pytest
 from evoshift.evaluation import (
     area_under_adaptation_curve,
     backward_transfer,
+    binary_choice_score,
     compute_stream_metrics,
     cumulative_regret,
     exact_match_score,
@@ -41,6 +42,7 @@ def _episode(
     *,
     sample_id: str = "",
     latency_ms: float = 100.0,
+    cached: bool = False,
 ) -> Episode:
     return Episode(
         episode_id=f"episode-{index}",
@@ -60,6 +62,7 @@ def _episode(
             total_tokens=15,
             cost_usd=0.01,
             latency_ms=latency_ms,
+            cached=cached,
         ),
     )
 
@@ -82,6 +85,12 @@ def test_deterministic_scorers_cover_common_dataset_formats() -> None:
         == 1.0
     )
     assert multiple_choice_score("blue", "B", choices=["red", "blue", "green"]) == 1.0
+    assert multiple_choice_score("09/09/1908 (B)", "(B)") == 1.0
+    assert multiple_choice_score("prose ending in B", "(B)") == 0.0
+    assert binary_choice_score("Yes, Christie tells the truth.", "Yes") == 1.0
+    assert binary_choice_score("No. Lorine lies.", "No") == 1.0
+    assert binary_choice_score("True, because the expression holds.", "Yes") == 1.0
+    assert binary_choice_score("The explanation ends with yes", "Yes") == 0.0
 
 
 def test_score_sample_is_stable_public_dispatch_api() -> None:
@@ -151,13 +160,22 @@ def test_backward_transfer_and_forgetting_follow_continual_learning_definitions(
 
 def test_resource_metrics_report_tokens_cost_and_latency_tails() -> None:
     episodes = [
-        _episode(index, 1.0 if index != 1 else 0.0, "stream", latency_ms=latency)
+        _episode(
+            index,
+            1.0 if index != 1 else 0.0,
+            "stream",
+            latency_ms=latency,
+            cached=index == 3,
+        )
         for index, latency in enumerate([100.0, 200.0, 300.0, 400.0])
     ]
     resources = usage_metrics(episodes)
     assert resources["total_tokens"] == 60.0
     assert resources["cost_usd"] == pytest.approx(0.04)
     assert resources["tokens_per_success"] == 20.0
+    assert resources["cached_episodes"] == 1
+    assert resources["uncached_episodes"] == 3
+    assert resources["cache_hit_episode_rate"] == 0.25
     assert resources["latency_p50_ms"] == 250.0
     assert resources["latency_p95_ms"] == pytest.approx(385.0)
 

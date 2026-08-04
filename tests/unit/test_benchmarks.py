@@ -10,6 +10,7 @@ import pytest
 
 from evoshift.benchmarks import (
     BBH_CANARY,
+    BBH_FILE_MANIFEST,
     DEFAULT_BBH_REVISION,
     BBHBenchmarkAdapter,
     JSONLBenchmarkAdapter,
@@ -142,7 +143,7 @@ def test_bbh_download_is_pinned_manifested_and_cache_verified(
     ]
     assert len(samples) == 1
     assert samples[0].reference == "False"
-    assert samples[0].evaluator == "normalized_exact_match"
+    assert samples[0].evaluator == "binary_choice"
     disk_manifest = json.loads(adapter.manifest_path.read_text(encoding="utf-8"))
     assert disk_manifest["revision"] == "test-revision"
     assert (
@@ -192,6 +193,21 @@ def test_default_bbh_revision_and_factory_contract(tmp_path: Path) -> None:
     assert isinstance(adapter, BBHBenchmarkAdapter)
     assert adapter.revision == DEFAULT_BBH_REVISION
     assert adapter.phase_size == 3
+
+
+def test_bbh_manifest_uses_complete_large_upstream_files() -> None:
+    assert BBH_FILE_MANIFEST["causal_judgement"] == {
+        "sha256": "6e8bca44dd402008ed41c07a3d0a1d5e7b03db7001a7e002fcdf4c60985ea081",
+        "bytes": 202943,
+    }
+    assert BBH_FILE_MANIFEST["salient_translation_error_detection"] == {
+        "sha256": "becf3eb8dd53c821a555ecd5c1334ecd93eb25f980e63be963c518e7138de5da",
+        "bytes": 286443,
+    }
+    assert BBH_FILE_MANIFEST["tracking_shuffled_objects_seven_objects"] == {
+        "sha256": "b59fd05b850c37cf57cb514ae1e6975c00b1638ade2291722056b2af3c54084d",
+        "bytes": 214906,
+    }
 
 
 def test_factory_resolves_jsonl_path_from_root(tmp_path: Path) -> None:

@@ -312,10 +312,48 @@ def compare_runs(
         candidate_manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
         baseline_total = json.loads((baseline / "costs.json").read_text(encoding="utf-8"))
         candidate_total = json.loads((candidate / "costs.json").read_text(encoding="utf-8"))
+        baseline_config = load_config(baseline / "resolved_config.yaml")
+        candidate_config = load_config(candidate / "resolved_config.yaml")
         same_model = baseline_manifest.get("model") == candidate_manifest.get("model")
         same_dataset = baseline_manifest.get("dataset_hash") == candidate_manifest.get(
             "dataset_hash"
         )
+        same_git_commit = baseline_manifest.get("git_commit") == candidate_manifest.get(
+            "git_commit"
+        )
+        clean_worktrees = not bool(baseline_manifest.get("git_dirty")) and not bool(
+            candidate_manifest.get("git_dirty")
+        )
+        provenance_comparable = same_git_commit and clean_worktrees
+        same_cache_policy = (
+            baseline_config.storage.cache_enabled == candidate_config.storage.cache_enabled
+        )
+        cache_disabled_for_both = (
+            not baseline_config.storage.cache_enabled and not candidate_config.storage.cache_enabled
+        )
+        accuracy_comparable = same_model and same_dataset
+        resource_comparable = (
+            accuracy_comparable and cache_disabled_for_both and provenance_comparable
+        )
+        comparison_warnings = []
+        if not same_model:
+            comparison_warnings.append("model identifiers differ")
+        if not same_dataset:
+            comparison_warnings.append("dataset hashes differ")
+        if not same_git_commit:
+            comparison_warnings.append("Git commits differ")
+        if not clean_worktrees:
+            comparison_warnings.append(
+                "at least one run used a dirty worktree; formal reproducibility claims are invalid"
+            )
+        if not cache_disabled_for_both:
+            comparison_warnings.append(
+                "LLM cache was enabled for at least one run; cost and latency claims are invalid"
+            )
+        if baseline_usage["cached_episodes"] != candidate_usage["cached_episodes"]:
+            comparison_warnings.append(
+                "foreground cache-hit counts differ, so run order affected measured resources"
+            )
         incremental_tokens = float(candidate_total.get("total_tokens", 0)) - float(
             baseline_total.get("total_tokens", 0)
         )
@@ -340,7 +378,15 @@ def compare_runs(
             ),
             "same_model": same_model,
             "same_dataset_hash": same_dataset,
-            "comparable_for_claims": same_model and same_dataset,
+            "same_git_commit": same_git_commit,
+            "clean_worktrees": clean_worktrees,
+            "provenance_comparable": provenance_comparable,
+            "same_cache_policy": same_cache_policy,
+            "cache_disabled_for_both": cache_disabled_for_both,
+            "accuracy_comparable": accuracy_comparable,
+            "resource_comparable": resource_comparable,
+            "comparison_warnings": comparison_warnings,
+            "comparable_for_claims": resource_comparable,
             "same_sample_comparison": True,
         }
         write_json_report(report, candidate / f"compare_vs_{baseline.name}.json")
@@ -355,10 +401,21 @@ def compare_runs(
             f"- Post-shift gain: {report['post_shift_gain']:.4f}",
             f"- Same model: {same_model}",
             f"- Same dataset hash: {same_dataset}",
+            f"- Same Git commit: {same_git_commit}",
+            f"- Clean worktrees: {clean_worktrees}",
+            f"- Baseline cached episodes: {baseline_usage['cached_episodes']}",
+            f"- Candidate cached episodes: {candidate_usage['cached_episodes']}",
+            f"- Accuracy comparable: {accuracy_comparable}",
+            f"- Resource comparable: {resource_comparable}",
             f"- Incremental total tokens: {incremental_tokens:.0f}",
             "",
-            "Different models, prompts, budgets, or sample sets must not be "
-            "presented as a SOTA claim.",
+            *(
+                ["## Warnings", "", *[f"- {item}" for item in comparison_warnings], ""]
+                if comparison_warnings
+                else []
+            ),
+            "Different models, prompts, budgets, cache protocols, or sample sets must not "
+            "be presented as a SOTA claim.",
             "",
         ]
         (candidate / f"compare_vs_{baseline.name}.md").write_text(

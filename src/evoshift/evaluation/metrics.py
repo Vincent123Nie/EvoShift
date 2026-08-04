@@ -315,6 +315,9 @@ def usage_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
     if not episodes:
         return {
             "requests": 0,
+            "cached_episodes": 0,
+            "uncached_episodes": 0,
+            "cache_hit_episode_rate": 0.0,
             "input_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
@@ -337,9 +340,13 @@ def usage_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
     )
     cost = sum(episode.usage.cost_usd for episode in episodes)
     latencies = [episode.usage.latency_ms for episode in episodes]
+    cached_episodes = sum(int(episode.usage.cached) for episode in episodes)
     successes = sum(int(episode.score.success) for episode in episodes)
     return {
         "requests": len(episodes),
+        "cached_episodes": cached_episodes,
+        "uncached_episodes": len(episodes) - cached_episodes,
+        "cache_hit_episode_rate": cached_episodes / len(episodes),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,

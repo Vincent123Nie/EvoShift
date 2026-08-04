@@ -7,3 +7,6 @@ by Git. Generic Hugging Face datasets use the cache managed by the optional
 `datasets` package; install that adapter with `pip install -e ".[hf]"`.
 
 Third-party datasets remain governed by their original licenses and terms.
+
+Run `python scripts/verify_bbh_manifest.py` to re-download all 27 files in
+memory and audit every embedded checksum against the pinned Git revision.

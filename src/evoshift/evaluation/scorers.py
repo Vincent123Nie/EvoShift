@@ -30,6 +30,11 @@ _EXPLICIT_CHOICE_RE = re.compile(
 )
 _BARE_CHOICE_RE = re.compile(r"^\s*[\(\[]?([A-Z])(?:[\)\]])?[\s\.:,-]*$", re.IGNORECASE)
 _LEADING_CHOICE_RE = re.compile(r"^\s*[\(\[]?([A-Z])(?:[\)\]])?[\s\.:,-]+", re.IGNORECASE)
+_TRAILING_PAREN_CHOICE_RE = re.compile(r"[\(\[]([A-Z])[\)\]][\s\.:,-]*$", re.IGNORECASE)
+_BINARY_CHOICE_RE = re.compile(
+    r"^\s*(?:(?:the\s+)?answer\s*(?:is|=|:)?\s*)?(yes|no|true|false)\b",
+    re.IGNORECASE,
+)
 
 
 def _as_text(value: Any) -> str:
@@ -206,7 +211,12 @@ def _extract_choice_label(value: Any, valid_labels: Iterable[str]) -> str | None
             return one_based
 
     text = unicodedata.normalize("NFKC", _as_text(value)).strip()
-    for pattern in (_EXPLICIT_CHOICE_RE, _BARE_CHOICE_RE, _LEADING_CHOICE_RE):
+    for pattern in (
+        _EXPLICIT_CHOICE_RE,
+        _BARE_CHOICE_RE,
+        _LEADING_CHOICE_RE,
+        _TRAILING_PAREN_CHOICE_RE,
+    ):
         match = pattern.search(text)
         if match:
             label = match.group(1).upper()
@@ -255,6 +265,27 @@ def multiple_choice_score(
     return 0.0
 
 
+def _extract_binary_choice(value: Any) -> bool | None:
+    text = unicodedata.normalize("NFKC", _as_text(value)).strip()
+    match = _BINARY_CHOICE_RE.search(text)
+    if match is None:
+        return None
+    return match.group(1).lower() in {"yes", "true"}
+
+
+def binary_choice_score(prediction: Any, reference: Any) -> float:
+    """Score an unambiguous leading Yes/No or True/False answer label."""
+
+    predicted = _extract_binary_choice(prediction)
+    if predicted is None:
+        return 0.0
+    for item in _reference_values(reference):
+        expected = _extract_binary_choice(item)
+        if expected is not None and predicted == expected:
+            return 1.0
+    return 0.0
+
+
 def score_prediction(
     prediction: Any,
     reference: Any,
@@ -274,6 +305,9 @@ def score_prediction(
         "number": "numeric",
         "mcq": "multiple_choice",
         "choice": "multiple_choice",
+        "binary": "binary_choice",
+        "boolean": "binary_choice",
+        "yes_no": "binary_choice",
     }
     name = aliases.get(name, name)
 
@@ -296,6 +330,8 @@ def score_prediction(
         )
     elif name == "multiple_choice":
         primary = multiple_choice_score(prediction, reference, choices=options.get("choices"))
+    elif name == "binary_choice":
+        primary = binary_choice_score(prediction, reference)
     else:
         raise ValueError(f"unknown evaluator: {evaluator}")
 
@@ -323,6 +359,7 @@ def score_sample(sample: BenchmarkSample, answer: str) -> ScoreBundle:
 
 
 __all__ = [
+    "binary_choice_score",
     "exact_match",
     "exact_match_score",
     "multiple_choice_score",

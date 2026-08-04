@@ -26,6 +26,7 @@ BBH_CANARY = (
 _RAW_ROOT = "https://raw.githubusercontent.com/suzgunmirac/BIG-Bench-Hard"
 _REVISION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 _CHOICE_TARGET_PATTERN = re.compile(r"^\s*\([A-Z]\)\s*$")
+_BINARY_TARGET_PATTERN = re.compile(r"^\s*(?:yes|no|true|false)\s*$", re.IGNORECASE)
 _MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024
 
 
@@ -38,8 +39,8 @@ BBH_FILE_MANIFEST: dict[str, dict[str, Any]] = {
         "bytes": 17172,
     },
     "causal_judgement": {
-        "sha256": "19d70a1e9450b98fac82d5704fbe95d8d36547659829ee4f55d1b59d4221c078",
-        "bytes": 200011,
+        "sha256": "6e8bca44dd402008ed41c07a3d0a1d5e7b03db7001a7e002fcdf4c60985ea081",
+        "bytes": 202943,
     },
     "date_understanding": {
         "sha256": "0148d4ac5fca05b2f82373e5fef7208e15363b9c6079493034d77b3dab496bf5",
@@ -106,8 +107,8 @@ BBH_FILE_MANIFEST: dict[str, dict[str, Any]] = {
         "bytes": 53178,
     },
     "salient_translation_error_detection": {
-        "sha256": "d5c62a4989c2fc4db56f816c6eb4d90651f2cbe1971e77c5772033bad4941e4c",
-        "bytes": 200011,
+        "sha256": "becf3eb8dd53c821a555ecd5c1334ecd93eb25f980e63be963c518e7138de5da",
+        "bytes": 286443,
     },
     "snarks": {
         "sha256": "54a0661fe2de06167645a4965e6bcf963c4ba307e76262a7c750998b0e3d0d0e",
@@ -126,8 +127,8 @@ BBH_FILE_MANIFEST: dict[str, dict[str, Any]] = {
         "bytes": 169722,
     },
     "tracking_shuffled_objects_seven_objects": {
-        "sha256": "7075cadf7c581e1796858b7f6521b5942eb063a631b322c87f6b931cd82dc007",
-        "bytes": 200011,
+        "sha256": "b59fd05b850c37cf57cb514ae1e6975c00b1638ade2291722056b2af3c54084d",
+        "bytes": 214906,
     },
     "tracking_shuffled_objects_three_objects": {
         "sha256": "546cc7bf10c6a01a6a4c17ae28a4966485f21f29fd5d111f37858ec78e354f6b",
@@ -225,7 +226,11 @@ class BBHBenchmarkAdapter(BenchmarkAdapter):
                         evaluator=(
                             "multiple_choice"
                             if _CHOICE_TARGET_PATTERN.fullmatch(str(example["target"]))
-                            else "normalized_exact_match"
+                            else (
+                                "binary_choice"
+                                if _BINARY_TARGET_PATTERN.fullmatch(str(example["target"]))
+                                else "normalized_exact_match"
+                            )
                         ),
                         metadata={
                             "dataset": "big_bench_hard",

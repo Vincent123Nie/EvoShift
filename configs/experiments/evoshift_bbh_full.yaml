@@ -12,7 +12,8 @@ budget:
   max_total_tokens: 8000000
   max_cost_usd: 200.0
 storage:
-  cache_enabled: true
+  # Formal comparisons require fresh provider calls for every method and seed.
+  cache_enabled: false
   isolate_runs: true
 benchmark:
   kind: bbh

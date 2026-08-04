@@ -15,7 +15,7 @@ budget:
   max_cost_usd: 20.0
 
 storage:
-  cache_enabled: true
+  cache_enabled: false
   isolate_runs: true
 
 benchmark:

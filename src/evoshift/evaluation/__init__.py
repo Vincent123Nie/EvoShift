@@ -24,6 +24,7 @@ from evoshift.evaluation.reporting import (
     write_markdown_report,
 )
 from evoshift.evaluation.scorers import (
+    binary_choice_score,
     exact_match,
     exact_match_score,
     multiple_choice_score,
@@ -43,6 +44,7 @@ __all__ = [
     "area_under_adaptation_curve",
     "auac",
     "backward_transfer",
+    "binary_choice_score",
     "compute_stream_metrics",
     "cumulative_regret",
     "exact_match",

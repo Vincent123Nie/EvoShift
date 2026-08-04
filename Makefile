@@ -1,4 +1,4 @@
-.PHONY: install test lint format typecheck build demo doctor clean
+.PHONY: install test lint format typecheck build demo doctor verify-data-manifest clean
 
 install:
 	python -m pip install -e ".[dev]"
@@ -23,9 +23,11 @@ build:
 doctor:
 	python -m evoshift doctor
 
+verify-data-manifest:
+	python scripts/verify_bbh_manifest.py
+
 demo:
 	python -m evoshift run --config configs/experiments/offline_demo.yaml
 
 clean:
 	python scripts/clean_artifacts.py
-

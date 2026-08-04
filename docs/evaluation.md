@@ -176,6 +176,11 @@ critic, and replay calls and is the correct source for actual provider
 requests, tokens, and dollars. Cache hits return before the ledger reservation
 and are not external calls.
 
+`evoshift compare` separately reports accuracy, resource, and provenance
+comparability. Formal claims require the same model and dataset hash, disabled
+caches, the same Git commit, and `git_dirty=false` for both runs. Dirty-worktree
+runs remain useful engineering diagnostics but are not formal result artifacts.
+
 A strict *consumed-compute-matched* claim additionally needs a baseline that
 can spend the same total budget, for example a repeated-sampling or
 self-consistency baseline stopped at the same provider-call/token budget. That
@@ -201,6 +206,9 @@ The deterministic scorers currently support:
 - `numeric`: last-number extraction with fractions, percentages, scientific
   notation, and configurable absolute/relative tolerances.
 - `multiple_choice`: option-label or exact option-text matching.
+- `binary_choice`: an explicit leading Yes/No or True/False label, allowing a
+  short explanation after the label without treating arbitrary trailing text
+  as the answer.
 
 For partial-credit scorers, `ScoreBundle.primary` is the scalar score and
 `ScoreBundle.success` uses `metadata.success_threshold`, which defaults to

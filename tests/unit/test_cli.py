@@ -88,7 +88,10 @@ def test_data_pull_success_and_error_are_reported(
     assert "currently supports 'bbh'" in failure.stdout
 
 
-def test_cli_run_audit_compare_report_and_memory_inspection(tmp_path: Path) -> None:
+def test_cli_run_audit_compare_report_and_memory_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("evoshift.runner.git_state", lambda _workdir: ("test-commit", False))
     source_root = tmp_path / "source"
     baseline_root = tmp_path / "baseline"
     audit_root = tmp_path / "audit"
@@ -103,6 +106,8 @@ def test_cli_run_audit_compare_report_and_memory_inspection(tmp_path: Path) -> N
             str(source_config),
             "--set",
             f"storage.runs_dir={source_root}",
+            "--set",
+            "storage.cache_enabled=false",
         ],
     )
     baseline_result = runner.invoke(
@@ -113,6 +118,8 @@ def test_cli_run_audit_compare_report_and_memory_inspection(tmp_path: Path) -> N
             str(baseline_config),
             "--set",
             f"storage.runs_dir={baseline_root}",
+            "--set",
+            "storage.cache_enabled=false",
         ],
     )
     assert source_result.exit_code == 0, source_result.stdout
@@ -152,6 +159,9 @@ def test_cli_run_audit_compare_report_and_memory_inspection(tmp_path: Path) -> N
     assert "Frozen audit complete" in audit_result.stdout
     assert compare_result.exit_code == 0, compare_result.stdout
     assert '"comparable_for_claims": true' in compare_result.stdout
+    assert '"resource_comparable": true' in compare_result.stdout
+    assert '"cache_disabled_for_both": true' in compare_result.stdout
+    assert '"provenance_comparable": true' in compare_result.stdout
     assert (source_run / f"compare_vs_{baseline_run.name}.json").exists()
     assert report_result.exit_code == 0
     assert memory_result.exit_code == 0
