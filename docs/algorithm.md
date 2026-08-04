@@ -223,6 +223,10 @@ Feedback modes have different scientific meanings:
 - `reference_upper_bound`: it sees the reference and is an oracle upper bound,
   not a fair online setting unless the environment truly reveals it.
 
+The online loop consumes `Episode.feedback_score`; hidden `Episode.score` is
+used only for final capability reporting. This prevents noisy or adversarial
+environment feedback from silently redefining the benchmark's ground truth.
+
 The critic is LLM-driven, but promotion is not. Invalid critic JSON falls back
 to a low-confidence generic candidate. Pydantic limits length, kind, confidence,
 and status fields.

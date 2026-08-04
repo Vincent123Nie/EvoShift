@@ -30,18 +30,28 @@ def load_sweep_spec(path: Path, root: Path) -> SweepSpec:
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
         raise ValueError("sweep spec must be a YAML mapping")
+    allowed = {"base_config", "algorithms", "seeds", "grid", "max_runs"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown sweep fields: {', '.join(unknown)}")
     base = Path(str(payload.get("base_config", "")))
     if not str(base):
         raise ValueError("sweep spec requires base_config")
     base = base if base.is_absolute() else root / base
     algorithms = [Algorithm(value) for value in payload.get("algorithms", ["evoshift"])]
     seeds = [int(value) for value in payload.get("seeds", [42])]
+    if not algorithms:
+        raise ValueError("sweep algorithms must not be empty")
+    if not seeds:
+        raise ValueError("sweep seeds must not be empty")
     grid = payload.get("grid", {})
     if not isinstance(grid, dict) or any(
         not isinstance(values, list) or not values for values in grid.values()
     ):
         raise ValueError("sweep grid values must be non-empty lists")
     maximum = int(payload.get("max_runs", 100))
+    if maximum < 1:
+        raise ValueError("max_runs must be positive")
     spec = SweepSpec(base, algorithms, seeds, grid, maximum)
     if len(expand_sweep(spec)) > maximum:
         raise ValueError(f"sweep expands beyond max_runs={maximum}")

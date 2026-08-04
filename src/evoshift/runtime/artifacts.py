@@ -72,6 +72,7 @@ class RunArtifacts:
             "selected_memory_ids": episode.selected_memory_ids,
             "policy_version": episode.policy_version,
             "score": episode.score.model_dump(mode="json"),
+            "feedback_score": episode.adaptation_score.model_dump(mode="json"),
             "usage": episode.usage.model_dump(mode="json"),
             "shift": episode.shift.model_dump(mode="json") if episode.shift else None,
         }

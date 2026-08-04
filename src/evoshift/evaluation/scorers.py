@@ -358,6 +358,17 @@ def score_sample(sample: BenchmarkSample, answer: str) -> ScoreBundle:
     )
 
 
+def score_feedback_sample(sample: BenchmarkSample, answer: str) -> ScoreBundle:
+    """Score the feedback observable by adaptation, which may differ from oracle truth."""
+
+    return score_prediction(
+        prediction=answer,
+        reference=sample.metadata.get("feedback_reference", sample.reference),
+        evaluator=str(sample.metadata.get("feedback_evaluator", sample.evaluator)),
+        metadata=sample.metadata,
+    )
+
+
 __all__ = [
     "binary_choice_score",
     "exact_match",
@@ -367,6 +378,7 @@ __all__ = [
     "normalized_exact_match",
     "normalized_exact_match_score",
     "numeric_score",
+    "score_feedback_sample",
     "score_prediction",
     "score_sample",
     "token_f1",

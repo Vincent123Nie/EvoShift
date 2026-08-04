@@ -5,7 +5,7 @@ from typing import List, Sequence, Tuple
 
 from evoshift.agents import MemoryAgent
 from evoshift.config import EvolutionConfig
-from evoshift.evaluation import PromotionGate, score_sample
+from evoshift.evaluation import PromotionGate, score_feedback_sample
 from evoshift.memory.retriever import jaccard_similarity, tokenize
 from evoshift.schemas import Episode, MemoryItem, PolicyGenome, PromotionDecision
 
@@ -98,17 +98,17 @@ class ReplayVerifier:
         for episode in buffer:
             if self.config.paired_replay:
                 control_prediction = await self.agent.solve(episode.sample, policy)
-                control_score = score_sample(
+                control_score = score_feedback_sample(
                     episode.sample, control_prediction.output.answer
                 ).primary
                 control_usage = control_prediction.usage
             else:
-                control_score = episode.score.primary
+                control_score = episode.adaptation_score.primary
                 control_usage = episode.usage
             challenger_prediction = await self.agent.solve(
                 episode.sample, policy, extra_memories=[candidate]
             )
-            challenger_score = score_sample(
+            challenger_score = score_feedback_sample(
                 episode.sample, challenger_prediction.output.answer
             ).primary
             control_scores.append(control_score)
@@ -150,10 +150,10 @@ class ReplayVerifier:
             control_prediction = await self.agent.solve(episode.sample, champion)
             challenger_prediction = await self.agent.solve(episode.sample, candidate)
             control_scores.append(
-                score_sample(episode.sample, control_prediction.output.answer).primary
+                score_feedback_sample(episode.sample, control_prediction.output.answer).primary
             )
             candidate_scores.append(
-                score_sample(episode.sample, challenger_prediction.output.answer).primary
+                score_feedback_sample(episode.sample, challenger_prediction.output.answer).primary
             )
             control_costs.append(
                 _cost_proxy(

@@ -1,0 +1,8 @@
+benchmark:
+  kind: policy_shift
+  name: enterprise_refund_policy_shift
+  path: null
+  phase_size: 24
+  shuffle: false
+  feedback_noise_rate: 0.10
+  feedback_attack_rate: 0.10

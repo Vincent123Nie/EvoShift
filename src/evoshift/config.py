@@ -98,6 +98,8 @@ class BenchmarkConfig(ConfigModel):
     shuffle: bool = False
     phase_size: int = Field(default=0, ge=0)
     protected_phases: List[str] = Field(default_factory=list)
+    feedback_noise_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    feedback_attack_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class EvaluationConfig(ConfigModel):

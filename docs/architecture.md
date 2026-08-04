@@ -47,7 +47,7 @@ cache behavior remain behind `LLMClient`.
 
 | Component | Owns | Deliberately does not own |
 | --- | --- | --- |
-| `BenchmarkAdapter` | Sample normalization, phase order, IDs, references, dataset fingerprint | Agent prompts or evolution |
+| `BenchmarkAdapter` | Sample normalization, phase order, oracle/feedback labels, dataset fingerprint | Agent prompts or evolution |
 | `EvoShiftRunner` | Predict-evaluate-evolve ordering and lifecycle | Provider-specific HTTP details |
 | `MemoryAgent` | Retrieval, context injection, solve/self-refine calls, structured answer parsing | Memory promotion decisions |
 | `MemoryManager` | Versioned memory lifecycle, deduplication, retrieval, online utility updates | LLM calls |
@@ -89,8 +89,8 @@ sequenceDiagram
     A->>L: GenerationRequest(purpose=solve)
     L-->>A: normalized GenerationResponse
     A-->>R: AgentPrediction
-    R->>R: score first-pass answer
-    R->>D: update(reward, retrieval novelty)
+    R->>R: score hidden oracle and observable feedback
+    R->>D: update(observable reward, retrieval novelty)
     D-->>R: ShiftReport
     R->>S: persist Episode and trace
     alt failed episode and evolution enabled
@@ -111,7 +111,11 @@ sequenceDiagram
     end
 ```
 
-The foreground `Episode.usage` covers the user-facing solve path. The separate
+`Episode.score` stores hidden-oracle capability, while
+`Episode.feedback_score` stores the observation used by the online learner.
+They are identical for ordinary clean benchmarks and intentionally differ in
+feedback-robustness experiments. The foreground `Episode.usage` covers the
+user-facing solve path. The separate
 budget ledger covers provider calls made by solve, critic, and replay when the
 client is connected to it. This distinction prevents a report from silently
 hiding adaptation overhead.

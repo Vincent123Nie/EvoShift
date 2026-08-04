@@ -39,6 +39,24 @@ def test_sweep_spec_blocks_accidental_overspend(tmp_path: Path) -> None:
         load_sweep_spec(spec, Path.cwd())
 
 
+def test_sweep_spec_rejects_unknown_fields_and_empty_axes(tmp_path: Path) -> None:
+    unknown = tmp_path / "unknown.yaml"
+    unknown.write_text(
+        "base_config: configs/default.yaml\nruns_dir: custom\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unknown sweep fields: runs_dir"):
+        load_sweep_spec(unknown, Path.cwd())
+
+    empty = tmp_path / "empty.yaml"
+    empty.write_text(
+        "base_config: configs/default.yaml\nalgorithms: []\nseeds: []\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="algorithms must not be empty"):
+        load_sweep_spec(empty, Path.cwd())
+
+
 def test_sweep_aggregation_reports_seed_variance() -> None:
     rows = [
         {

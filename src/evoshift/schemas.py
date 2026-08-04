@@ -230,11 +230,18 @@ class Episode(StrictModel):
     sample: BenchmarkSample
     output: SolverOutput
     score: ScoreBundle
+    feedback_score: Optional[ScoreBundle] = None
     selected_memory_ids: List[str] = Field(default_factory=list)
     policy_version: int = Field(default=1, ge=1)
     usage: LLMUsage = Field(default_factory=LLMUsage)
     shift: Optional[ShiftReport] = None
     created_at: datetime = Field(default_factory=utc_now)
+
+    @property
+    def adaptation_score(self) -> ScoreBundle:
+        """Feedback visible to the online learner; defaults to the oracle score."""
+
+        return self.feedback_score or self.score
 
 
 class ValidationResult(StrictModel):

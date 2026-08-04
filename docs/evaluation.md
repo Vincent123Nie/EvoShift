@@ -103,19 +103,23 @@ The only valid online score is obtained in this order for episode `t`:
 2. Send the task prompt, domain, phase, and retrieved experience cards to the
    solver. Do not send the reference answer or evaluator feedback.
 3. Persist the solver answer before evaluation.
-4. Evaluate that answer once with `score_sample(sample, answer)`.
-5. Add this immutable first-pass score to the test stream.
-6. Only now expose the configured feedback to adaptation. In the primary
+4. Evaluate that answer against hidden oracle truth with
+   `score_sample(sample, answer)`.
+5. Separately compute learner-visible feedback with
+   `score_feedback_sample(sample, answer)`. It defaults to the oracle label,
+   but a robustness benchmark may provide a noisy `feedback_reference`.
+6. Add the immutable oracle and feedback scores to the test stream.
+7. Only now expose the configured feedback to adaptation. In the primary
    protocol, `evolution.feedback_mode: reward_only`, so the critic sees the
-   scalar reward and success/failure feedback, not the reference answer.
-7. Candidate generation, paired replay on already scored history, promotion,
+   learner-visible scalar reward and success/failure, not the oracle reference.
+8. Candidate generation, paired replay on already scored history, promotion,
    rollback, and policy mutation may occur before episode `t + 1`.
 
 The runner implements this predict-evaluate-evolve ordering. The solver payload
-does not contain `BenchmarkSample.reference`. Replay may use references to score
-counterfactual predictions on **past, already scored** samples; those replay
-scores are training/validation evidence and must never replace the stored
-first-pass test score.
+does not contain `BenchmarkSample.reference` or `metadata.feedback_reference`.
+Replay uses only the feedback labels that were observable on **past, already
+scored** samples. Oracle references are reserved for post-hoc evaluation and
+must never drive promotion in a primary robustness result.
 
 The following are prohibited in a primary result:
 
@@ -214,6 +218,44 @@ For partial-credit scorers, `ScoreBundle.primary` is the scalar score and
 `ScoreBundle.success` uses `metadata.success_threshold`, which defaults to
 1.0. Do not change evaluator normalization or the success threshold after
 seeing final-stream predictions.
+
+### 5.1 Dual-channel feedback
+
+`Episode.score` is the hidden-oracle evaluation used for reported capability.
+`Episode.feedback_score` is the observation available to drift detection,
+memory credit, failure extraction, and replay. Ordinary benchmarks leave
+`feedback_reference` unset, making both channels identical. PolicyShift sets it
+explicitly to test noise and attacks without redefining ground truth.
+
+The report includes oracle/feedback agreement, false-positive and
+false-negative feedback rates, annotated noise rate, and score gap. This
+separation is required before claiming robustness to unreliable feedback.
+
+### 5.2 PolicyShift benchmark
+
+The deterministic enterprise-style stream keeps one refund-policy domain while
+changing the hidden policy over three phases:
+
+1. seven-day refund window;
+2. expansion to fourteen days;
+3. thirty-day premium exception while standard customers remain at fourteen.
+
+The prompt exposes only customer tier and request day. Policy versions and both
+labels remain outside the solver payload. Every sample belongs to exactly one
+policy-role slice:
+
+- `transition_case`: its correct decision changed at the current boundary;
+- `protected`: its correct decision is invariant across all policy versions;
+- `future_change_case`: it has not changed yet but will change at a later
+  boundary, so adopting the future rule early is an error.
+
+Deterministic noise flips arbitrary feedback, while targeted attack feedback
+reinforces the superseded policy only on current transition cases.
+
+PolicyShift reports changed-case success, old-rule leakage, invariant
+retention, future-change success, premature-update rate, corrupted-feedback
+following, and attack-following rates in addition to the standard stream
+metrics.
 
 ## 6. Metric definitions
 

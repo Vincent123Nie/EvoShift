@@ -85,6 +85,25 @@ evoshift run --config configs/experiments/reflexion_demo.yaml
 errors, accept a matching verified experience card, and correct through the
 Self-Refine path. It is useful for state-machine and regression tests only.
 
+Run the enterprise PolicyShift diagnostic with separate oracle and feedback
+channels:
+
+```bash
+evoshift run --config configs/experiments/static_policy_shift_demo.yaml
+evoshift run --config configs/experiments/policy_shift_demo.yaml
+```
+
+For repeated-seed clean, noise-only, attack-only, and combined corruption
+comparisons:
+
+```bash
+evoshift sweep --spec configs/sweeps/policy_shift_baselines.yaml
+```
+
+The demo provider is still deterministic scaffolding, not model-quality
+evidence. Its purpose is to expose whether the state machine accepts true
+updates, follows corrupted feedback, or incorrectly protects superseded rules.
+
 For an apples-to-apples four-algorithm pipeline comparison, keep one config and
 change only algorithm behavior. For example, all four commands below use the
 same checked-in JSONL stream and demo model:
