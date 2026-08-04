@@ -13,6 +13,7 @@ from evoshift.evaluation.metrics import (
     post_shift_gain,
     promotion_precision,
     recovery_steps,
+    retrieval_metrics,
     success_rate,
     usage_metrics,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "promotion_precision",
     "recovery_steps",
     "render_markdown_report",
+    "retrieval_metrics",
     "score_prediction",
     "score_sample",
     "success_rate",

@@ -54,6 +54,12 @@ paraphrases, multilingual semantic matches, and deeper contradiction. Dense or
 hybrid retrieval should be compared behind the same cost and promotion
 protocol rather than assumed superior.
 
+The default provenance-domain gate prevents unrelated memories from being
+retrieved solely because of generic word overlap or a high utility prior. It
+depends on stable, meaningful domain metadata and can suppress useful transfer
+between related task families. `allow_cross_domain_transfer=true` exists for a
+preregistered ablation; it should not be enabled after inspecting test results.
+
 ### Imperfect memory credit
 
 The solver reports `applied_memory_ids`, filtered against retrieved IDs. When it

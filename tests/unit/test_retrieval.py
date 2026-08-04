@@ -28,6 +28,67 @@ def test_bm25_retrieval_prefers_matching_memory() -> None:
     assert result[0].relevance == 1.0
 
 
+def test_retrieval_enforces_provenance_domain_by_default() -> None:
+    retriever = BM25MemoryRetriever()
+    item = _memory(
+        "causal",
+        "abnormal action causes a later harmful event",
+        "Check counterfactual dependence.",
+    ).model_copy(update={"source_domains": ["causal_judgement"]})
+    policy = PolicyGenome(top_k=1)
+
+    in_domain = retriever.retrieve(
+        "Does the earlier action cause the outcome?",
+        [item],
+        policy,
+        domain="causal-judgement",
+    )
+    out_of_domain = retriever.retrieve(
+        "Does the earlier action cause the outcome?",
+        [item],
+        policy,
+        domain="formal_fallacies",
+    )
+
+    assert [entry.item.memory_id for entry in in_domain] == ["causal"]
+    assert out_of_domain == []
+    assert (
+        retriever.novelty(
+            "Does the earlier action cause the outcome?",
+            [item],
+            policy,
+            domain="formal_fallacies",
+        )
+        == 1.0
+    )
+
+
+def test_cross_domain_transfer_is_an_explicit_policy_ablation() -> None:
+    retriever = BM25MemoryRetriever()
+    item = _memory("causal", "causal counterfactual", "Check causation.").model_copy(
+        update={"source_domains": ["causal_judgement"]}
+    )
+    policy = PolicyGenome(top_k=1, allow_cross_domain_transfer=True)
+
+    result = retriever.retrieve(
+        "causal counterfactual",
+        [item],
+        policy,
+        domain="formal_fallacies",
+    )
+
+    assert [entry.item.memory_id for entry in result] == ["causal"]
+
+
+def test_utility_cannot_retrieve_a_zero_lexical_match_without_domain_evidence() -> None:
+    retriever = BM25MemoryRetriever()
+    item = _memory("date", "calendar weekday", "Count days modulo seven.")
+
+    result = retriever.retrieve("multiply 7 by 8", [item], PolicyGenome(top_k=1))
+
+    assert result == []
+
+
 def test_manager_rolls_back_harmful_memory(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
     manager = MemoryManager(store)

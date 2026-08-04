@@ -169,7 +169,7 @@ class EvoShiftRunner:
                 novelty = (
                     1.0 - max(item.relevance for item in prediction.retrieved)
                     if active_before and prediction.retrieved
-                    else 0.0
+                    else (1.0 if active_before else 0.0)
                 )
                 shift = detector.update(score.primary, novelty, index, sample.domain)
                 episode = Episode(

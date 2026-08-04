@@ -87,7 +87,11 @@ class MemoryAgent:
         retrieved: List[RetrievedMemory] = []
         novelty = 1.0
         if use_memory:
-            retrieved, _, novelty = self.memory.retrieve(sample.prompt, policy)
+            retrieved, _, novelty = self.memory.retrieve(
+                sample.prompt,
+                policy,
+                domain=sample.domain,
+            )
         forced_ids = {item.memory_id for item in extra_memories or []}
         retrieved = [item for item in retrieved if item.item.memory_id not in forced_ids]
         for item in reversed(list(extra_memories or [])):

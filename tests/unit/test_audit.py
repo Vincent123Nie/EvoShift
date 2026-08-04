@@ -77,3 +77,18 @@ def test_audit_state_rejects_non_active_memory_and_model_change(tmp_path: Path) 
     state = load_evolved_state(_source_run(tmp_path, name="valid"))
     with pytest.raises(ValueError, match="same model"):
         require_same_model(state, "model-b")
+
+
+def test_load_evolved_state_backfills_legacy_memory_domains_from_traces(tmp_path: Path) -> None:
+    run_dir = _source_run(tmp_path)
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    summary["active_memories"][0]["provenance_episode_ids"] = ["episode-7"]
+    (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    (run_dir / "traces.jsonl").write_text(
+        json.dumps({"episode_id": "episode-7", "domain": "causal_judgement"}) + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_evolved_state(run_dir)
+
+    assert state.memories[0].source_domains == ["causal_judgement"]

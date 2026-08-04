@@ -113,6 +113,7 @@ class MemoryItem(StrictModel):
     anti_pattern: str = Field(default="", max_length=1200)
     evidence: str = Field(default="", max_length=1200)
     tags: List[str] = Field(default_factory=list, max_length=20)
+    source_domains: List[str] = Field(default_factory=list, max_length=20)
     provenance_episode_ids: List[str] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     alpha: float = Field(default=1.0, gt=0.0)
@@ -155,6 +156,7 @@ class PolicyGenome(StrictModel):
     utility_weight: float = Field(default=0.28, ge=0.0, le=2.0)
     exploration_weight: float = Field(default=0.10, ge=0.0, le=2.0)
     mmr_lambda: float = Field(default=0.75, ge=0.0, le=1.0)
+    allow_cross_domain_transfer: bool = False
     write_confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
     dedup_similarity_threshold: float = Field(default=0.86, ge=0.0, le=1.0)
     rollback_utility_threshold: float = Field(default=0.35, ge=0.0, le=1.0)

@@ -46,3 +46,6 @@ evolution:
   max_cost_increase_ratio: 0.30
   paired_replay: true
   feedback_mode: reward_only
+
+policy:
+  allow_cross_domain_transfer: false

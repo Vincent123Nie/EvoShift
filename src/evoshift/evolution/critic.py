@@ -158,6 +158,7 @@ class ExperienceCritic:
             anti_pattern=str(memory_data.get("anti_pattern", "")).strip(),
             evidence=str(memory_data.get("evidence", data.get("evidence", ""))).strip(),
             tags=[str(tag)[:80] for tag in memory_data.get("tags", [])[:20]],
+            source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
             confidence=max(0.0, min(1.0, confidence)),
         )
@@ -181,6 +182,7 @@ class ExperienceCritic:
             directive="Re-check the task constraints and verify the final answer format.",
             anti_pattern="Do not repeat an answer without validating it against the prompt.",
             evidence="Fallback because the critic response was not valid structured JSON.",
+            source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
             confidence=0.2,
         )

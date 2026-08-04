@@ -48,3 +48,4 @@ async def test_critic_returns_typed_memory() -> None:
     assert result.proposed_memory is not None
     assert result.proposed_memory.directive.startswith("Verify parity")
     assert result.proposed_memory.provenance_episode_ids == ["e1"]
+    assert result.proposed_memory.source_domains == ["logic"]

@@ -48,21 +48,51 @@ def jaccard_similarity(left: Iterable[str], right: Iterable[str]) -> float:
     return len(left_set & right_set) / len(union) if union else 0.0
 
 
+def normalize_domain(domain: str) -> str:
+    """Canonicalize dataset domain labels without knowing a benchmark taxonomy."""
+
+    return "_".join(tokenize(domain))
+
+
+def domain_matches(item: MemoryItem, domain: str) -> bool:
+    """Return whether a query belongs to one of a memory's provenance domains."""
+
+    query_domain = normalize_domain(domain)
+    if not query_domain or not item.source_domains:
+        return False
+    return query_domain in {normalize_domain(value) for value in item.source_domains}
+
+
 class BM25MemoryRetriever:
     """Sparse retrieval combined with online utility/UCB and MMR diversity."""
 
     def score(
-        self, query: str, items: Sequence[MemoryItem], policy: PolicyGenome
+        self,
+        query: str,
+        items: Sequence[MemoryItem],
+        policy: PolicyGenome,
+        *,
+        domain: str = "",
     ) -> List[RetrievedMemory]:
-        if not items:
+        eligible_items = [
+            item
+            for item in items
+            if (
+                not domain
+                or not item.source_domains
+                or policy.allow_cross_domain_transfer
+                or domain_matches(item, domain)
+            )
+        ]
+        if not eligible_items:
             return []
-        documents = [tokenize(memory_document(item)) for item in items]
+        documents = [tokenize(memory_document(item)) for item in eligible_items]
         query_terms = list(dict.fromkeys(tokenize(query)))
         document_frequency: Counter[str] = Counter()
         for document in documents:
             document_frequency.update(set(document))
         average_length = sum(len(document) for document in documents) / max(1, len(documents))
-        total_uses = sum(item.use_count for item in items)
+        total_uses = sum(item.use_count for item in eligible_items)
 
         raw_scores: List[float] = []
         for document in documents:
@@ -88,7 +118,9 @@ class BM25MemoryRetriever:
 
         max_raw = max(raw_scores, default=0.0)
         results: List[RetrievedMemory] = []
-        for item, raw_score in zip(items, raw_scores):
+        for item, raw_score in zip(eligible_items, raw_scores):
+            if raw_score <= 0.0 and not domain_matches(item, domain):
+                continue
             relevance = raw_score / max_raw if max_raw > 0.0 else 0.0
             utility = item.posterior_utility
             exploration = min(
@@ -112,9 +144,14 @@ class BM25MemoryRetriever:
         return sorted(results, key=lambda result: (-result.final_score, result.item.memory_id))
 
     def retrieve(
-        self, query: str, items: Sequence[MemoryItem], policy: PolicyGenome
+        self,
+        query: str,
+        items: Sequence[MemoryItem],
+        policy: PolicyGenome,
+        *,
+        domain: str = "",
     ) -> List[RetrievedMemory]:
-        candidates = self.score(query, items, policy)
+        candidates = self.score(query, items, policy, domain=domain)
         if policy.top_k <= 0:
             return []
         selected: List[RetrievedMemory] = []
@@ -148,8 +185,15 @@ class BM25MemoryRetriever:
             remaining.remove(best)
         return selected
 
-    def novelty(self, query: str, items: Sequence[MemoryItem], policy: PolicyGenome) -> float:
-        scored = self.score(query, items, policy)
+    def novelty(
+        self,
+        query: str,
+        items: Sequence[MemoryItem],
+        policy: PolicyGenome,
+        *,
+        domain: str = "",
+    ) -> float:
+        scored = self.score(query, items, policy, domain=domain)
         if not scored:
             return 1.0
         return max(0.0, min(1.0, 1.0 - max(result.relevance for result in scored)))

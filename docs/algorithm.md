@@ -67,13 +67,23 @@ but enable different behaviors. This is preferable to separate scripts because
 the scorer, sample order, artifact format, and provider accounting remain
 comparable.
 
-## Retrieval: BM25 + Beta utility/UCB bonus + MMR
+## Retrieval: provenance scope + BM25 + Beta utility/UCB bonus + MMR
 
 Each memory document concatenates its trigger, scope, tags, directive, and
 anti-pattern. The tokenizer lowercases alphanumeric terms and adds CJK
-bigrams. For query term `q`, document `d`, corpus size `N`, document frequency
-`n_q`, term frequency `f(q,d)`, average document length `avgdl`, and policy
-parameters `k1` and `b`, the sparse score is:
+bigrams. The critic also records `source_domains` from the episode that created
+the memory; this provenance is deterministic rather than supplied by the LLM.
+
+By default, a memory with provenance domains is eligible only when the current
+sample domain matches one of them after delimiter/case normalization. Memories
+without provenance remain backward compatible. Setting
+`allow_cross_domain_transfer=true` disables this gate as an explicit ablation.
+This prevents utility/UCB from turning a successful but unrelated memory into
+universal prompt baggage.
+
+For query term `q`, document `d`, corpus size `N`, document frequency `n_q`,
+term frequency `f(q,d)`, average document length `avgdl`, and policy parameters
+`k1` and `b`, the sparse score is:
 
 ```text
 IDF(q) = ln(1 + (N - n_q + 0.5) / (n_q + 0.5))
@@ -87,6 +97,11 @@ Raw BM25 is normalized by the largest candidate score for the current query:
 ```text
 relevance_i = raw_i / max_j(raw_j)
 ```
+
+An eligible memory with zero lexical overlap is omitted unless it has an exact
+provenance-domain match. Therefore a same-domain procedural card may still be
+available for a terse prompt, while an unscoped utility prior cannot retrieve a
+completely unrelated card.
 
 Each memory maintains a Beta-Bernoulli success posterior initialized with
 `alpha=1`, `beta=1`. When a credited memory contributes to a successful answer,
@@ -131,17 +146,17 @@ is bounded by a conservative four-characters-per-token budget.
 
 ### Retrieval novelty
 
-For an established memory bank, novelty is derived from the strongest lexical
-match:
+For an established memory bank, novelty is derived from the strongest eligible
+lexical match:
 
 ```text
 novelty_t = 1 - max_i relevance_i
 ```
 
-The runner suppresses cold-start novelty when there is no active/retrieved
-memory, avoiding an automatic shift alarm simply because the system has not
-learned anything yet. The tradeoff is slower detection of the first genuine
-domain transition if task reward remains high.
+The runner suppresses cold-start novelty only when there is no active memory.
+Once memory exists, a query for which no memory is eligible has novelty `1.0`;
+this makes an out-of-domain transition visible to the drift detector instead of
+silently reporting zero novelty.
 
 ## Online drift detection
 

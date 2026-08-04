@@ -147,6 +147,10 @@ def render_markdown_report(
     if isinstance(continual, Mapping):
         lines.extend(["## Continual learning", "", _metric_table(continual), ""])
 
+    retrieval = safe.get("retrieval")
+    if isinstance(retrieval, Mapping):
+        lines.extend(["## Memory retrieval", "", _metric_table(retrieval), ""])
+
     resources = safe.get("resources")
     if isinstance(resources, Mapping):
         lines.extend(["## Resource usage", "", _metric_table(resources), ""])

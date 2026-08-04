@@ -35,12 +35,12 @@ class MemoryManager:
         return self.store.list_memories([MemoryStatus.ACTIVE])
 
     def retrieve(
-        self, query: str, policy: PolicyGenome
+        self, query: str, policy: PolicyGenome, *, domain: str = ""
     ) -> Tuple[List[RetrievedMemory], str, float]:
         active = self.active()
-        selected = self.retriever.retrieve(query, active, policy)
+        selected = self.retriever.retrieve(query, active, policy, domain=domain)
         context = render_memory_context(selected, policy.memory_token_budget)
-        novelty = self.retriever.novelty(query, active, policy)
+        novelty = self.retriever.novelty(query, active, policy, domain=domain)
         return selected, context, novelty
 
     def stage(self, candidate: MemoryItem, policy: PolicyGenome) -> MemoryItem:
@@ -57,12 +57,14 @@ class MemoryManager:
             provenance = list(
                 dict.fromkeys(nearest.provenance_episode_ids + candidate.provenance_episode_ids)
             )
+            source_domains = list(dict.fromkeys(nearest.source_domains + candidate.source_domains))
             merged = candidate.model_copy(
                 update={
                     "memory_id": nearest.memory_id,
                     "version": nearest.version + 1,
                     "status": MemoryStatus.SHADOW,
                     "provenance_episode_ids": provenance,
+                    "source_domains": source_domains,
                     "alpha": nearest.alpha,
                     "beta": nearest.beta,
                     "use_count": nearest.use_count,

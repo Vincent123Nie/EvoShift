@@ -85,6 +85,9 @@ policy:
   utility_weight: 0.28
   exploration_weight: 0.10
   mmr_lambda: 0.75
+  # Safety default: learned memories stay within their provenance domains.
+  # Enable only as an explicit cross-domain-transfer ablation.
+  allow_cross_domain_transfer: false
   write_confidence_threshold: 0.55
   dedup_similarity_threshold: 0.86
   rollback_utility_threshold: 0.35

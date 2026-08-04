@@ -35,6 +35,49 @@ def _read_object(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _read_trace_domains(path: Path) -> dict[str, str]:
+    """Load episode-to-domain provenance for snapshots created before source_domains."""
+
+    if not path.exists():
+        return {}
+    domains: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read source-run trace artifact {path}: {exc}") from exc
+    for line_number, line in enumerate(lines, start=1):
+        try:
+            trace = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON in {path} at line {line_number}: {exc}") from exc
+        if not isinstance(trace, dict):
+            raise ValueError(f"trace line {line_number} in {path} is not an object")
+        episode_id = trace.get("episode_id")
+        domain = trace.get("domain")
+        if isinstance(episode_id, str) and isinstance(domain, str):
+            domains[episode_id] = domain
+    return domains
+
+
+def _backfill_source_domains(
+    memories: tuple[MemoryItem, ...], trace_domains: dict[str, str]
+) -> tuple[MemoryItem, ...]:
+    enriched = []
+    for item in memories:
+        if item.source_domains:
+            enriched.append(item)
+            continue
+        domains = list(
+            dict.fromkeys(
+                trace_domains[episode_id]
+                for episode_id in item.provenance_episode_ids
+                if episode_id in trace_domains
+            )
+        )
+        enriched.append(item.model_copy(update={"source_domains": domains}))
+    return tuple(enriched)
+
+
 def state_fingerprint(policy: PolicyGenome, memories: tuple[MemoryItem, ...]) -> str:
     """Return a stable SHA-256 over the exact policy and active-memory snapshot."""
 
@@ -73,6 +116,7 @@ def load_evolved_state(run_dir: Path) -> EvolvedState:
     if not isinstance(raw_memories, list):
         raise ValueError("source summary active_memories must be a list")
     memories = tuple(MemoryItem.model_validate(item) for item in raw_memories)
+    memories = _backfill_source_domains(memories, _read_trace_domains(source / "traces.jsonl"))
     if any(item.status != MemoryStatus.ACTIVE for item in memories):
         raise ValueError("source summary contains a non-active memory in active_memories")
     keys = [(item.memory_id, item.version) for item in memories]

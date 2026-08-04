@@ -309,7 +309,8 @@ State which one is intended.
 
 Tunable values include:
 
-- retrieval `top_k`, BM25 `k1/b`, score weights, MMR lambda;
+- retrieval `top_k`, BM25 `k1/b`, score weights, MMR lambda, and the
+  `allow_cross_domain_transfer` ablation;
 - memory token budget, write threshold, dedup threshold;
 - Page-Hinkley `delta`, threshold, minimum instances, novelty EWMA and cooldown;
 - replay window and protected quota through phase configuration;

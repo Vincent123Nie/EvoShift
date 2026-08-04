@@ -20,6 +20,7 @@ from evoshift.evaluation import (
     promotion_precision,
     recovery_steps,
     render_markdown_report,
+    retrieval_metrics,
     score_sample,
     success_rate,
     to_json_report,
@@ -178,6 +179,26 @@ def test_resource_metrics_report_tokens_cost_and_latency_tails() -> None:
     assert resources["cache_hit_episode_rate"] == 0.25
     assert resources["latency_p50_ms"] == 250.0
     assert resources["latency_p95_ms"] == pytest.approx(385.0)
+
+
+def test_retrieval_metrics_separate_selection_from_solver_application() -> None:
+    first = _episode(0, 1.0, "stream").model_copy(
+        update={
+            "selected_memory_ids": ["m1"],
+            "output": SolverOutput(answer="answer", applied_memory_ids=["m1"]),
+        }
+    )
+    second = _episode(1, 1.0, "stream").model_copy(update={"selected_memory_ids": ["m1", "m2"]})
+
+    metrics = retrieval_metrics([first, second])
+
+    assert metrics == {
+        "episodes_with_retrieval": 2,
+        "retrieval_episode_rate": 1.0,
+        "selected_memories": 3,
+        "episodes_with_applied_memory": 1,
+        "applied_memory_episode_rate": 0.5,
+    }
 
 
 def test_promotion_precision_uses_only_promoted_candidates() -> None:

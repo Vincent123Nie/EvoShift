@@ -360,6 +360,28 @@ def usage_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
     }
 
 
+def retrieval_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
+    """Report memory selection and solver-attributed application rates."""
+
+    if not episodes:
+        return {
+            "episodes_with_retrieval": 0,
+            "retrieval_episode_rate": 0.0,
+            "selected_memories": 0,
+            "episodes_with_applied_memory": 0,
+            "applied_memory_episode_rate": 0.0,
+        }
+    retrieved = sum(bool(episode.selected_memory_ids) for episode in episodes)
+    applied = sum(bool(episode.output.applied_memory_ids) for episode in episodes)
+    return {
+        "episodes_with_retrieval": retrieved,
+        "retrieval_episode_rate": retrieved / len(episodes),
+        "selected_memories": sum(len(episode.selected_memory_ids) for episode in episodes),
+        "episodes_with_applied_memory": applied,
+        "applied_memory_episode_rate": applied / len(episodes),
+    }
+
+
 def _align_baseline(episodes: Sequence[Episode], baseline: Sequence[Episode]) -> list[Episode]:
     by_sample = {episode.sample.sample_id: episode for episode in baseline}
     if len(by_sample) != len(baseline):
@@ -396,6 +418,7 @@ def compute_stream_metrics(
         "auac": area_under_adaptation_curve(rewards) if rewards else 0.0,
         "cumulative_regret": cumulative_regret(rewards) if rewards else 0.0,
         "shift_indices": boundaries,
+        "retrieval": retrieval_metrics(episodes),
         "resources": usage_metrics(episodes),
     }
 
@@ -449,6 +472,7 @@ __all__ = [
     "post_shift_gain",
     "promotion_precision",
     "recovery_steps",
+    "retrieval_metrics",
     "success_rate",
     "usage_metrics",
 ]

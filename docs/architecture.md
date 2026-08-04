@@ -178,9 +178,11 @@ stateDiagram-v2
 
 The current genome includes `top_k`, memory context budget, BM25 parameters,
 relevance/utility/exploration weights, MMR lambda, write threshold, and dedup
-threshold. `PolicyPatch` rejects every field outside the explicit allowlist.
-The active version must match `base_version`, preventing stale concurrent
-mutations from being applied accidentally.
+threshold. It also carries the safety-controlled
+`allow_cross_domain_transfer` flag, which is deliberately outside the evolved
+`PolicyPatch` allowlist. `PolicyPatch` rejects every field outside that explicit
+allowlist. The active version must match `base_version`, preventing stale
+concurrent mutations from being applied accidentally.
 
 ## Provider and runtime boundary
 
@@ -292,6 +294,9 @@ retriever interface and audit trace.
   frozen audit measures whole-state transfer, but per-candidate future utility
   and a disjoint online promotion split remain required for stronger claims.
 - The default memory retriever is lexical; paraphrase recall is limited.
+- Provenance-domain gating depends on benchmark or application domain labels.
+  Labels that are missing, excessively broad, or unstable reduce its value;
+  cross-domain transfer must be measured as an explicit ablation.
 - The drift detector observes correlated online samples even though its simple
   thresholds do not model temporal dependence explicitly.
 - API models can be nondeterministic and mutable behind an alias.
