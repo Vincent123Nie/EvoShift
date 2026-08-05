@@ -467,7 +467,7 @@ def feedback_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
     }
 
 
-def policy_shift_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
+def policy_shift_metrics(episodes: Sequence[Episode]) -> dict[str, Any]:
     """Oracle metrics for policy updates, invariant retention, and corrupted feedback."""
 
     policy_episodes = [
@@ -530,8 +530,27 @@ def policy_shift_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
     post_attack_clean_future = list(
         {episode.episode_id: episode for episode in post_attack_clean_future}.values()
     )
+    phase_slice_counts: dict[str, dict[str, int]] = {}
+    for episode in policy_episodes:
+        counts = phase_slice_counts.setdefault(
+            episode.sample.phase,
+            {"total": 0, "transition": 0, "future": 0, "protected": 0},
+        )
+        counts["total"] += 1
+        if bool(
+            episode.sample.metadata.get(
+                "transition_case",
+                episode.sample.metadata.get("policy_changed_case"),
+            )
+        ):
+            counts["transition"] += 1
+        elif bool(episode.sample.metadata.get("future_change_case")):
+            counts["future"] += 1
+        elif bool(episode.sample.metadata.get("protected")):
+            counts["protected"] += 1
     return {
         "n": len(policy_episodes),
+        "phase_slice_counts": phase_slice_counts,
         "changed_case_n": len(changed),
         "changed_case_success_rate": rate(changed, lambda item: item.score.success),
         "old_rule_leakage_rate": rate(changed, lambda item: not item.score.success),

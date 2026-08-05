@@ -17,6 +17,7 @@ def _candidate(episode_id: str = "e1") -> MemoryItem:
 def test_candidate_pool_aggregates_evidence_and_enforces_cooldown() -> None:
     pool = CandidateEvidencePool(
         min_observations=2,
+        min_trusted_observations=1,
         min_new_observations=1,
         cooldown_episodes=4,
     )
@@ -39,6 +40,7 @@ def test_candidate_pool_aggregates_evidence_and_enforces_cooldown() -> None:
 def test_candidate_pool_suppresses_an_already_active_memory() -> None:
     pool = CandidateEvidencePool(
         min_observations=1,
+        min_trusted_observations=1,
         min_new_observations=1,
         cooldown_episodes=0,
     )
@@ -54,6 +56,7 @@ def test_candidate_pool_suppresses_an_already_active_memory() -> None:
 def test_candidate_pool_blocks_probation_and_reopens_after_future_rejection() -> None:
     pool = CandidateEvidencePool(
         min_observations=1,
+        min_trusted_observations=1,
         min_new_observations=1,
         cooldown_episodes=0,
     )
@@ -71,6 +74,7 @@ def test_candidate_pool_blocks_probation_and_reopens_after_future_rejection() ->
 def test_candidate_pool_reopens_a_causally_retired_memory_for_recurrence() -> None:
     pool = CandidateEvidencePool(
         min_observations=1,
+        min_trusted_observations=1,
         min_new_observations=1,
         cooldown_episodes=0,
     )
@@ -81,3 +85,29 @@ def test_candidate_pool_reopens_a_causally_retired_memory_for_recurrence() -> No
     evidence = pool.observe(_candidate("e2"), 20)
 
     assert pool.readiness(evidence, 20) == (True, "ready")
+
+
+def test_candidate_pool_tracks_shadow_trust_and_can_require_trusted_evidence() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=1,
+        min_new_observations=1,
+        cooldown_episodes=0,
+    )
+
+    evidence = pool.observe(_candidate("shadow"), 1, trust=0.10, trusted=False)
+
+    assert evidence.shadow_observation_count == 1
+    assert evidence.trusted_observation_count == 0
+    assert evidence.has_shadow_evidence is True
+    assert evidence.mean_trust == 0.10
+    assert pool.readiness(evidence, 1) == (False, "insufficient_trusted_observations")
+
+    evidence = pool.observe(_candidate("trusted"), 2, trust=0.80, trusted=True)
+
+    assert evidence.trusted_observation_count == 1
+    assert evidence.shadow_observation_count == 1
+    assert evidence.min_trust == 0.10
+    assert evidence.max_trust == 0.80
+    assert evidence.mean_trust == 0.45
+    assert pool.readiness(evidence, 2) == (True, "ready")

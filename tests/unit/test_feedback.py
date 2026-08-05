@@ -1,6 +1,9 @@
-from evoshift.config import EvolutionConfig
+import pytest
+from pydantic import ValidationError
+
+from evoshift.config import EvolutionConfig, EvoShiftConfig
 from evoshift.evolution import FeedbackTrustModel
-from evoshift.schemas import BenchmarkSample
+from evoshift.schemas import Algorithm, BenchmarkSample
 
 
 def test_feedback_trust_uses_only_observable_source_provenance() -> None:
@@ -152,3 +155,35 @@ def test_dynamic_feedback_trust_can_be_disabled_by_algorithm_control() -> None:
     assert assessment.trust == 0.8
     assert assessment.reason == "default_source:source"
     assert model.snapshot()["dynamic_enabled"] is False
+
+
+def test_shadow_candidate_config_enforces_verified_admission_invariants() -> None:
+    with pytest.raises(ValidationError, match="requires future audit"):
+        EvolutionConfig(shadow_candidate_enabled=True)
+    with pytest.raises(ValidationError, match="requires paired replay"):
+        EvolutionConfig(
+            shadow_candidate_enabled=True,
+            future_audit_enabled=True,
+            paired_replay=False,
+        )
+    with pytest.raises(ValidationError, match="threshold must not exceed"):
+        EvolutionConfig(
+            shadow_candidate_enabled=True,
+            future_audit_enabled=True,
+            min_feedback_trust_for_shadow_candidate=0.80,
+            min_feedback_trust_for_candidate=0.60,
+        )
+    with pytest.raises(ValidationError, match="replay trust"):
+        EvolutionConfig(
+            shadow_candidate_enabled=True,
+            future_audit_enabled=True,
+            min_feedback_trust_for_replay=0.50,
+        )
+    with pytest.raises(ValidationError, match="supported only by evoshift"):
+        EvoShiftConfig(
+            algorithm=Algorithm.REFLEXION,
+            evolution=EvolutionConfig(
+                shadow_candidate_enabled=True,
+                future_audit_enabled=True,
+            ),
+        )

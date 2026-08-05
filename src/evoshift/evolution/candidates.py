@@ -31,8 +31,21 @@ class CandidateEvidence:
     last_episode_index: int
     last_validation_episode: int = -1
     last_validation_observation_count: int = 0
+    trusted_observation_count: int = 0
+    shadow_observation_count: int = 0
+    trust_sum: float = 0.0
+    min_trust: float = 1.0
+    max_trust: float = 0.0
     accepted: bool = False
     probationary: bool = False
+
+    @property
+    def mean_trust(self) -> float:
+        return self.trust_sum / self.observation_count if self.observation_count else 0.0
+
+    @property
+    def has_shadow_evidence(self) -> bool:
+        return self.shadow_observation_count > 0
 
 
 class CandidateEvidencePool:
@@ -42,10 +55,12 @@ class CandidateEvidencePool:
         self,
         *,
         min_observations: int,
+        min_trusted_observations: int,
         min_new_observations: int,
         cooldown_episodes: int,
     ) -> None:
         self.min_observations = min_observations
+        self.min_trusted_observations = min_trusted_observations
         self.min_new_observations = min_new_observations
         self.cooldown_episodes = cooldown_episodes
         self._items: Dict[str, CandidateEvidence] = {}
@@ -59,10 +74,23 @@ class CandidateEvidencePool:
                 observation_count=max(1, len(memory.provenance_episode_ids)),
                 first_episode_index=-1,
                 last_episode_index=-1,
+                trusted_observation_count=max(1, len(memory.provenance_episode_ids)),
+                trust_sum=float(max(1, len(memory.provenance_episode_ids))),
+                min_trust=1.0,
+                max_trust=1.0,
                 accepted=True,
             )
 
-    def observe(self, candidate: MemoryItem, episode_index: int) -> CandidateEvidence:
+    def observe(
+        self,
+        candidate: MemoryItem,
+        episode_index: int,
+        *,
+        trust: float = 1.0,
+        trusted: bool = True,
+    ) -> CandidateEvidence:
+        if not 0.0 <= trust <= 1.0:
+            raise ValueError("candidate evidence trust must be in [0, 1]")
         signature = candidate_signature(candidate)
         existing = self._items.get(signature)
         if existing is None:
@@ -72,6 +100,11 @@ class CandidateEvidencePool:
                 observation_count=1,
                 first_episode_index=episode_index,
                 last_episode_index=episode_index,
+                trusted_observation_count=int(trusted),
+                shadow_observation_count=int(not trusted),
+                trust_sum=trust,
+                min_trust=trust,
+                max_trust=trust,
             )
             self._items[signature] = evidence
             return evidence
@@ -103,6 +136,11 @@ class CandidateEvidencePool:
             }
         )
         existing.observation_count += 1
+        existing.trusted_observation_count += int(trusted)
+        existing.shadow_observation_count += int(not trusted)
+        existing.trust_sum += trust
+        existing.min_trust = min(existing.min_trust, trust)
+        existing.max_trust = max(existing.max_trust, trust)
         existing.last_episode_index = episode_index
         return existing
 
@@ -113,6 +151,8 @@ class CandidateEvidencePool:
             return False, "candidate_in_probation"
         if evidence.observation_count < self.min_observations:
             return False, "insufficient_observations"
+        if evidence.trusted_observation_count < self.min_trusted_observations:
+            return False, "insufficient_trusted_observations"
         new_observations = evidence.observation_count - evidence.last_validation_observation_count
         if new_observations < self.min_new_observations:
             return False, "insufficient_new_evidence"

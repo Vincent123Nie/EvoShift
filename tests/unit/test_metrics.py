@@ -336,6 +336,9 @@ def test_policy_shift_metrics_measure_leakage_retention_and_attack_following() -
     assert metrics["corrupted_feedback_follow_rate"] == 0.5
     assert metrics["attack_oracle_success_rate"] == 0.0
     assert metrics["attack_feedback_follow_rate"] == 1.0
+    assert metrics["phase_slice_counts"] == {
+        "stream": {"total": 4, "transition": 2, "future": 1, "protected": 1}
+    }
 
 
 def test_promotion_precision_uses_only_promoted_candidates() -> None:
