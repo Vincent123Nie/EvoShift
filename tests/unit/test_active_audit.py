@@ -184,6 +184,18 @@ def test_circuit_breaker_configuration_requires_dynamic_trust_and_lower_floor() 
         )
 
 
+def test_dormant_revival_configuration_requires_dynamic_trust_and_lower_floor() -> None:
+    with pytest.raises(ValueError, match="requires dynamic feedback trust"):
+        EvolutionConfig(dormant_revival_enabled=True)
+    with pytest.raises(ValueError, match="revival trust floor"):
+        EvolutionConfig(
+            dynamic_feedback_trust_enabled=True,
+            dormant_revival_enabled=True,
+            dormant_revival_min_trust=0.60,
+            min_feedback_trust_for_active_audit=0.60,
+        )
+
+
 def test_active_audit_selection_is_applied_active_exact_and_budgeted() -> None:
     auditor = _auditor(active_audit_max_per_episode=1, active_audit_cooldown_episodes=2)
     risky = _memory("risky").model_copy(

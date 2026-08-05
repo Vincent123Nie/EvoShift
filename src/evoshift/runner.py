@@ -25,6 +25,7 @@ from evoshift.evolution import (
     ActiveMemoryAuditor,
     CandidateEvidencePool,
     CausalCircuitBreaker,
+    DormantMemoryRevival,
     ExperienceCritic,
     FeedbackTrustModel,
     FutureAuditOutcome,
@@ -227,6 +228,14 @@ class EvoShiftRunner:
                 and not self.frozen_audit
                 else None
             )
+            dormant_revival = (
+                DormantMemoryRevival(self.config.evolution)
+                if self.config.evolution.dormant_revival_enabled
+                and behavior.verify_before_promotion
+                and behavior.use_memory
+                and not self.frozen_audit
+                else None
+            )
             episodes: List[Episode] = []
             failures: List[FailureRecord] = []
             decisions: List[PromotionDecision] = []
@@ -288,10 +297,19 @@ class EvoShiftRunner:
             circuit_false_confirmations = 0
             circuit_unconfirmed_persistent_transitions = 0
             circuit_oracle_intervention_deltas: List[float] = []
+            revival_control_requests = 0
+            revival_control_input_tokens = 0
+            revival_control_output_tokens = 0
+            revival_correct_confirmations = 0
+            revival_false_confirmations = 0
+            revival_unconfirmed_persistent_transitions = 0
+            revival_oracle_intervention_deltas: List[float] = []
+            retired_memory_indices: Dict[tuple[str, int], int] = {}
 
             def note_reacquisition(candidate: MemoryItem, activation_index: int) -> None:
                 nonlocal memory_reacquisitions
                 nonlocal correct_memory_reacquisitions
+                retired_memory_indices.pop((candidate.memory_id, candidate.version), None)
                 if candidate.version <= 1:
                     return
                 previous = store.get_memory(candidate.memory_id, version=candidate.version - 1)
@@ -423,6 +441,14 @@ class EvoShiftRunner:
                     circuit_control_input_tokens += prediction.usage.input_tokens
                     circuit_control_output_tokens += prediction.usage.output_tokens
 
+            def record_revival_request(prediction: Any) -> None:
+                nonlocal revival_control_requests
+                nonlocal revival_control_input_tokens
+                nonlocal revival_control_output_tokens
+                revival_control_requests += 1
+                revival_control_input_tokens += prediction.usage.input_tokens
+                revival_control_output_tokens += prediction.usage.output_tokens
+
             def record_causal_audit(
                 decision: ActiveAuditDecision,
                 *,
@@ -492,6 +518,7 @@ class EvoShiftRunner:
                 )
                 if actually_retired and audit_outcome is not None:
                     retired = audit_outcome.rolled_back[0]
+                    retired_memory_indices[(retired.memory_id, retired.version)] = episode_index
                     rollbacks += 1
                     active_audit_retirements += 1
                     early_retirement = decision.reason.startswith("early retire:")
@@ -523,6 +550,10 @@ class EvoShiftRunner:
                     )
                 if audit_outcome is not None:
                     for reactivated in audit_outcome.reactivated:
+                        retired_memory_indices.pop(
+                            (reactivated.memory_id, reactivated.version),
+                            None,
+                        )
                         memory_reactivations += 1
                         active_audit_reactivations += 1
                         correct_reactivation = bool(
@@ -587,7 +618,41 @@ class EvoShiftRunner:
                             episode_index=index,
                             reason="ttl_expired",
                         )
+                if dormant_revival is not None:
+                    for expired_revival in dormant_revival.expire(index):
+                        store.record_event(
+                            run_id,
+                            "dormant_memory_revival_expired",
+                            (f"{expired_revival.memory_key[0]}@v{expired_revival.memory_key[1]}"),
+                            {
+                                "episode_index": index,
+                                "registered_index": expired_revival.registered_index,
+                                "source": expired_revival.source,
+                                "context": expired_revival.context,
+                                "persistent_state_changed": False,
+                            },
+                        )
                 active_before = memory.active()
+                known_before = store.list_memories()
+                occupied_memory_scopes = {item.scope for item in active_before}
+                latest_retired_by_scope: Dict[str, MemoryItem] = {}
+                for known_memory in known_before:
+                    known_key = (known_memory.memory_id, known_memory.version)
+                    if (
+                        known_memory.status != MemoryStatus.RETIRED
+                        or known_key not in retired_memory_indices
+                    ):
+                        continue
+                    previous = latest_retired_by_scope.get(known_memory.scope)
+                    if (
+                        previous is None
+                        or retired_memory_indices[known_key]
+                        > (retired_memory_indices[(previous.memory_id, previous.version)])
+                    ):
+                        latest_retired_by_scope[known_memory.scope] = known_memory
+                latest_retired_keys = {
+                    (item.memory_id, item.version) for item in latest_retired_by_scope.values()
+                }
                 observable_source, observable_context = trust_model.observable_key(sample)
                 circuit_intervention = (
                     circuit_breaker.match(
@@ -601,7 +666,25 @@ class EvoShiftRunner:
                     if circuit_breaker is not None
                     else None
                 )
-                suppress_failure_extraction_this_episode = circuit_intervention is not None
+                revival_intervention = (
+                    dormant_revival.match(
+                        source=observable_source,
+                        context=observable_context,
+                        episode_index=index,
+                        retired_latest_versions={
+                            (item.memory_id, item.version)
+                            for item in known_before
+                            if item.status == MemoryStatus.RETIRED
+                            and item.scope not in occupied_memory_scopes
+                            and (item.memory_id, item.version) in latest_retired_keys
+                        },
+                    )
+                    if dormant_revival is not None and circuit_intervention is None
+                    else None
+                )
+                suppress_failure_extraction_this_episode = (
+                    circuit_intervention is not None or revival_intervention is not None
+                )
                 if circuit_intervention is not None:
                     store.record_event(
                         run_id,
@@ -619,7 +702,23 @@ class EvoShiftRunner:
                             "online_decision_uses": "learner_visible_feedback_only",
                         },
                     )
-                known_before = store.list_memories()
+                if revival_intervention is not None:
+                    store.record_event(
+                        run_id,
+                        "dormant_memory_revival_intervention",
+                        (
+                            f"{revival_intervention.memory_key[0]}"
+                            f"@v{revival_intervention.memory_key[1]}"
+                        ),
+                        {
+                            "episode_index": index,
+                            "registered_index": revival_intervention.registered_index,
+                            "source": revival_intervention.source,
+                            "context": revival_intervention.context,
+                            "action": "temporarily_force_exact_retired_memory_version",
+                            "online_decision_uses": "learner_visible_feedback_only",
+                        },
+                    )
                 stale_tags = {str(tag) for tag in sample.metadata.get("stale_memory_tags", [])}
                 valid_tags = {str(tag) for tag in sample.metadata.get("valid_memory_tags", [])}
                 phase_index = int(sample.metadata.get("phase_index", -1))
@@ -644,6 +743,9 @@ class EvoShiftRunner:
                         [circuit_intervention.memory_key]
                         if circuit_intervention is not None
                         else None
+                    ),
+                    extra_memories=(
+                        [revival_intervention.memory] if revival_intervention is not None else None
                     ),
                     use_memory=behavior.use_memory,
                     self_refine=behavior.self_refine,
@@ -756,6 +858,110 @@ class EvoShiftRunner:
                         )
                         if future_result is not None:
                             complete_future_audit(future_result)
+
+                if revival_intervention is not None:
+                    assert dormant_revival is not None
+                    revival_memory_id, revival_memory_version = revival_intervention.memory_key
+                    memory_off_prediction = await agent.solve(
+                        sample,
+                        policy,
+                        exclude_memory_versions=[(revival_memory_id, revival_memory_version)],
+                        use_memory=behavior.use_memory,
+                    )
+                    record_revival_request(memory_off_prediction)
+                    memory_off_score = score_sample(
+                        sample,
+                        memory_off_prediction.output.answer,
+                    )
+                    memory_off_feedback = score_feedback_sample(
+                        sample,
+                        memory_off_prediction.output.answer,
+                    )
+                    revival_oracle_intervention_deltas.append(
+                        score.primary - memory_off_score.primary
+                    )
+                    treatment_applied = revival_memory_id in prediction.output.applied_memory_ids
+                    confirmation_eligible = (
+                        treatment_applied
+                        and assessment.trust
+                        >= self.config.evolution.min_feedback_trust_for_active_audit
+                        and dormant_revival.qualifies(
+                            feedback_score.primary - memory_off_feedback.primary
+                        )
+                    )
+                    reactivated = (
+                        memory.reactivate_retired(revival_intervention.memory)
+                        if confirmation_eligible
+                        else None
+                    )
+                    confirmed = reactivated is not None
+                    dormant_revival.resolve(
+                        revival_intervention,
+                        confirmed=confirmed,
+                    )
+                    resolution_reason = (
+                        "confirm: two strong learner-visible memory-on gains"
+                        if confirmed
+                        else (
+                            "cancel: forced retired memory was not explicitly applied"
+                            if not treatment_applied
+                            else (
+                                "cancel: feedback trust remained below audit threshold"
+                                if assessment.trust
+                                < self.config.evolution.min_feedback_trust_for_active_audit
+                                else "cancel: second paired gain below revival threshold"
+                            )
+                        )
+                    )
+                    if confirmed and reactivated is not None:
+                        retired_memory_indices.pop(
+                            (reactivated.memory_id, reactivated.version),
+                            None,
+                        )
+                        memory_reactivations += 1
+                        memory_promoted_this_episode = True
+                        candidate_pool.seed_accepted([reactivated])
+                        correct_revival = bool(
+                            valid_tags.intersection(reactivated.tags)
+                        ) and not bool(stale_tags.intersection(reactivated.tags))
+                        revival_correct_confirmations += int(correct_revival)
+                        revival_false_confirmations += int(not correct_revival)
+                        store.record_event(
+                            run_id,
+                            "memory_reactivated",
+                            reactivated.memory_id,
+                            {
+                                "reason": "confirmed dormant-memory recurrence",
+                                "mechanism": "cooldown_dormant_revival",
+                                "oracle_correct_for_current_policy": correct_revival,
+                                "oracle_metrics_are_post_hoc_only": True,
+                            },
+                        )
+                    store.record_event(
+                        run_id,
+                        "dormant_memory_revival_resolved",
+                        f"{revival_memory_id}@v{revival_memory_version}",
+                        {
+                            "episode_index": index,
+                            "registered_index": revival_intervention.registered_index,
+                            "source": revival_intervention.source,
+                            "context": revival_intervention.context,
+                            "feedback_memory_off": memory_off_feedback.primary,
+                            "feedback_memory_on": feedback_score.primary,
+                            "first_learner_visible_delta": revival_intervention.delta,
+                            "second_learner_visible_delta": (
+                                feedback_score.primary - memory_off_feedback.primary
+                            ),
+                            "forced_memory_applied": treatment_applied,
+                            "feedback_trust": assessment.trust,
+                            "confirmed": confirmed,
+                            "reason": resolution_reason,
+                            "persistent_state_changed": confirmed,
+                            "online_decision_uses": "learner_visible_feedback_only",
+                            "oracle_metrics_are_post_hoc_only": True,
+                            "oracle_intervention_delta": (score.primary - memory_off_score.primary),
+                        },
+                    )
 
                 if active_auditor is not None and not self.frozen_audit:
                     if circuit_intervention is not None:
@@ -1017,6 +1223,106 @@ class EvoShiftRunner:
                                     )
 
                 if (
+                    dormant_revival is not None
+                    and circuit_intervention is None
+                    and revival_intervention is None
+                    and not feedback_score.success
+                    and not applied_active
+                    and dormant_revival.trust_is_probe_eligible(assessment.trust)
+                ):
+                    eligible_dormant = [
+                        item
+                        for item in known_before
+                        if item.status == MemoryStatus.RETIRED
+                        and item.scope not in occupied_memory_scopes
+                        and (item.memory_id, item.version) in latest_retired_keys
+                        and (item.memory_id, item.version) in retired_memory_indices
+                        and dormant_revival.retired_long_enough(
+                            retired_index=retired_memory_indices[(item.memory_id, item.version)],
+                            episode_index=index,
+                        )
+                    ]
+                    ranked_dormant = memory.rank_memories(
+                        sample.prompt,
+                        eligible_dormant,
+                        policy,
+                        domain=sample.domain,
+                    )
+                    for retrieved_dormant in ranked_dormant[:1]:
+                        dormant_memory = retrieved_dormant.item
+                        forced_on_prediction = await agent.solve(
+                            sample,
+                            policy,
+                            extra_memories=[dormant_memory],
+                            use_memory=behavior.use_memory,
+                        )
+                        record_revival_request(forced_on_prediction)
+                        forced_on_score = score_sample(
+                            sample,
+                            forced_on_prediction.output.answer,
+                        )
+                        forced_on_feedback = score_feedback_sample(
+                            sample,
+                            forced_on_prediction.output.answer,
+                        )
+                        dormant_revival.note_probe()
+                        treatment_applied = (
+                            dormant_memory.memory_id
+                            in forced_on_prediction.output.applied_memory_ids
+                        )
+                        pending_revival = (
+                            dormant_revival.register(
+                                source=assessment.source,
+                                context=assessment.context,
+                                memory=dormant_memory,
+                                episode_index=index,
+                                feedback_off=feedback_score.primary,
+                                feedback_on=forced_on_feedback.primary,
+                            )
+                            if treatment_applied
+                            else None
+                        )
+                        store.record_event(
+                            run_id,
+                            (
+                                "dormant_memory_revival_registered"
+                                if pending_revival is not None
+                                else "dormant_memory_revival_probe"
+                            ),
+                            f"{dormant_memory.memory_id}@v{dormant_memory.version}",
+                            {
+                                "episode_index": index,
+                                "source": assessment.source,
+                                "context": assessment.context,
+                                "retired_index": retired_memory_indices[
+                                    (dormant_memory.memory_id, dormant_memory.version)
+                                ],
+                                "retired_age": (
+                                    index
+                                    - retired_memory_indices[
+                                        (dormant_memory.memory_id, dormant_memory.version)
+                                    ]
+                                ),
+                                "feedback_memory_off": feedback_score.primary,
+                                "feedback_memory_on": forced_on_feedback.primary,
+                                "learner_visible_delta": (
+                                    forced_on_feedback.primary - feedback_score.primary
+                                ),
+                                "forced_memory_applied": treatment_applied,
+                                "registered": pending_revival is not None,
+                                "expires_after_index": (
+                                    pending_revival.expires_after_index
+                                    if pending_revival is not None
+                                    else None
+                                ),
+                                "persistent_state_changed": False,
+                                "online_decision_uses": ("learner_visible_feedback_only"),
+                                "oracle_metrics_are_post_hoc_only": True,
+                                "oracle_probe_delta": (forced_on_score.primary - score.primary),
+                            },
+                        )
+
+                if (
                     not self.frozen_audit
                     and assessment.trust
                     >= self.config.evolution.min_feedback_trust_for_memory_update
@@ -1028,6 +1334,7 @@ class EvoShiftRunner:
                         policy,
                     )
                     for item in memory_outcome.rolled_back:
+                        retired_memory_indices[(item.memory_id, item.version)] = index
                         rollbacks += 1
                         payload = {"reason": "posterior utility below rollback threshold"}
                         store.record_event(
@@ -1037,6 +1344,7 @@ class EvoShiftRunner:
                             payload,
                         )
                     for item in memory_outcome.reactivated:
+                        retired_memory_indices.pop((item.memory_id, item.version), None)
                         memory_reactivations += 1
                         store.record_event(
                             run_id,
@@ -1439,6 +1747,22 @@ class EvoShiftRunner:
                         expired_canary,
                         episode_index=len(samples),
                         reason="stream_end",
+                    )
+
+            if dormant_revival is not None:
+                for expired_revival in dormant_revival.expire_all():
+                    store.record_event(
+                        run_id,
+                        "dormant_memory_revival_expired",
+                        (f"{expired_revival.memory_key[0]}@v{expired_revival.memory_key[1]}"),
+                        {
+                            "episode_index": len(samples),
+                            "registered_index": expired_revival.registered_index,
+                            "source": expired_revival.source,
+                            "context": expired_revival.context,
+                            "reason": "stream_end",
+                            "persistent_state_changed": False,
+                        },
                     )
 
             if future_auditor is not None:
@@ -1858,6 +2182,48 @@ class EvoShiftRunner:
                             "control_requests": circuit_control_requests,
                             "control_input_tokens": circuit_control_input_tokens,
                             "control_output_tokens": circuit_control_output_tokens,
+                        },
+                        "dormant_revival": {
+                            **(
+                                dormant_revival.snapshot()
+                                if dormant_revival is not None
+                                else {
+                                    "enabled": False,
+                                    "probes": 0,
+                                    "registrations": 0,
+                                    "interventions": 0,
+                                    "confirmations": 0,
+                                    "cancellations": 0,
+                                    "expirations": 0,
+                                    "invalidations": 0,
+                                    "pending": 0,
+                                }
+                            ),
+                            "correct_confirmations": revival_correct_confirmations,
+                            "false_confirmations": revival_false_confirmations,
+                            "confirmation_precision": (
+                                revival_correct_confirmations
+                                / (revival_correct_confirmations + revival_false_confirmations)
+                                if revival_correct_confirmations + revival_false_confirmations
+                                else None
+                            ),
+                            "false_confirmation_rate": (
+                                revival_false_confirmations
+                                / (revival_correct_confirmations + revival_false_confirmations)
+                                if revival_correct_confirmations + revival_false_confirmations
+                                else 0.0
+                            ),
+                            "unconfirmed_persistent_transitions": (
+                                revival_unconfirmed_persistent_transitions
+                            ),
+                            "mean_post_hoc_oracle_intervention_delta": (
+                                statistics.fmean(revival_oracle_intervention_deltas)
+                                if revival_oracle_intervention_deltas
+                                else None
+                            ),
+                            "control_requests": revival_control_requests,
+                            "control_input_tokens": revival_control_input_tokens,
+                            "control_output_tokens": revival_control_output_tokens,
                         },
                     },
                     "audit": {

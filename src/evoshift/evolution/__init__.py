@@ -9,12 +9,14 @@ from evoshift.evolution.future_audit import (
     FutureCounterfactualAuditor,
     PendingFutureAudit,
 )
+from evoshift.evolution.revival import DormantMemoryRevival, PendingRevivalCanary
 
 __all__ = [
     "ActiveAuditDecision",
     "ActiveMemoryAuditor",
     "CandidateEvidencePool",
     "CausalCircuitBreaker",
+    "DormantMemoryRevival",
     "ExperienceCritic",
     "FeedbackAssessment",
     "FeedbackTrustModel",
@@ -23,5 +25,6 @@ __all__ = [
     "PageHinkleyShiftDetector",
     "PendingCausalCanary",
     "PendingFutureAudit",
+    "PendingRevivalCanary",
     "candidate_signature",
 ]

@@ -79,6 +79,11 @@ evolution:
   active_audit_circuit_breaker_min_trust: 0.10
   active_audit_circuit_breaker_delta: -0.75
   active_audit_circuit_breaker_max_age: 8
+  dormant_revival_enabled: false
+  dormant_revival_min_trust: 0.10
+  dormant_revival_delta: 0.75
+  dormant_revival_max_age: 8
+  dormant_revival_min_retired_age: 18
 
 benchmark:
   kind: synthetic_shift

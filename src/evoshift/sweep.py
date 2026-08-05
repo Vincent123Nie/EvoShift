@@ -94,6 +94,16 @@ _AGGREGATE_FIELDS = {
     "circuit_unconfirmed_persistent_transitions": ("circuit_unconfirmed_persistent_transitions"),
     "circuit_mean_oracle_intervention_delta": "circuit_mean_oracle_intervention_delta",
     "circuit_control_requests": "circuit_control_requests",
+    "revival_registrations": "revival_registrations",
+    "revival_interventions": "revival_interventions",
+    "revival_confirmations": "revival_confirmations",
+    "revival_cancellations": "revival_cancellations",
+    "revival_expirations": "revival_expirations",
+    "revival_confirmation_precision": "revival_confirmation_precision",
+    "revival_false_confirmation_rate": "revival_false_confirmation_rate",
+    "revival_unconfirmed_persistent_transitions": ("revival_unconfirmed_persistent_transitions"),
+    "revival_mean_oracle_intervention_delta": "revival_mean_oracle_intervention_delta",
+    "revival_control_requests": "revival_control_requests",
     "confirmed_context_changes": "confirmed_context_changes",
     "total_requests": "total_requests",
     "total_tokens": "total_tokens",
@@ -210,6 +220,7 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         future_audit = result.metrics.get("future_audit", {})
         active_governance = result.metrics.get("active_memory_governance", {})
         circuit = active_governance.get("circuit_breaker", {})
+        revival = active_governance.get("dormant_revival", {})
         trust_model = result.metrics.get("feedback_trust_model", {})
         recovery_steps = result.metrics.get("recovery_steps", {})
         recovered = [
@@ -348,6 +359,20 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                     "mean_post_hoc_oracle_intervention_delta"
                 ),
                 "circuit_control_requests": circuit.get("control_requests"),
+                "revival_registrations": revival.get("registrations"),
+                "revival_interventions": revival.get("interventions"),
+                "revival_confirmations": revival.get("confirmations"),
+                "revival_cancellations": revival.get("cancellations"),
+                "revival_expirations": revival.get("expirations"),
+                "revival_confirmation_precision": revival.get("confirmation_precision"),
+                "revival_false_confirmation_rate": revival.get("false_confirmation_rate"),
+                "revival_unconfirmed_persistent_transitions": revival.get(
+                    "unconfirmed_persistent_transitions"
+                ),
+                "revival_mean_oracle_intervention_delta": revival.get(
+                    "mean_post_hoc_oracle_intervention_delta"
+                ),
+                "revival_control_requests": revival.get("control_requests"),
                 "confirmed_context_changes": trust_model.get("confirmed_context_changes"),
             }
         )
@@ -784,6 +809,16 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "circuit_unconfirmed_persistent_transitions",
         "circuit_mean_oracle_intervention_delta",
         "circuit_control_requests",
+        "revival_registrations",
+        "revival_interventions",
+        "revival_confirmations",
+        "revival_cancellations",
+        "revival_expirations",
+        "revival_confirmation_precision",
+        "revival_false_confirmation_rate",
+        "revival_unconfirmed_persistent_transitions",
+        "revival_mean_oracle_intervention_delta",
+        "revival_control_requests",
         "confirmed_context_changes",
         "run_dir",
     ]

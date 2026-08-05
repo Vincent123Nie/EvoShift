@@ -181,6 +181,55 @@ def test_active_causal_retirement_does_not_eagerly_restore_predecessor_by_defaul
     store.close()
 
 
+def test_confirmed_dormant_revival_resets_regime_specific_causal_ledger(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    retired = _memory("rule", "refund policy", "Use the recurring rule.").model_copy(
+        update={
+            "status": MemoryStatus.RETIRED,
+            "causal_audit_count": 2,
+            "causal_negative_count": 2,
+            "causal_delta_sum": -2.0,
+            "causal_last_audit_index": 20,
+        }
+    )
+    store.save_memory(retired)
+
+    reactivated = manager.reactivate_retired(retired)
+
+    assert reactivated is not None
+    assert reactivated.status == MemoryStatus.ACTIVE
+    assert reactivated.causal_audit_count == 0
+    assert reactivated.causal_negative_count == 0
+    assert reactivated.causal_delta_sum == 0.0
+    assert reactivated.causal_last_audit_index is None
+    store.close()
+
+
+def test_dormant_revival_rejects_non_latest_retired_version(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    retired = _memory("rule", "refund policy", "Use the recurring rule.").model_copy(
+        update={"status": MemoryStatus.RETIRED}
+    )
+    store.save_memory(retired)
+    store.save_memory(
+        retired.model_copy(
+            update={
+                "version": 2,
+                "status": MemoryStatus.REJECTED,
+                "directive": "Rejected newer draft.",
+            }
+        )
+    )
+
+    assert manager.reactivate_retired(retired) is None
+    assert store.get_memory("rule", version=1).status == MemoryStatus.RETIRED  # type: ignore[union-attr]
+    store.close()
+
+
 def test_probation_memory_is_retrievable_without_superseding_prior_rule(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
     manager = MemoryManager(store)

@@ -326,6 +326,81 @@ async def test_recurrence_circuit_breaker_improves_score_and_cancels_noise_safel
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_cooldown_dormant_revival_adds_recurrent_gain_without_false_revival(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 11}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.0, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={"active_audit_circuit_breaker_enabled": True}
+            ),
+        }
+    )
+    combined_config = config.model_copy(
+        update={"evolution": config.evolution.model_copy(update={"dormant_revival_enabled": True})}
+    )
+    recurrence = await EvoShiftRunner(
+        config,
+        create_benchmark(config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+    combined = await EvoShiftRunner(
+        combined_config,
+        create_benchmark(combined_config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+
+    revival = combined.metrics["active_memory_governance"]["dormant_revival"]
+    assert combined.metrics["overall"]["mean_score"] > recurrence.metrics["overall"]["mean_score"]
+    assert revival["confirmations"] == 1
+    assert revival["confirmation_precision"] == 1.0
+    assert revival["unconfirmed_persistent_transitions"] == 0
+    assert combined.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+    noisy_recurrence_config = config.model_copy(
+        update={
+            "evaluation": config.evaluation.model_copy(update={"seed": 33}),
+            "benchmark": config.benchmark.model_copy(update={"feedback_noise_rate": 0.10}),
+        }
+    )
+    noisy_combined_config = noisy_recurrence_config.model_copy(
+        update={
+            "evolution": noisy_recurrence_config.evolution.model_copy(
+                update={"dormant_revival_enabled": True}
+            )
+        }
+    )
+    noisy_recurrence = await EvoShiftRunner(
+        noisy_recurrence_config,
+        create_benchmark(noisy_recurrence_config.benchmark, root=Path.cwd(), seed=33),
+        workdir=Path.cwd(),
+    ).run()
+    noisy_combined = await EvoShiftRunner(
+        noisy_combined_config,
+        create_benchmark(noisy_combined_config.benchmark, root=Path.cwd(), seed=33),
+        workdir=Path.cwd(),
+    ).run()
+
+    noisy_revival = noisy_combined.metrics["active_memory_governance"]["dormant_revival"]
+    assert (
+        noisy_combined.metrics["overall"]["mean_score"]
+        > noisy_recurrence.metrics["overall"]["mean_score"]
+    )
+    assert noisy_revival["confirmation_precision"] == 1.0
+    assert noisy_revival["false_confirmation_rate"] == 0.0
+    assert noisy_combined.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_quarantined_feedback_can_only_reach_memory_through_verified_shadow_lane(
     tmp_path: Path,
 ) -> None:

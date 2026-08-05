@@ -123,6 +123,11 @@ class EvolutionConfig(ConfigModel):
     active_audit_circuit_breaker_min_trust: float = Field(default=0.10, ge=0.0, le=1.0)
     active_audit_circuit_breaker_delta: float = Field(default=-0.75, ge=-1.0, le=0.0)
     active_audit_circuit_breaker_max_age: int = Field(default=8, ge=1, le=10000)
+    dormant_revival_enabled: bool = False
+    dormant_revival_min_trust: float = Field(default=0.10, ge=0.0, le=1.0)
+    dormant_revival_delta: float = Field(default=0.75, ge=0.0, le=1.0)
+    dormant_revival_max_age: int = Field(default=8, ge=1, le=10000)
+    dormant_revival_min_retired_age: int = Field(default=18, ge=1, le=10000)
     conflict_supersession_enabled: bool = True
 
     @model_validator(mode="after")
@@ -194,6 +199,16 @@ class EvolutionConfig(ConfigModel):
         ):
             raise ValueError(
                 "active audit circuit breaker trust floor must be below the ordinary "
+                "active audit threshold"
+            )
+        if self.dormant_revival_enabled and not self.dynamic_feedback_trust_enabled:
+            raise ValueError("dormant memory revival requires dynamic feedback trust")
+        if (
+            self.dormant_revival_enabled
+            and self.dormant_revival_min_trust >= self.min_feedback_trust_for_active_audit
+        ):
+            raise ValueError(
+                "dormant memory revival trust floor must be below the ordinary "
                 "active audit threshold"
             )
         return self

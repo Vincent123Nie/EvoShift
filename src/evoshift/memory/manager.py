@@ -56,6 +56,16 @@ class MemoryManager:
         novelty = self.retriever.novelty(query, active, policy, domain=domain)
         return selected, context, novelty
 
+    def rank_memories(
+        self,
+        query: str,
+        memories: Sequence[MemoryItem],
+        policy: PolicyGenome,
+        *,
+        domain: str = "",
+    ) -> List[RetrievedMemory]:
+        return self.retriever.retrieve(query, memories, policy, domain=domain)
+
     def stage(self, candidate: MemoryItem, policy: PolicyGenome) -> MemoryItem:
         if candidate.confidence < policy.write_confidence_threshold:
             candidate = candidate.model_copy(update={"status": MemoryStatus.REJECTED})
@@ -227,6 +237,31 @@ class MemoryManager:
         restored = self._restorable_predecessors(retired) if restore_predecessors else []
         self.store.save_memories_atomic([retired, *restored])
         return MemoryOutcome((retired,), tuple(restored))
+
+    def reactivate_retired(self, item: MemoryItem) -> Optional[MemoryItem]:
+        current = self.store.get_memory(item.memory_id, version=item.version)
+        latest = self.store.get_memory(item.memory_id)
+        if (
+            current is None
+            or latest is None
+            or latest.version != item.version
+            or current.status != MemoryStatus.RETIRED
+        ):
+            return None
+        reactivated = current.model_copy(
+            update={
+                "status": MemoryStatus.ACTIVE,
+                "causal_audit_count": 0,
+                "causal_positive_count": 0,
+                "causal_negative_count": 0,
+                "causal_neutral_count": 0,
+                "causal_delta_sum": 0.0,
+                "causal_last_audit_index": None,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.store.save_memory(reactivated)
+        return reactivated
 
     def _restore_predecessors(self, successor: MemoryItem) -> list[MemoryItem]:
         restored_items = self._restorable_predecessors(successor)
