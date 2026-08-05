@@ -1,3 +1,5 @@
+import pytest
+
 from evoshift.config import EvolutionConfig
 from evoshift.evolution import (
     DormantMemoryRevival,
@@ -102,6 +104,142 @@ def test_dormant_revival_invalidates_changed_version_and_expires() -> None:
     assert expiring.expire(12) == ()
     assert expiring.expire(13) == (expiring_pending,)
     assert expiring.snapshot()["pending"] == 0
+
+
+@pytest.mark.parametrize(
+    ("retired_generations", "retired_contexts"),
+    [
+        (
+            {("retired", 2): 2},
+            {("retired", 2): ("portal", "refund:any:days_8_14")},
+        ),
+        (
+            {("retired", 2): 1},
+            {("retired", 2): ("portal", "refund:premium:days_15_30")},
+        ),
+    ],
+)
+def test_dormant_revival_invalidates_changed_retirement_generation_or_context(
+    retired_generations: dict[tuple[str, int], int],
+    retired_contexts: dict[tuple[str, int], tuple[str, str]],
+) -> None:
+    revival = DormantMemoryRevival(_config())
+    pending = revival.register(
+        source="portal",
+        context="refund:any:days_8_14",
+        memory=_retired(),
+        episode_index=10,
+        feedback_off=0.0,
+        feedback_on=1.0,
+        retirement_generation=1,
+        retirement_context=("portal", "refund:any:days_8_14"),
+    )
+    assert pending is not None
+
+    assert (
+        revival.match(
+            source="portal",
+            context="refund:any:days_8_14",
+            episode_index=11,
+            retired_latest_versions=[("retired", 2)],
+            retired_generations=retired_generations,
+            retired_contexts=retired_contexts,
+        )
+        is None
+    )
+    assert revival.snapshot()["invalidations"] == 1
+
+
+def test_retirement_context_guard_accepts_only_exact_observable_context() -> None:
+    revival = DormantMemoryRevival(_config(dormant_revival_retirement_context_enabled=True))
+    retired_context = ("portal", "refund:any:days_8_14")
+
+    assert revival.retirement_context_matches(
+        retired_context,
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+    assert not revival.retirement_context_matches(
+        retired_context,
+        source="merchant_console",
+        context="refund:any:days_8_14",
+    )
+    assert not revival.retirement_context_matches(
+        retired_context,
+        source="portal",
+        context="refund:premium:days_15_30",
+    )
+    assert not revival.retirement_context_matches(
+        None,
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+    assert (
+        revival.register(
+            source="portal",
+            context="refund:any:days_8_14",
+            memory=_retired(),
+            episode_index=28,
+            feedback_off=0.0,
+            feedback_on=1.0,
+            retirement_generation=1,
+            retirement_context=("portal", "refund:premium:days_15_30"),
+        )
+        is None
+    )
+
+
+def test_unguarded_revival_does_not_require_a_retirement_context() -> None:
+    revival = DormantMemoryRevival(_config(dormant_revival_retirement_context_enabled=False))
+
+    assert revival.retirement_context_matches(
+        None,
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+    assert revival.retirement_context_matches(
+        ("other_source", "other_context"),
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+
+
+def test_exact_version_retirement_context_can_be_removed_and_recorded_again() -> None:
+    revival = DormantMemoryRevival(_config(dormant_revival_retirement_context_enabled=True))
+    memory_key = ("retired", 2)
+    contexts: dict[tuple[str, int], tuple[str, str]] = {
+        memory_key: ("portal", "refund:any:days_8_14")
+    }
+
+    assert revival.retirement_context_matches(
+        contexts.get(memory_key),
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+    assert not revival.retirement_context_matches(
+        contexts.get(("retired", 1)),
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+
+    contexts.pop(memory_key)
+    assert not revival.retirement_context_matches(
+        contexts.get(memory_key),
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+
+    contexts[memory_key] = ("portal", "refund:premium:days_15_30")
+    assert not revival.retirement_context_matches(
+        contexts.get(memory_key),
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+    assert revival.retirement_context_matches(
+        contexts.get(memory_key),
+        source="portal",
+        context="refund:premium:days_15_30",
+    )
 
 
 def test_semantic_dormant_view_does_not_hide_older_applicable_rule_in_same_scope() -> None:

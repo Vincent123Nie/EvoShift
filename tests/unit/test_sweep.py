@@ -113,6 +113,8 @@ def test_sweep_aggregation_reports_seed_variance() -> None:
             "old_rule_leakage_rate": 0.5,
             "total_tokens": 10,
             "total_requests": 4,
+            "revival_context_recorded_opportunities": 1,
+            "revival_context_guard_opportunities": 2,
             "run_id": "a",
         },
         {
@@ -124,6 +126,8 @@ def test_sweep_aggregation_reports_seed_variance() -> None:
             "old_rule_leakage_rate": 0.1,
             "total_tokens": 14,
             "total_requests": 6,
+            "revival_context_recorded_opportunities": 2,
+            "revival_context_guard_opportunities": 2,
             "run_id": "b",
         },
     ]
@@ -134,6 +138,7 @@ def test_sweep_aggregation_reports_seed_variance() -> None:
     assert aggregate["total_requests_mean"] == 5
     assert aggregate["changed_case_success_mean"] == pytest.approx(0.7)
     assert aggregate["old_rule_leakage_mean"] == pytest.approx(0.3)
+    assert aggregate["revival_context_record_coverage_micro"] == pytest.approx(0.75)
     assert aggregate["variant"] == "full"
 
 
@@ -337,4 +342,5 @@ async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
     )
     report = (destination / "report.md").read_text(encoding="utf-8")
     assert "Realized precision" in report
+    assert "Lifecycle path diagnostics" in report
     assert "Only same-model" in report

@@ -6,9 +6,26 @@ import pytest
 
 from evoshift.audit import load_evolved_state
 from evoshift.benchmarks import create_benchmark
-from evoshift.benchmarks.base import sample_fingerprint
+from evoshift.benchmarks.base import BenchmarkAdapter, sample_fingerprint
 from evoshift.config import load_config
 from evoshift.runner import EvoShiftRunner
+from evoshift.schemas import BenchmarkSample
+
+
+class _MissingFeedbackReferenceAdapter(BenchmarkAdapter):
+    def __init__(self, wrapped: BenchmarkAdapter, *, missing_indices: set[int]):
+        self.wrapped = wrapped
+        self.missing_indices = missing_indices
+
+    def load(self) -> list[BenchmarkSample]:
+        samples: list[BenchmarkSample] = []
+        for index, sample in enumerate(self.wrapped.load()):
+            if index in self.missing_indices:
+                metadata = dict(sample.metadata)
+                metadata.pop("feedback_reference", None)
+                sample = sample.model_copy(update={"metadata": metadata})
+            samples.append(sample)
+        return samples
 
 
 @pytest.mark.asyncio
@@ -397,6 +414,95 @@ async def test_cooldown_dormant_revival_adds_recurrent_gain_without_false_reviva
     assert noisy_revival["confirmation_precision"] == 1.0
     assert noisy_revival["false_confirmation_rate"] == 0.0
     assert noisy_combined.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_context_bound_revival_uses_observable_key_without_feedback_reference(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    seed = 233
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": seed}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.10, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "active_audit_circuit_breaker_enabled": True,
+                    "active_audit_lineage_control_enabled": True,
+                    "dormant_revival_enabled": True,
+                    "dormant_revival_min_trust": 0.10,
+                    "dormant_revival_delta": 0.75,
+                    "dormant_revival_max_age": 8,
+                    "dormant_revival_min_retired_age": 15,
+                    "dormant_revival_status_index_enabled": True,
+                    "dormant_revival_semantic_index_enabled": True,
+                    "dormant_revival_retirement_context_enabled": True,
+                    "active_audit_reactivation_grace_episodes": 8,
+                    "active_audit_retirement_probation_enabled": True,
+                    "active_audit_retirement_probation_max_age": 24,
+                    "active_audit_retirement_probation_min_confirmations": 2,
+                    "active_audit_retirement_probation_min_evidence_span": 2,
+                    "dynamic_feedback_change_min_span": 0,
+                }
+            ),
+        }
+    )
+    source = create_benchmark(config.benchmark, root=Path.cwd(), seed=seed)
+    adapter = _MissingFeedbackReferenceAdapter(source, missing_indices={97})
+
+    result = await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
+
+    connection = sqlite3.connect(result.run_dir / "state.sqlite3")
+    try:
+        lifecycle_events = [
+            (event_type, entity_id, json.loads(payload))
+            for event_type, entity_id, payload in connection.execute(
+                "SELECT event_type, entity_id, payload_json FROM evolution_events "
+                "WHERE event_type IN "
+                "('memory_retirement_probation_started', "
+                "'dormant_memory_revival_context_excluded', "
+                "'dormant_memory_revival_registered', "
+                "'dormant_memory_revival_resolved')"
+            )
+        ]
+    finally:
+        connection.close()
+
+    safe_key = "mem-cfb49bc0ef485383@v1"
+    mismatched_key = "mem-61294fcf3a594201@v1"
+    retirement = next(
+        payload
+        for event_type, entity_id, payload in lifecycle_events
+        if event_type == "memory_retirement_probation_started"
+        and entity_id == safe_key
+        and payload["episode_index"] == 97
+    )
+    assert retirement["source"] == "customer_support_portal"
+    assert retirement["context"] == "refund:any:days_8_14"
+    assert any(
+        event_type == "dormant_memory_revival_context_excluded" and entity_id == mismatched_key
+        for event_type, entity_id, _ in lifecycle_events
+    )
+    safe_revival_events = [
+        event_type
+        for event_type, entity_id, _ in lifecycle_events
+        if entity_id == safe_key and event_type.startswith("dormant_memory_revival_")
+    ]
+    assert safe_revival_events == [
+        "dormant_memory_revival_registered",
+        "dormant_memory_revival_resolved",
+    ]
+    revival = result.metrics["active_memory_governance"]["dormant_revival"]
+    assert revival["confirmations"] == 1
+    assert revival["context_mismatch_confirmations"] == 0
+    assert revival["post_confirmation_tag_associated_harmful_exposure_n"] == 0
 
 
 @pytest.mark.asyncio

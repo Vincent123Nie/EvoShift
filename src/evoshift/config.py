@@ -137,6 +137,7 @@ class EvolutionConfig(ConfigModel):
     dormant_revival_min_retired_age: int = Field(default=18, ge=1, le=10000)
     dormant_revival_status_index_enabled: bool = False
     dormant_revival_semantic_index_enabled: bool = False
+    dormant_revival_retirement_context_enabled: bool = False
     conflict_supersession_enabled: bool = True
 
     @model_validator(mode="after")
@@ -221,6 +222,8 @@ class EvolutionConfig(ConfigModel):
             raise ValueError("status-indexed revival requires dormant memory revival")
         if self.dormant_revival_semantic_index_enabled and not self.dormant_revival_enabled:
             raise ValueError("semantic dormant view requires dormant memory revival")
+        if self.dormant_revival_retirement_context_enabled and not self.dormant_revival_enabled:
+            raise ValueError("retirement-context-bound revival requires dormant memory revival")
         if self.active_audit_retirement_probation_enabled and not self.active_audit_enabled:
             raise ValueError("retirement probation requires active audit")
         if (

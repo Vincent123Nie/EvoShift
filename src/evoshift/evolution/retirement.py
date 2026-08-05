@@ -250,6 +250,11 @@ class RetirementProbation:
 
         return {pending.memory_key for pending in self._pending.values()}
 
+    def pending_items(self) -> tuple[PendingRetirement, ...]:
+        """Return a stable snapshot for post-hoc path metrics only."""
+
+        return tuple(self._pending.values())
+
     def drain_invalidated(self) -> tuple[tuple[PendingRetirement, str], ...]:
         invalidated = tuple(self._invalidated)
         self._invalidated.clear()

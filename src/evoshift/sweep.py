@@ -105,7 +105,34 @@ _AGGREGATE_FIELDS = {
     "retirement_probation_cancellations": "retirement_probation_cancellations",
     "retirement_probation_deferrals": "retirement_probation_deferrals",
     "retirement_probation_expirations": "retirement_probation_expirations",
+    "retirement_probation_registration_precision": ("retirement_probation_registration_precision"),
+    "retirement_probation_registration_label_coverage": (
+        "retirement_probation_registration_label_coverage"
+    ),
+    "retirement_probation_unknown_tag_registrations": (
+        "retirement_probation_unknown_tag_registrations"
+    ),
+    "retirement_probation_paired_oracle_registration_precision": (
+        "retirement_probation_paired_oracle_registration_precision"
+    ),
+    "retirement_probation_paired_oracle_registration_coverage": (
+        "retirement_probation_paired_oracle_registration_coverage"
+    ),
     "retirement_probation_confirmation_precision": ("retirement_probation_confirmation_precision"),
+    "retirement_probation_confirmation_label_coverage": (
+        "retirement_probation_confirmation_label_coverage"
+    ),
+    "retirement_probation_unknown_tag_confirmations": (
+        "retirement_probation_unknown_tag_confirmations"
+    ),
+    "retirement_probation_confirmation_coverage": ("retirement_probation_confirmation_coverage"),
+    "retirement_probation_expiry_rate": "retirement_probation_expiry_rate",
+    "retirement_probation_provisional_valid_tag_exposure_n": (
+        "retirement_probation_provisional_valid_tag_exposure"
+    ),
+    "retirement_probation_provisional_valid_tag_failure_episodes": (
+        "retirement_probation_provisional_valid_tag_failures"
+    ),
     "retirement_probation_false_confirmation_rate": (
         "retirement_probation_false_confirmation_rate"
     ),
@@ -122,7 +149,21 @@ _AGGREGATE_FIELDS = {
     "revival_cancellations": "revival_cancellations",
     "revival_expirations": "revival_expirations",
     "revival_confirmation_precision": "revival_confirmation_precision",
+    "revival_confirmation_coverage": "revival_confirmation_coverage",
     "revival_false_confirmation_rate": "revival_false_confirmation_rate",
+    "revival_context_mismatch_exclusions": "revival_context_mismatch_exclusions",
+    "revival_context_record_coverage": "revival_context_record_coverage",
+    "revival_context_recorded_opportunities": "revival_context_recorded_opportunities",
+    "revival_context_guard_opportunities": "revival_context_guard_opportunities",
+    "revival_context_consistent_confirmations": "revival_context_consistent_confirmations",
+    "revival_context_mismatch_confirmations": "revival_context_mismatch_confirmations",
+    "revival_post_confirmation_applications": "revival_post_confirmation_applications",
+    "revival_post_confirmation_tag_associated_harmful_exposure_n": (
+        "revival_post_confirmation_tag_associated_harmful_exposure"
+    ),
+    "revival_post_confirmation_tag_associated_harmful_exposure_rate": (
+        "revival_post_confirmation_tag_associated_harmful_exposure_rate"
+    ),
     "revival_unconfirmed_persistent_transitions": ("revival_unconfirmed_persistent_transitions"),
     "revival_mean_oracle_intervention_delta": "revival_mean_oracle_intervention_delta",
     "revival_control_requests": "revival_control_requests",
@@ -398,8 +439,39 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "retirement_probation_cancellations": retirement_probation.get("cancellations"),
                 "retirement_probation_deferrals": retirement_probation.get("deferrals"),
                 "retirement_probation_expirations": retirement_probation.get("expirations"),
+                "retirement_probation_registration_precision": retirement_probation.get(
+                    "registration_precision"
+                ),
+                "retirement_probation_registration_label_coverage": retirement_probation.get(
+                    "registration_label_coverage"
+                ),
+                "retirement_probation_unknown_tag_registrations": retirement_probation.get(
+                    "unknown_tag_registrations"
+                ),
+                "retirement_probation_paired_oracle_registration_precision": (
+                    retirement_probation.get("paired_oracle_registration_precision")
+                ),
+                "retirement_probation_paired_oracle_registration_coverage": (
+                    retirement_probation.get("paired_oracle_registration_coverage")
+                ),
                 "retirement_probation_confirmation_precision": retirement_probation.get(
                     "confirmation_precision"
+                ),
+                "retirement_probation_confirmation_label_coverage": retirement_probation.get(
+                    "confirmation_label_coverage"
+                ),
+                "retirement_probation_unknown_tag_confirmations": retirement_probation.get(
+                    "unknown_tag_confirmations"
+                ),
+                "retirement_probation_confirmation_coverage": retirement_probation.get(
+                    "confirmation_coverage"
+                ),
+                "retirement_probation_expiry_rate": retirement_probation.get("expiry_rate"),
+                "retirement_probation_provisional_valid_tag_exposure_n": (
+                    retirement_probation.get("provisional_valid_tag_exposure_n")
+                ),
+                "retirement_probation_provisional_valid_tag_failure_episodes": (
+                    retirement_probation.get("provisional_valid_tag_failure_episodes")
                 ),
                 "retirement_probation_false_confirmation_rate": retirement_probation.get(
                     "false_confirmation_rate"
@@ -419,7 +491,29 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "revival_cancellations": revival.get("cancellations"),
                 "revival_expirations": revival.get("expirations"),
                 "revival_confirmation_precision": revival.get("confirmation_precision"),
+                "revival_confirmation_coverage": revival.get("confirmation_coverage"),
                 "revival_false_confirmation_rate": revival.get("false_confirmation_rate"),
+                "revival_context_mismatch_exclusions": revival.get("context_mismatch_exclusions"),
+                "revival_context_record_coverage": revival.get("context_record_coverage"),
+                "revival_context_recorded_opportunities": revival.get(
+                    "context_recorded_opportunities"
+                ),
+                "revival_context_guard_opportunities": revival.get("context_guard_opportunities"),
+                "revival_context_consistent_confirmations": revival.get(
+                    "context_consistent_confirmations"
+                ),
+                "revival_context_mismatch_confirmations": revival.get(
+                    "context_mismatch_confirmations"
+                ),
+                "revival_post_confirmation_applications": revival.get(
+                    "post_confirmation_applications"
+                ),
+                "revival_post_confirmation_tag_associated_harmful_exposure_n": revival.get(
+                    "post_confirmation_tag_associated_harmful_exposure_n"
+                ),
+                "revival_post_confirmation_tag_associated_harmful_exposure_rate": revival.get(
+                    "post_confirmation_tag_associated_harmful_exposure_rate"
+                ),
                 "revival_unconfirmed_persistent_transitions": revival.get(
                     "unconfirmed_persistent_transitions"
                 ),
@@ -772,6 +866,19 @@ def aggregate_sweep(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
                 continue
             aggregate[f"{prefix}_mean"] = statistics.fmean(values)
             aggregate[f"{prefix}_std"] = statistics.stdev(values) if len(values) > 1 else 0.0
+        recorded_contexts = sum(
+            float(row["revival_context_recorded_opportunities"])
+            for row in group
+            if isinstance(row.get("revival_context_recorded_opportunities"), (int, float))
+        )
+        context_opportunities = sum(
+            float(row["revival_context_guard_opportunities"])
+            for row in group
+            if isinstance(row.get("revival_context_guard_opportunities"), (int, float))
+        )
+        aggregate["revival_context_record_coverage_micro"] = (
+            recorded_contexts / context_opportunities if context_opportunities else None
+        )
         output.append(aggregate)
     return sorted(output, key=lambda item: (-item["score_mean"], item["algorithm"]))
 
@@ -875,7 +982,18 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "retirement_probation_cancellations",
         "retirement_probation_deferrals",
         "retirement_probation_expirations",
+        "retirement_probation_registration_precision",
+        "retirement_probation_registration_label_coverage",
+        "retirement_probation_unknown_tag_registrations",
+        "retirement_probation_paired_oracle_registration_precision",
+        "retirement_probation_paired_oracle_registration_coverage",
         "retirement_probation_confirmation_precision",
+        "retirement_probation_confirmation_label_coverage",
+        "retirement_probation_unknown_tag_confirmations",
+        "retirement_probation_confirmation_coverage",
+        "retirement_probation_expiry_rate",
+        "retirement_probation_provisional_valid_tag_exposure_n",
+        "retirement_probation_provisional_valid_tag_failure_episodes",
         "retirement_probation_false_confirmation_rate",
         "retirement_probation_unconfirmed_persistent_transitions",
         "retirement_probation_mean_oracle_intervention_delta",
@@ -886,7 +1004,17 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "revival_cancellations",
         "revival_expirations",
         "revival_confirmation_precision",
+        "revival_confirmation_coverage",
         "revival_false_confirmation_rate",
+        "revival_context_mismatch_exclusions",
+        "revival_context_record_coverage",
+        "revival_context_recorded_opportunities",
+        "revival_context_guard_opportunities",
+        "revival_context_consistent_confirmations",
+        "revival_context_mismatch_confirmations",
+        "revival_post_confirmation_applications",
+        "revival_post_confirmation_tag_associated_harmful_exposure_n",
+        "revival_post_confirmation_tag_associated_harmful_exposure_rate",
         "revival_unconfirmed_persistent_transitions",
         "revival_mean_oracle_intervention_delta",
         "revival_control_requests",
@@ -959,6 +1087,7 @@ def _write_sweep_markdown(
     aggregates: Iterable[Mapping[str, Any]],
     comparisons: Sequence[Mapping[str, Any]] = (),
 ) -> None:
+    aggregate_rows = list(aggregates)
     lines = [
         "# EvoShift sweep report",
         "",
@@ -974,7 +1103,7 @@ def _write_sweep_markdown(
             "---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
         ),
     ]
-    for item in aggregates:
+    for item in aggregate_rows:
         lines.append(
             "| "
             + " | ".join(
@@ -1006,6 +1135,78 @@ def _write_sweep_markdown(
                     _format_mean(item, "mean_recovery_steps"),
                     f"{item.get('total_requests_mean', 0.0):.1f}",
                     f"{item.get('total_tokens_mean', 0.0):.1f}",
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Lifecycle path diagnostics",
+            "",
+            (
+                "Tag-based retirement precision excludes registrations without an exact "
+                "stale-versus-valid tag label. Provisional exposure and failure episodes "
+                "are separate proxy counts, not a causal rate."
+            ),
+            "",
+            (
+                "| Algorithm | Variant | Retire reg P | Tag coverage | Paired reg P | "
+                "Paired coverage | Retire confirm P | Confirm coverage | Expiry | "
+                "Valid exposure | Failure episodes | Revival P | Revival coverage | "
+                "Context coverage | Mismatch excluded | Context-confirmed | "
+                "Mismatch-confirmed | Post-revival apps | Post-revival harm |"
+            ),
+            (
+                "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+                "---:|---:|---:|---:|---:|---:|"
+            ),
+        ]
+    )
+    for item in aggregate_rows:
+        context_coverage = item.get("revival_context_record_coverage_micro")
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(item["algorithm"]),
+                    str(item["variant"]),
+                    _format_mean(item, "retirement_probation_registration_precision"),
+                    _format_mean(item, "retirement_probation_registration_label_coverage"),
+                    _format_mean(
+                        item,
+                        "retirement_probation_paired_oracle_registration_precision",
+                    ),
+                    _format_mean(
+                        item,
+                        "retirement_probation_paired_oracle_registration_coverage",
+                    ),
+                    _format_mean(item, "retirement_probation_confirmation_precision"),
+                    _format_mean(item, "retirement_probation_confirmation_coverage"),
+                    _format_mean(item, "retirement_probation_expiry_rate"),
+                    _format_mean(
+                        item,
+                        "retirement_probation_provisional_valid_tag_exposure",
+                    ),
+                    _format_mean(
+                        item,
+                        "retirement_probation_provisional_valid_tag_failures",
+                    ),
+                    _format_mean(item, "revival_confirmation_precision"),
+                    _format_mean(item, "revival_confirmation_coverage"),
+                    (
+                        f"{float(context_coverage):.4f}"
+                        if isinstance(context_coverage, (int, float))
+                        else "N/A"
+                    ),
+                    _format_mean(item, "revival_context_mismatch_exclusions"),
+                    _format_mean(item, "revival_context_consistent_confirmations"),
+                    _format_mean(item, "revival_context_mismatch_confirmations"),
+                    _format_mean(item, "revival_post_confirmation_applications"),
+                    _format_mean(
+                        item,
+                        "revival_post_confirmation_tag_associated_harmful_exposure",
+                    ),
                 ]
             )
             + " |"

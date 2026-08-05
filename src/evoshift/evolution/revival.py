@@ -71,6 +71,8 @@ class PendingRevivalCanary:
     expires_after_index: int
     feedback_off: float
     feedback_on: float
+    retirement_generation: int = 0
+    retirement_context: tuple[str, str] | None = None
 
     @property
     def observable_key(self) -> tuple[str, str]:
@@ -96,6 +98,7 @@ class DormantMemoryRevival:
         self.min_retired_age = config.dormant_revival_min_retired_age
         self.status_indexed = config.dormant_revival_status_index_enabled
         self.semantic_indexed = config.dormant_revival_semantic_index_enabled
+        self.retirement_context_bound = config.dormant_revival_retirement_context_enabled
         self._pending: dict[tuple[str, str], PendingRevivalCanary] = {}
         self.probes = 0
         self.registrations = 0
@@ -114,6 +117,17 @@ class DormantMemoryRevival:
     def qualifies(self, delta: float) -> bool:
         return float(delta) >= self.delta_threshold
 
+    def retirement_context_matches(
+        self,
+        retired_context: tuple[str, str] | None,
+        *,
+        source: str,
+        context: str,
+    ) -> bool:
+        """Restrict global revival to the observable context that justified retirement."""
+
+        return not self.retirement_context_bound or retired_context == (source, context)
+
     def note_probe(self) -> None:
         self.probes += 1
 
@@ -126,7 +140,15 @@ class DormantMemoryRevival:
         episode_index: int,
         feedback_off: float,
         feedback_on: float,
+        retirement_generation: int = 0,
+        retirement_context: tuple[str, str] | None = None,
     ) -> PendingRevivalCanary | None:
+        if not self.retirement_context_matches(
+            retirement_context,
+            source=source,
+            context=context,
+        ):
+            return None
         if not self.qualifies(float(feedback_on) - float(feedback_off)):
             return None
         key = (source, context)
@@ -140,6 +162,8 @@ class DormantMemoryRevival:
             expires_after_index=episode_index + self.max_age,
             feedback_off=float(feedback_off),
             feedback_on=float(feedback_on),
+            retirement_generation=retirement_generation,
+            retirement_context=retirement_context,
         )
         self._pending[key] = pending
         self.registrations += 1
@@ -152,12 +176,26 @@ class DormantMemoryRevival:
         context: str,
         episode_index: int,
         retired_latest_versions: Iterable[tuple[str, int]],
+        retired_generations: Mapping[MemoryVersionKey, int] | None = None,
+        retired_contexts: Mapping[MemoryVersionKey, tuple[str, str]] | None = None,
     ) -> PendingRevivalCanary | None:
         key = (source, context)
         pending = self._pending.get(key)
         if pending is None or episode_index <= pending.registered_index:
             return None
-        if pending.memory_key not in set(retired_latest_versions):
+        generation_changed = (
+            retired_generations is not None
+            and retired_generations.get(pending.memory_key) != pending.retirement_generation
+        )
+        context_changed = (
+            retired_contexts is not None
+            and retired_contexts.get(pending.memory_key) != pending.retirement_context
+        )
+        if (
+            pending.memory_key not in set(retired_latest_versions)
+            or generation_changed
+            or context_changed
+        ):
             self._pending.pop(key, None)
             self.cancellations += 1
             self.invalidations += 1
@@ -200,6 +238,7 @@ class DormantMemoryRevival:
             "min_retired_age": self.min_retired_age,
             "status_indexed": self.status_indexed,
             "semantic_indexed": self.semantic_indexed,
+            "retirement_context_bound": self.retirement_context_bound,
             "probes": self.probes,
             "registrations": self.registrations,
             "interventions": self.interventions,

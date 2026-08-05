@@ -158,6 +158,18 @@ def render_markdown_report(
     if isinstance(policy_shift, Mapping):
         lines.extend(["## Policy shift", "", _metric_table(policy_shift), ""])
 
+    active_governance = safe.get("active_memory_governance")
+    if isinstance(active_governance, Mapping):
+        lines.extend(["## Active memory governance", "", _metric_table(active_governance), ""])
+        for key, title in (
+            ("circuit_breaker", "Causal circuit breaker"),
+            ("retirement_probation", "Retirement probation"),
+            ("dormant_revival", "Dormant revival"),
+        ):
+            lifecycle_metrics = active_governance.get(key)
+            if isinstance(lifecycle_metrics, Mapping):
+                lines.extend([f"### {title}", "", _metric_table(lifecycle_metrics), ""])
+
     retrieval = safe.get("retrieval")
     if isinstance(retrieval, Mapping):
         lines.extend(["## Memory retrieval", "", _metric_table(retrieval), ""])

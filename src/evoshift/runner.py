@@ -324,23 +324,57 @@ class EvoShiftRunner:
             revival_false_confirmations = 0
             revival_unconfirmed_persistent_transitions = 0
             revival_oracle_intervention_deltas: List[float] = []
+            revival_context_mismatch_exclusions = 0
+            revival_context_guard_opportunities = 0
+            revival_context_recorded_opportunities = 0
+            revival_context_consistent_confirmations = 0
+            revival_context_mismatch_confirmations = 0
+            revival_post_confirmation_applications = 0
+            revival_post_confirmation_harmful_exposure = 0
+            retirement_probation_correct_registrations = 0
+            retirement_probation_false_registrations = 0
+            retirement_probation_unknown_tag_registrations = 0
+            retirement_probation_paired_correct_registrations = 0
+            retirement_probation_paired_false_registrations = 0
             retirement_probation_correct_confirmations = 0
             retirement_probation_false_confirmations = 0
+            retirement_probation_unknown_tag_confirmations = 0
             retirement_probation_unconfirmed_persistent_transitions = 0
             retirement_probation_oracle_deltas: List[float] = []
             retirement_probation_control_requests = 0
             retirement_probation_control_input_tokens = 0
             retirement_probation_control_output_tokens = 0
+            retirement_probation_provisional_valid_exposure = 0
+            retirement_probation_provisional_valid_failure_episodes = 0
             retirement_circuit_canaries: Dict[tuple[str, str, str, int], PendingCausalCanary] = {}
             retired_memory_indices: Dict[tuple[str, int], int] = {}
+            retired_memory_contexts: Dict[tuple[str, int], tuple[str, str]] = {}
+            retired_memory_generations: Dict[tuple[str, int], int] = {}
             reactivated_memory_indices: Dict[tuple[str, int], int] = {}
+            revival_confirmed_memory_indices: Dict[tuple[str, int], int] = {}
             reactivation_grace_audit_suppressions = 0
             reactivation_grace_protected_rollbacks = 0
+
+            def note_retirement(
+                item: MemoryItem,
+                *,
+                source: str,
+                context: str,
+                episode_index: int,
+            ) -> int:
+                memory_key = (item.memory_id, item.version)
+                generation = retired_memory_generations.get(memory_key, 0) + 1
+                retired_memory_generations[memory_key] = generation
+                retired_memory_indices[memory_key] = episode_index
+                retired_memory_contexts[memory_key] = (source, context)
+                return generation
 
             def note_reacquisition(candidate: MemoryItem, activation_index: int) -> None:
                 nonlocal memory_reacquisitions
                 nonlocal correct_memory_reacquisitions
-                retired_memory_indices.pop((candidate.memory_id, candidate.version), None)
+                candidate_key = (candidate.memory_id, candidate.version)
+                retired_memory_indices.pop(candidate_key, None)
+                retired_memory_contexts.pop(candidate_key, None)
                 if candidate.version <= 1:
                     return
                 previous = store.get_memory(candidate.memory_id, version=candidate.version - 1)
@@ -378,6 +412,7 @@ class EvoShiftRunner:
                 )
 
             def note_reactivation(item: MemoryItem, episode_index: int) -> None:
+                retired_memory_contexts.pop((item.memory_id, item.version), None)
                 if self.config.evolution.active_audit_reactivation_grace_episodes <= 0:
                     return
                 key = (item.memory_id, item.version)
@@ -591,6 +626,11 @@ class EvoShiftRunner:
                 nonlocal active_audit_early_false_retirements
                 nonlocal active_audit_reactivations
                 nonlocal active_audit_correct_reactivations
+                nonlocal retirement_probation_correct_registrations
+                nonlocal retirement_probation_false_registrations
+                nonlocal retirement_probation_unknown_tag_registrations
+                nonlocal retirement_probation_paired_correct_registrations
+                nonlocal retirement_probation_paired_false_registrations
 
                 audit_outcome = None
                 if decision.retire or persist_non_retirement:
@@ -614,7 +654,12 @@ class EvoShiftRunner:
                 early_retirement = decision.reason.startswith("early retire:")
                 if actually_retired and audit_outcome is not None:
                     retired = audit_outcome.rolled_back[0]
-                    retired_memory_indices[(retired.memory_id, retired.version)] = episode_index
+                    retirement_generation = note_retirement(
+                        retired,
+                        source=source,
+                        context=context,
+                        episode_index=episode_index,
+                    )
                     if retirement_probation is not None:
                         pending_retirement = retirement_probation.register(
                             source=source,
@@ -628,6 +673,24 @@ class EvoShiftRunner:
                             oracle_stale=is_oracle_stale,
                             early_retirement=early_retirement,
                         )
+                        if pending_retirement is not None:
+                            is_oracle_valid = bool(
+                                valid_tags.intersection(decision.memory_before.tags)
+                            )
+                            tag_evaluable = is_oracle_stale != is_oracle_valid
+                            retirement_probation_correct_registrations += int(
+                                tag_evaluable and is_oracle_stale
+                            )
+                            retirement_probation_false_registrations += int(
+                                tag_evaluable and is_oracle_valid
+                            )
+                            retirement_probation_unknown_tag_registrations += int(not tag_evaluable)
+                            retirement_probation_paired_correct_registrations += int(
+                                oracle_delta < 0.0
+                            )
+                            retirement_probation_paired_false_registrations += int(
+                                oracle_delta >= 0.0
+                            )
                     if pending_retirement is None:
                         finalize_retirement(
                             retired,
@@ -649,6 +712,7 @@ class EvoShiftRunner:
                                 "episode_index": episode_index,
                                 "source": source,
                                 "context": context,
+                                "retirement_generation": retirement_generation,
                                 "expires_after_index": (pending_retirement.expires_after_index),
                                 "mechanism": mechanism,
                                 "reason": decision.reason,
@@ -787,6 +851,7 @@ class EvoShiftRunner:
                 )
                 if restored is not None:
                     retired_memory_indices.pop(pending.memory_key, None)
+                    retired_memory_contexts.pop(pending.memory_key, None)
                     for predecessor in pending.restored_predecessors:
                         reactivated_memory_indices.pop(
                             (predecessor.memory_id, predecessor.version),
@@ -877,16 +942,28 @@ class EvoShiftRunner:
                 *,
                 episode_index: int,
                 phase_index: int,
+                source: str,
+                context: str,
                 oracle_stale: bool,
+                oracle_tag_evaluable: bool,
             ) -> PendingRetirement | None:
                 """Put a posterior-utility retirement through the same reversible lane."""
 
-                retired_memory_indices[(retired.memory_id, retired.version)] = episode_index
+                nonlocal retirement_probation_correct_registrations
+                nonlocal retirement_probation_false_registrations
+                nonlocal retirement_probation_unknown_tag_registrations
+
+                retirement_generation = note_retirement(
+                    retired,
+                    source=source,
+                    context=context,
+                    episode_index=episode_index,
+                )
                 pending: PendingRetirement | None = None
                 if retirement_probation is not None:
                     pending = retirement_probation.register(
-                        source=assessment.source,
-                        context=assessment.context,
+                        source=source,
+                        context=context,
                         memory=retired,
                         active_snapshot=active_snapshot,
                         restored_predecessors=predecessors,
@@ -896,6 +973,16 @@ class EvoShiftRunner:
                         oracle_stale=oracle_stale,
                         early_retirement=False,
                     )
+                    if pending is not None:
+                        retirement_probation_correct_registrations += int(
+                            oracle_tag_evaluable and oracle_stale
+                        )
+                        retirement_probation_false_registrations += int(
+                            oracle_tag_evaluable and not oracle_stale
+                        )
+                        retirement_probation_unknown_tag_registrations += int(
+                            not oracle_tag_evaluable
+                        )
                 candidate_pool.mark_memory_retired(retired)
                 if pending is not None:
                     store.record_event(
@@ -904,8 +991,9 @@ class EvoShiftRunner:
                         f"{retired.memory_id}@v{retired.version}",
                         {
                             "episode_index": episode_index,
-                            "source": assessment.source,
-                            "context": assessment.context,
+                            "source": source,
+                            "context": context,
+                            "retirement_generation": retirement_generation,
                             "expires_after_index": pending.expires_after_index,
                             "mechanism": "posterior_utility",
                             "reason": "posterior utility below rollback threshold",
@@ -964,6 +1052,9 @@ class EvoShiftRunner:
                         or index - reactivated_index > grace_episodes
                     ):
                         reactivated_memory_indices.pop(memory_key, None)
+                for memory_key in tuple(revival_confirmed_memory_indices):
+                    if memory_key not in active_before_keys:
+                        revival_confirmed_memory_indices.pop(memory_key, None)
                 known_before = store.list_memories()
                 semantic_dormant_index = bool(
                     dormant_revival is not None and dormant_revival.semantic_indexed
@@ -988,6 +1079,19 @@ class EvoShiftRunner:
                         retirement_probation.pending_memory_keys()
                     )
                 observable_source, observable_context = trust_model.observable_key(sample)
+                context_eligible_dormant_keys = (
+                    {
+                        memory_key
+                        for memory_key in eligible_dormant_keys
+                        if dormant_revival.retirement_context_matches(
+                            retired_memory_contexts.get(memory_key),
+                            source=observable_source,
+                            context=observable_context,
+                        )
+                    }
+                    if dormant_revival is not None
+                    else eligible_dormant_keys
+                )
                 circuit_intervention = (
                     circuit_breaker.match(
                         source=observable_source,
@@ -1022,6 +1126,10 @@ class EvoShiftRunner:
                         invalidated_retirement,
                         invalidation_reason,
                     ) in retirement_probation.drain_invalidated():
+                        retired_memory_contexts.pop(
+                            invalidated_retirement.memory_key,
+                            None,
+                        )
                         resolve_retirement_circuit(
                             invalidated_retirement,
                             committed=False,
@@ -1054,8 +1162,10 @@ class EvoShiftRunner:
                             for item in retired_before
                             if item.status == MemoryStatus.RETIRED
                             and item.scope not in occupied_memory_scopes
-                            and (item.memory_id, item.version) in eligible_dormant_keys
+                            and (item.memory_id, item.version) in context_eligible_dormant_keys
                         },
+                        retired_generations=retired_memory_generations,
+                        retired_contexts=retired_memory_contexts,
                     )
                     if (
                         dormant_revival is not None
@@ -1127,6 +1237,22 @@ class EvoShiftRunner:
                     )
                 stale_tags = {str(tag) for tag in sample.metadata.get("stale_memory_tags", [])}
                 valid_tags = {str(tag) for tag in sample.metadata.get("valid_memory_tags", [])}
+                provisional_retirements = (
+                    list(retirement_probation.pending_items())
+                    if retirement_probation is not None
+                    else []
+                )
+                if retirement_intervention is not None:
+                    provisional_retirements.append(retirement_intervention)
+                provisional_valid_retirements = [
+                    pending
+                    for pending in provisional_retirements
+                    if valid_tags.intersection(pending.memory.tags)
+                    and not stale_tags.intersection(pending.memory.tags)
+                ]
+                retirement_probation_provisional_valid_exposure += len(
+                    provisional_valid_retirements
+                )
                 phase_index = int(sample.metadata.get("phase_index", -1))
                 for item in known_before:
                     if item.status not in {
@@ -1165,6 +1291,9 @@ class EvoShiftRunner:
                 )
                 score = score_sample(sample, prediction.output.answer)
                 feedback_score = score_feedback_sample(sample, prediction.output.answer)
+                retirement_probation_provisional_valid_failure_episodes += int(
+                    bool(provisional_valid_retirements) and not score.success
+                )
                 selected_ids = [item.item.memory_id for item in prediction.retrieved]
                 novelty = (
                     1.0 - max(item.relevance for item in prediction.retrieved)
@@ -1192,8 +1321,18 @@ class EvoShiftRunner:
                     item for item in applied_active if stale_tags.intersection(item.tags)
                 ]
                 stale_active_memory_applications += len(stale_applied)
+                revived_applied = [
+                    item
+                    for item in applied_active
+                    if (item.memory_id, item.version) in revival_confirmed_memory_indices
+                ]
+                revived_stale_applied = [
+                    item for item in revived_applied if stale_tags.intersection(item.tags)
+                ]
+                revival_post_confirmation_applications += len(revived_applied)
                 if not score.success:
                     harmful_active_memory_exposure += len(stale_applied)
+                    revival_post_confirmation_harmful_exposure += len(revived_stale_applied)
                 detector = detectors.setdefault(
                     sample.domain,
                     PageHinkleyShiftDetector(self.config.shift),
@@ -1318,6 +1457,12 @@ class EvoShiftRunner:
                     confirmation_oracle_stale = bool(
                         stale_tags.intersection(resolved_retirement.memory.tags)
                     )
+                    confirmation_oracle_valid = bool(
+                        valid_tags.intersection(resolved_retirement.memory.tags)
+                    )
+                    confirmation_tag_evaluable = (
+                        confirmation_oracle_stale != confirmation_oracle_valid
+                    )
                     if confirmed:
                         finalize_retirement(
                             resolved_retirement.memory,
@@ -1332,9 +1477,14 @@ class EvoShiftRunner:
                                 resolved_retirement.mechanism != "posterior_utility"
                             ),
                         )
-                        retirement_probation_correct_confirmations += int(confirmation_oracle_stale)
+                        retirement_probation_correct_confirmations += int(
+                            confirmation_tag_evaluable and confirmation_oracle_stale
+                        )
                         retirement_probation_false_confirmations += int(
-                            not confirmation_oracle_stale
+                            confirmation_tag_evaluable and confirmation_oracle_valid
+                        )
+                        retirement_probation_unknown_tag_confirmations += int(
+                            not confirmation_tag_evaluable
                         )
                         resolve_retirement_circuit(
                             resolved_retirement,
@@ -1405,6 +1555,16 @@ class EvoShiftRunner:
                 if revival_intervention is not None:
                     assert dormant_revival is not None
                     revival_memory_id, revival_memory_version = revival_intervention.memory_key
+                    revival_memory_key = (revival_memory_id, revival_memory_version)
+                    retirement_context = revival_intervention.retirement_context
+                    retirement_generation = revival_intervention.retirement_generation
+                    retirement_generation_consistent = (
+                        retired_memory_generations.get(revival_memory_key) == retirement_generation
+                    )
+                    retirement_context_consistent = retirement_context == (
+                        revival_intervention.source,
+                        revival_intervention.context,
+                    )
                     memory_off_prediction = await agent.solve(
                         sample,
                         policy,
@@ -1457,11 +1617,20 @@ class EvoShiftRunner:
                         )
                     )
                     if confirmed and reactivated is not None:
+                        revival_context_consistent_confirmations += int(
+                            retirement_context_consistent
+                        )
+                        revival_context_mismatch_confirmations += int(
+                            not retirement_context_consistent
+                        )
                         note_reactivation(reactivated, index)
                         retired_memory_indices.pop(
                             (reactivated.memory_id, reactivated.version),
                             None,
                         )
+                        revival_confirmed_memory_indices[
+                            (reactivated.memory_id, reactivated.version)
+                        ] = index
                         memory_reactivations += 1
                         memory_promoted_this_episode = True
                         candidate_pool.seed_accepted([reactivated])
@@ -1477,6 +1646,12 @@ class EvoShiftRunner:
                             {
                                 "reason": "confirmed dormant-memory recurrence",
                                 "mechanism": "cooldown_dormant_revival",
+                                "retirement_context": retirement_context,
+                                "retirement_generation": retirement_generation,
+                                "retirement_generation_consistent": (
+                                    retirement_generation_consistent
+                                ),
+                                "retirement_context_consistent": (retirement_context_consistent),
                                 "oracle_correct_for_current_policy": correct_revival,
                                 "oracle_metrics_are_post_hoc_only": True,
                             },
@@ -1490,6 +1665,13 @@ class EvoShiftRunner:
                             "registered_index": revival_intervention.registered_index,
                             "source": revival_intervention.source,
                             "context": revival_intervention.context,
+                            "retirement_context": retirement_context,
+                            "retirement_generation": retirement_generation,
+                            "retirement_generation_consistent": (retirement_generation_consistent),
+                            "retirement_context_guard_enabled": (
+                                dormant_revival.retirement_context_bound
+                            ),
+                            "retirement_context_consistent": (retirement_context_consistent),
                             "feedback_memory_off": memory_off_feedback.primary,
                             "feedback_memory_on": feedback_score.primary,
                             "first_learner_visible_delta": revival_intervention.delta,
@@ -1567,8 +1749,8 @@ class EvoShiftRunner:
                                     oracle_candidate=forced_on_score.primary,
                                     additional_prediction=forced_on_prediction,
                                     mechanism="recurrence_circuit_confirmation",
-                                    source=assessment.source,
-                                    context=assessment.context,
+                                    source=observable_source,
+                                    context=observable_context,
                                     persist_non_retirement=False,
                                     circuit_request=True,
                                 )
@@ -1750,8 +1932,8 @@ class EvoShiftRunner:
                                     oracle_candidate=score.primary,
                                     additional_prediction=control_prediction,
                                     mechanism="active_causal",
-                                    source=assessment.source,
-                                    context=assessment.context,
+                                    source=observable_source,
+                                    context=observable_context,
                                 )
                                 memory_retired_this_episode = (
                                     audit_application.retired or memory_retired_this_episode
@@ -1799,8 +1981,8 @@ class EvoShiftRunner:
                                     retirement_enabled=False,
                                 )
                                 pending = circuit_breaker.register(
-                                    source=assessment.source,
-                                    context=assessment.context,
+                                    source=observable_source,
+                                    context=observable_context,
                                     observation=provisional_decision,
                                     control_memory=lineage_control,
                                 )
@@ -1815,8 +1997,8 @@ class EvoShiftRunner:
                                         oracle_candidate=score.primary,
                                         additional_prediction=control_prediction,
                                         mechanism="recurrence_circuit_registration",
-                                        source=assessment.source,
-                                        context=assessment.context,
+                                        source=observable_source,
+                                        context=observable_context,
                                         circuit_request=True,
                                     )
                                     circuit_unconfirmed_persistent_transitions += int(
@@ -1855,8 +2037,8 @@ class EvoShiftRunner:
                                         provisional_decision.candidate_id,
                                         {
                                             "episode_index": index,
-                                            "source": assessment.source,
-                                            "context": assessment.context,
+                                            "source": observable_source,
+                                            "context": observable_context,
                                             "control_kind": (
                                                 "direct_predecessor"
                                                 if lineage_control is not None
@@ -1887,7 +2069,7 @@ class EvoShiftRunner:
                     and not applied_active
                     and dormant_revival.trust_is_probe_eligible(assessment.trust)
                 ):
-                    eligible_dormant = [
+                    eligible_dormant_before_context = [
                         item
                         for item in retired_before
                         if item.status == MemoryStatus.RETIRED
@@ -1898,6 +2080,45 @@ class EvoShiftRunner:
                             retired_index=retired_memory_indices[(item.memory_id, item.version)],
                             episode_index=index,
                         )
+                    ]
+                    revival_context_guard_opportunities += len(eligible_dormant_before_context)
+                    revival_context_recorded_opportunities += sum(
+                        (item.memory_id, item.version) in retired_memory_contexts
+                        for item in eligible_dormant_before_context
+                    )
+                    context_mismatches = [
+                        item
+                        for item in eligible_dormant_before_context
+                        if not dormant_revival.retirement_context_matches(
+                            retired_memory_contexts.get((item.memory_id, item.version)),
+                            source=observable_source,
+                            context=observable_context,
+                        )
+                    ]
+                    revival_context_mismatch_exclusions += len(context_mismatches)
+                    for context_mismatch in context_mismatches:
+                        mismatch_key = (context_mismatch.memory_id, context_mismatch.version)
+                        store.record_event(
+                            run_id,
+                            "dormant_memory_revival_context_excluded",
+                            f"{mismatch_key[0]}@v{mismatch_key[1]}",
+                            {
+                                "episode_index": index,
+                                "source": observable_source,
+                                "context": observable_context,
+                                "retirement_context": retired_memory_contexts.get(mismatch_key),
+                                "retirement_generation": retired_memory_generations.get(
+                                    mismatch_key
+                                ),
+                                "reason": "retirement context did not match revival context",
+                                "persistent_state_changed": False,
+                                "online_decision_uses": ("learner_visible_memory_lifecycle_only"),
+                            },
+                        )
+                    eligible_dormant = [
+                        item
+                        for item in eligible_dormant_before_context
+                        if (item.memory_id, item.version) in context_eligible_dormant_keys
                     ]
                     ranked_dormant = memory.rank_memories(
                         sample.prompt,
@@ -1916,6 +2137,8 @@ class EvoShiftRunner:
                         )
                     for retrieved_dormant in ranked_dormant[:1]:
                         dormant_memory = retrieved_dormant.item
+                        dormant_memory_key = (dormant_memory.memory_id, dormant_memory.version)
+                        dormant_retirement_context = retired_memory_contexts.get(dormant_memory_key)
                         forced_on_prediction = await agent.solve(
                             sample,
                             policy,
@@ -1938,12 +2161,17 @@ class EvoShiftRunner:
                         )
                         pending_revival = (
                             dormant_revival.register(
-                                source=assessment.source,
-                                context=assessment.context,
+                                source=observable_source,
+                                context=observable_context,
                                 memory=dormant_memory,
                                 episode_index=index,
                                 feedback_off=feedback_score.primary,
                                 feedback_on=forced_on_feedback.primary,
+                                retirement_generation=retired_memory_generations.get(
+                                    dormant_memory_key,
+                                    0,
+                                ),
+                                retirement_context=dormant_retirement_context,
                             )
                             if treatment_applied
                             else None
@@ -1958,13 +2186,24 @@ class EvoShiftRunner:
                             f"{dormant_memory.memory_id}@v{dormant_memory.version}",
                             {
                                 "episode_index": index,
-                                "source": assessment.source,
-                                "context": assessment.context,
+                                "source": observable_source,
+                                "context": observable_context,
                                 "candidate_status": dormant_memory.status.value,
                                 "status_indexed_candidate_view": (
                                     self.config.evolution.dormant_revival_status_index_enabled
                                 ),
                                 "semantic_candidate_view": semantic_dormant_index,
+                                "retirement_context_guard_enabled": (
+                                    dormant_revival.retirement_context_bound
+                                ),
+                                "retirement_context": dormant_retirement_context,
+                                "retirement_generation": retired_memory_generations.get(
+                                    dormant_memory_key
+                                ),
+                                "retirement_context_consistent": (
+                                    dormant_retirement_context
+                                    == (observable_source, observable_context)
+                                ),
                                 "selected_retired_key": [
                                     dormant_memory.memory_id,
                                     dormant_memory.version,
@@ -2026,7 +2265,13 @@ class EvoShiftRunner:
                             predecessors,
                             episode_index=index,
                             phase_index=phase_index,
+                            source=observable_source,
+                            context=observable_context,
                             oracle_stale=bool(stale_tags.intersection(item.tags)),
+                            oracle_tag_evaluable=(
+                                bool(stale_tags.intersection(item.tags))
+                                != bool(valid_tags.intersection(item.tags))
+                            ),
                         )
                         for reactivated in predecessors:
                             note_reactivation(reactivated, index)
@@ -2953,8 +3198,77 @@ class EvoShiftRunner:
                                     "pending": 0,
                                 }
                             ),
+                            "correct_registrations": retirement_probation_correct_registrations,
+                            "false_registrations": retirement_probation_false_registrations,
+                            "unknown_tag_registrations": (
+                                retirement_probation_unknown_tag_registrations
+                            ),
+                            "tag_evaluable_registrations": (
+                                retirement_probation_correct_registrations
+                                + retirement_probation_false_registrations
+                            ),
+                            "registration_precision_basis": (
+                                "post_hoc_exact_stale_vs_valid_memory_tag_xor_at_registration"
+                            ),
+                            "registration_precision": (
+                                retirement_probation_correct_registrations
+                                / (
+                                    retirement_probation_correct_registrations
+                                    + retirement_probation_false_registrations
+                                )
+                                if (
+                                    retirement_probation_correct_registrations
+                                    + retirement_probation_false_registrations
+                                )
+                                else None
+                            ),
+                            "registration_label_coverage": (
+                                (
+                                    retirement_probation_correct_registrations
+                                    + retirement_probation_false_registrations
+                                )
+                                / retirement_probation.registrations
+                                if retirement_probation is not None
+                                and retirement_probation.registrations
+                                else 0.0
+                            ),
+                            "paired_oracle_correct_registrations": (
+                                retirement_probation_paired_correct_registrations
+                            ),
+                            "paired_oracle_false_registrations": (
+                                retirement_probation_paired_false_registrations
+                            ),
+                            "paired_oracle_registration_precision": (
+                                retirement_probation_paired_correct_registrations
+                                / (
+                                    retirement_probation_paired_correct_registrations
+                                    + retirement_probation_paired_false_registrations
+                                )
+                                if (
+                                    retirement_probation_paired_correct_registrations
+                                    + retirement_probation_paired_false_registrations
+                                )
+                                else None
+                            ),
+                            "paired_oracle_registration_coverage": (
+                                (
+                                    retirement_probation_paired_correct_registrations
+                                    + retirement_probation_paired_false_registrations
+                                )
+                                / retirement_probation.registrations
+                                if retirement_probation is not None
+                                and retirement_probation.registrations
+                                else 0.0
+                            ),
                             "correct_confirmations": (retirement_probation_correct_confirmations),
                             "false_confirmations": retirement_probation_false_confirmations,
+                            "unknown_tag_confirmations": (
+                                retirement_probation_unknown_tag_confirmations
+                            ),
+                            "tag_evaluable_confirmations": (
+                                retirement_probation_correct_confirmations
+                                + retirement_probation_false_confirmations
+                            ),
                             "confirmation_precision": (
                                 retirement_probation_correct_confirmations
                                 / (
@@ -2966,6 +3280,16 @@ class EvoShiftRunner:
                                     + retirement_probation_false_confirmations
                                 )
                                 else None
+                            ),
+                            "confirmation_label_coverage": (
+                                (
+                                    retirement_probation_correct_confirmations
+                                    + retirement_probation_false_confirmations
+                                )
+                                / retirement_probation.confirmations
+                                if retirement_probation is not None
+                                and retirement_probation.confirmations
+                                else 0.0
                             ),
                             "false_confirmation_rate": (
                                 retirement_probation_false_confirmations
@@ -2979,6 +3303,33 @@ class EvoShiftRunner:
                                 )
                                 else 0.0
                             ),
+                            "confirmation_coverage": (
+                                retirement_probation.confirmations
+                                / retirement_probation.registrations
+                                if retirement_probation is not None
+                                and retirement_probation.registrations
+                                else 0.0
+                            ),
+                            "expiry_rate": (
+                                retirement_probation.expirations
+                                / retirement_probation.registrations
+                                if retirement_probation is not None
+                                and retirement_probation.registrations
+                                else 0.0
+                            ),
+                            "provisional_valid_tag_exposure_n": (
+                                retirement_probation_provisional_valid_exposure
+                            ),
+                            "provisional_valid_tag_exposure_unit": (
+                                "retired_memory_version_episode"
+                            ),
+                            "provisional_valid_tag_failure_episodes": (
+                                retirement_probation_provisional_valid_failure_episodes
+                            ),
+                            "provisional_valid_tag_failure_episode_unit": (
+                                "unique_episode_with_any_provisional_valid_retirement"
+                            ),
+                            "provisional_valid_tag_failure_is_causal_attribution": False,
                             "unconfirmed_persistent_transitions": (
                                 retirement_probation_unconfirmed_persistent_transitions
                             ),
@@ -2999,6 +3350,7 @@ class EvoShiftRunner:
                                     "enabled": False,
                                     "status_indexed": False,
                                     "semantic_indexed": False,
+                                    "retirement_context_bound": False,
                                     "probes": 0,
                                     "registrations": 0,
                                     "interventions": 0,
@@ -3021,6 +3373,40 @@ class EvoShiftRunner:
                                 revival_false_confirmations
                                 / (revival_correct_confirmations + revival_false_confirmations)
                                 if revival_correct_confirmations + revival_false_confirmations
+                                else 0.0
+                            ),
+                            "confirmation_coverage": (
+                                dormant_revival.confirmations / dormant_revival.registrations
+                                if dormant_revival is not None and dormant_revival.registrations
+                                else 0.0
+                            ),
+                            "context_mismatch_exclusions": (revival_context_mismatch_exclusions),
+                            "context_record_coverage": (
+                                revival_context_recorded_opportunities
+                                / revival_context_guard_opportunities
+                                if revival_context_guard_opportunities
+                                else None
+                            ),
+                            "context_recorded_opportunities": (
+                                revival_context_recorded_opportunities
+                            ),
+                            "context_guard_opportunities": (revival_context_guard_opportunities),
+                            "context_consistent_confirmations": (
+                                revival_context_consistent_confirmations
+                            ),
+                            "context_mismatch_confirmations": (
+                                revival_context_mismatch_confirmations
+                            ),
+                            "post_confirmation_applications": (
+                                revival_post_confirmation_applications
+                            ),
+                            "post_confirmation_tag_associated_harmful_exposure_n": (
+                                revival_post_confirmation_harmful_exposure
+                            ),
+                            "post_confirmation_tag_associated_harmful_exposure_rate": (
+                                revival_post_confirmation_harmful_exposure
+                                / revival_post_confirmation_applications
+                                if revival_post_confirmation_applications
                                 else 0.0
                             ),
                             "unconfirmed_persistent_transitions": (
