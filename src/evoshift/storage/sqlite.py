@@ -214,39 +214,55 @@ class SQLiteStore:
 
     def save_memory(self, item: MemoryItem) -> None:
         with self.transaction() as conn:
-            if item.status == MemoryStatus.ACTIVE:
-                rows = conn.execute(
-                    """
-                    SELECT version, payload_json FROM memory_items
-                    WHERE memory_id=? AND version<>? AND status='active'
-                    """,
-                    (item.memory_id, item.version),
-                ).fetchall()
-                for row in rows:
-                    previous = MemoryItem.model_validate_json(row["payload_json"])
-                    retired = previous.model_copy(update={"status": MemoryStatus.RETIRED})
-                    conn.execute(
-                        """
-                        UPDATE memory_items SET status='retired', payload_json=?,
-                            updated_at=CURRENT_TIMESTAMP
-                        WHERE memory_id=? AND version=?
-                        """,
-                        (retired.model_dump_json(), item.memory_id, row["version"]),
-                    )
-            conn.execute(
+            self._save_memory_in_transaction(conn, item)
+
+    def save_memories_atomic(self, items: Sequence[MemoryItem]) -> None:
+        """Persist a related memory-state transition in one SQLite transaction."""
+
+        if not items:
+            return
+        with self.transaction() as conn:
+            for item in items:
+                self._save_memory_in_transaction(conn, item)
+
+    @staticmethod
+    def _save_memory_in_transaction(
+        conn: sqlite3.Connection,
+        item: MemoryItem,
+    ) -> None:
+        if item.status == MemoryStatus.ACTIVE:
+            rows = conn.execute(
                 """
-                INSERT OR REPLACE INTO memory_items(
-                    memory_id, version, status, kind, payload_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                SELECT version, payload_json FROM memory_items
+                WHERE memory_id=? AND version<>? AND status='active'
                 """,
-                (
-                    item.memory_id,
-                    item.version,
-                    item.status.value,
-                    item.kind.value,
-                    item.model_dump_json(),
-                ),
-            )
+                (item.memory_id, item.version),
+            ).fetchall()
+            for row in rows:
+                previous = MemoryItem.model_validate_json(row["payload_json"])
+                retired = previous.model_copy(update={"status": MemoryStatus.RETIRED})
+                conn.execute(
+                    """
+                    UPDATE memory_items SET status='retired', payload_json=?,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE memory_id=? AND version=?
+                    """,
+                    (retired.model_dump_json(), item.memory_id, row["version"]),
+                )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO memory_items(
+                memory_id, version, status, kind, payload_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                item.memory_id,
+                item.version,
+                item.status.value,
+                item.kind.value,
+                item.model_dump_json(),
+            ),
+        )
 
     def list_memories(self, statuses: Optional[Sequence[MemoryStatus]] = None) -> List[MemoryItem]:
         params: List[Any] = []

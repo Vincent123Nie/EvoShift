@@ -1,4 +1,7 @@
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from evoshift.schemas import (
     Algorithm,
@@ -65,4 +68,28 @@ def test_store_keeps_memory_versions(tmp_path: Path) -> None:
     assert store.get_memory("m1", version=1).directive == "old"  # type: ignore[union-attr]
     assert store.get_memory("m1").directive == "new"  # type: ignore[union-attr]
     assert store.list_memories([MemoryStatus.ACTIVE]) == [second]
+    store.close()
+
+
+def test_atomic_memory_batch_rolls_back_all_items_on_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    first = MemoryItem(memory_id="first", trigger="x", directive="one")
+    second = MemoryItem(memory_id="second", trigger="y", directive="two")
+    original = store._save_memory_in_transaction
+
+    def fail_after_write(connection: sqlite3.Connection, item: MemoryItem) -> None:
+        original(connection, item)
+        if item.memory_id == "second":
+            raise RuntimeError("injected transaction failure")
+
+    monkeypatch.setattr(store, "_save_memory_in_transaction", fail_after_write)
+
+    with pytest.raises(RuntimeError, match="injected"):
+        store.save_memories_atomic([first, second])
+
+    assert store.get_memory("first") is None
+    assert store.get_memory("second") is None
     store.close()

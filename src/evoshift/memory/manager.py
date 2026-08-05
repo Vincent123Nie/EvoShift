@@ -147,7 +147,6 @@ class MemoryManager:
                         "updated_at": datetime.now(timezone.utc),
                     }
                 )
-                self.store.save_memory(replaced)
                 superseded.append(replaced)
         active = candidate.model_copy(
             update={
@@ -158,7 +157,7 @@ class MemoryManager:
                 "updated_at": datetime.now(timezone.utc),
             }
         )
-        self.store.save_memory(active)
+        self.store.save_memories_atomic([*superseded, active])
         return MemoryActivation(active=active, superseded=tuple(superseded))
 
     def reject(self, candidate: MemoryItem) -> MemoryItem:
@@ -225,11 +224,16 @@ class MemoryManager:
                 "updated_at": datetime.now(timezone.utc),
             }
         )
-        self.store.save_memory(retired)
-        restored = self._restore_predecessors(retired) if restore_predecessors else []
+        restored = self._restorable_predecessors(retired) if restore_predecessors else []
+        self.store.save_memories_atomic([retired, *restored])
         return MemoryOutcome((retired,), tuple(restored))
 
     def _restore_predecessors(self, successor: MemoryItem) -> list[MemoryItem]:
+        restored_items = self._restorable_predecessors(successor)
+        self.store.save_memories_atomic(restored_items)
+        return restored_items
+
+    def _restorable_predecessors(self, successor: MemoryItem) -> list[MemoryItem]:
         restored_items: list[MemoryItem] = []
         for superseded_id in successor.supersedes_memory_ids:
             previous = self.store.get_memory(superseded_id)
@@ -241,7 +245,6 @@ class MemoryManager:
                     "updated_at": datetime.now(timezone.utc),
                 }
             )
-            self.store.save_memory(restored)
             restored_items.append(restored)
         return restored_items
 

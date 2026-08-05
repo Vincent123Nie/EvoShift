@@ -69,6 +69,7 @@ _AGGREGATE_FIELDS = {
     ),
     "memory_supersessions": "memory_supersessions",
     "memory_reactivations": "memory_reactivations",
+    "correct_reactivation_rate": "correct_reactivation",
     "harmful_active_memory_exposure_n": "harmful_active_memory_exposure",
     "stale_memory_retention_rate": "stale_memory_retention",
     "selective_forgetting_precision": "selective_forgetting_precision",
@@ -293,6 +294,7 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 ),
                 "memory_supersessions": evolution.get("memory_supersessions"),
                 "memory_reactivations": evolution.get("memory_reactivations"),
+                "correct_reactivation_rate": active_governance.get("correct_reactivation_rate"),
                 "harmful_active_memory_exposure_n": active_governance.get(
                     "harmful_active_memory_exposure_n"
                 ),
@@ -631,6 +633,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "future_audit_mean_harmful_exposure_observations",
         "memory_supersessions",
         "memory_reactivations",
+        "correct_reactivation_rate",
         "harmful_active_memory_exposure_n",
         "stale_memory_retention_rate",
         "selective_forgetting_precision",

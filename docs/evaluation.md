@@ -456,7 +456,8 @@ For schedules with revocation or recurrence, the runner records:
 - false retirement of a memory whose tags remain valid in the current regime;
 - exact-version counterfactual audit coverage and budget utilization;
 - learner-visible retirement latency and post-hoc oracle delta;
-- predecessor reactivation and replay/probation reacquisition correctness;
+- early-retirement count/precision, predecessor reactivation correctness, and
+  replay/probation reacquisition correctness;
 - control requests/tokens and the full budget-ledger total.
 
 The benchmark metadata supplies only post-hoc valid/stale tags. Online

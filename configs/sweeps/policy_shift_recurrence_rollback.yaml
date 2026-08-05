@@ -9,9 +9,14 @@ variants:
   current_full:
     evolution.active_audit_early_retire_enabled: false
     evolution.active_audit_restore_predecessors: false
-  sequential_causal_retirement:
+  sequential_only:
     evolution.active_audit_early_retire_enabled: true
     evolution.active_audit_early_retire_delta: -0.75
     evolution.active_audit_restore_predecessors: false
-# 2 variants * 5 seeds * 2 noise levels * 2 burst lengths = 40 demo runs.
-max_runs: 40
+  recurrence_aware_rollback:
+    evolution.active_audit_early_retire_enabled: true
+    evolution.active_audit_early_retire_delta: -0.75
+    evolution.active_audit_restore_predecessors: true
+# 3 variants * 5 seeds * 2 noise levels * 2 burst lengths = 60 demo runs.
+max_runs: 60
+
