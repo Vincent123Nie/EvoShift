@@ -47,3 +47,34 @@ rerun only as a secondary consistency check.
 
 No threshold, seed, metric definition, or bootstrap setting may change after
 the held-out sweep begins.
+
+## Held-out result
+
+The frozen sweep completed in `runs/sweeps/20260805T104145Z` without changing
+the candidate, seeds, grid, metrics, or bootstrap procedure.
+
+| Condition | Current full | Active circuit | Bidirectional-15 | Paired score delta vs current |
+|---|---:|---:|---:|---:|
+| clean | 0.9306 | 0.9444 | 0.9514 | `+0.0208 [+0.0111, +0.0319]` |
+| attack burst | 0.9306 | 0.9444 | 0.9514 | `+0.0208 [+0.0111, +0.0319]` |
+| 10% noise | 0.9167 | 0.9208 | 0.9250 | `+0.0083 [-0.0028, +0.0194]` |
+| 10% noise + attack burst | 0.9056 | 0.9111 | 0.9153 | `+0.0097 [-0.0014, +0.0208]` |
+
+The candidate improved every score point estimate, improved changed-case
+success, preserved invariant retention, and reduced old-rule leakage. Revival
+confirmation precision was `1.0` whenever revival executed. False retirement,
+false revival, poison persistence, and unconfirmed persistent transitions did
+not increase.
+
+## Decision
+
+Reject `dormant_revival_min_retired_age: 15` as the adoptable default. The
+clean and burst-only intervals pass, but the score intervals under feedback
+noise cross zero. This violates the pre-registered requirement that all four
+held-out lower bounds be non-negative. The candidate must not be merged into
+`main` or represented as confirmed.
+
+The positive point estimates and changed-case intervals make dormant revival a
+promising component, but another cooldown adjustment is not justified by this
+experiment. The next experiment should address the episode-level evidence and
+state-machine failures that prevented consistent noisy-condition gains.
