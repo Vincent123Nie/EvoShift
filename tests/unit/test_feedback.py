@@ -107,6 +107,105 @@ def test_dynamic_feedback_trust_quarantines_isolated_conflict_and_accepts_persis
     assert model.snapshot()["confirmed_context_changes"] == 1
 
 
+def test_dynamic_feedback_change_requires_temporally_diverse_recurrence() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.90,
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_min_consistent_observations=2,
+            dynamic_feedback_change_min_span=2,
+            dynamic_feedback_cold_start_trust=0.40,
+            dynamic_feedback_conflict_trust=0.10,
+        )
+    )
+
+    def sample(sample_id: str, label: str) -> BenchmarkSample:
+        return BenchmarkSample(
+            sample_id=sample_id,
+            prompt="Refund case: days 8 to 14",
+            reference="hidden-oracle-not-used",
+            metadata={
+                "feedback_source": "shared_portal",
+                "feedback_context": "refund:any:days_8_14",
+                "feedback_reference": label,
+            },
+        )
+
+    first = model.assess(sample("one", "DENY"), episode_index=10)
+    consensus = model.assess(sample("two", "DENY"), episode_index=11)
+    pending = model.assess(sample("three", "APPROVE"), episode_index=84)
+    adjacent = model.assess(sample("four", "APPROVE"), episode_index=85)
+    confirmed = model.assess(sample("five", "APPROVE"), episode_index=86)
+
+    assert first.reason == "dynamic_cold_start"
+    assert consensus.reason == "dynamic_initial_consensus"
+    assert pending.reason == "dynamic_pending_change"
+    assert adjacent.reason == "dynamic_pending_change_span"
+    assert adjacent.trust == 0.10
+    assert confirmed.reason == "dynamic_confirmed_change"
+    assert confirmed.trust > 0.60
+    assert model.snapshot()["temporally_deferred_changes"] == 1
+    assert model.snapshot()["confirmed_context_changes"] == 1
+
+
+def test_dynamic_feedback_change_span_resets_after_pending_evidence_is_cancelled() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_change_min_span=2,
+        )
+    )
+
+    def sample(sample_id: str, label: str) -> BenchmarkSample:
+        return BenchmarkSample(
+            sample_id=sample_id,
+            prompt="case",
+            reference="hidden",
+            metadata={
+                "feedback_source": "portal",
+                "feedback_context": "case",
+                "feedback_reference": label,
+            },
+        )
+
+    model.assess(sample("one", "DENY"), episode_index=0)
+    model.assess(sample("two", "DENY"), episode_index=1)
+    model.assess(sample("three", "APPROVE"), episode_index=10)
+    deferred = model.assess(sample("four", "APPROVE"), episode_index=11)
+    recovered = model.assess(sample("five", "DENY"), episode_index=12)
+    model.assess(sample("six", "APPROVE"), episode_index=20)
+    deferred_again = model.assess(sample("seven", "APPROVE"), episode_index=21)
+    confirmed = model.assess(sample("eight", "APPROVE"), episode_index=22)
+
+    assert deferred.reason == "dynamic_pending_change_span"
+    assert recovered.reason == "dynamic_consistent"
+    assert deferred_again.reason == "dynamic_pending_change_span"
+    assert confirmed.reason == "dynamic_confirmed_change"
+    assert model.snapshot()["temporally_deferred_changes"] == 2
+
+
+def test_dynamic_feedback_change_span_requires_global_episode_index() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_change_min_span=2,
+        )
+    )
+    sample = BenchmarkSample(
+        sample_id="sample",
+        prompt="case",
+        reference="hidden",
+        metadata={
+            "feedback_source": "portal",
+            "feedback_context": "case",
+            "feedback_reference": "DENY",
+        },
+    )
+
+    with pytest.raises(ValueError, match="episode_index is required"):
+        model.assess(sample)
+
+
 def test_dynamic_feedback_trust_bounds_context_state() -> None:
     model = FeedbackTrustModel(
         EvolutionConfig(

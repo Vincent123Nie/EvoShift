@@ -476,6 +476,76 @@ async def test_lineage_counterfactual_control_removes_coarse_memory_off_loss(
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_temporally_diverse_recurrence_blocks_adjacent_noise_failure_chain(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    lineage_config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 122}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.10, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "active_audit_circuit_breaker_enabled": True,
+                    "active_audit_lineage_control_enabled": True,
+                    "dormant_revival_enabled": True,
+                    "dormant_revival_min_retired_age": 15,
+                }
+            ),
+        }
+    )
+    chain_safe_config = lineage_config.model_copy(
+        update={
+            "evolution": lineage_config.evolution.model_copy(
+                update={
+                    "dynamic_feedback_change_min_span": 2,
+                    "dormant_revival_status_index_enabled": True,
+                }
+            )
+        }
+    )
+
+    lineage = await EvoShiftRunner(
+        lineage_config,
+        create_benchmark(lineage_config.benchmark, root=Path.cwd(), seed=122),
+        workdir=Path.cwd(),
+    ).run()
+    chain_safe = await EvoShiftRunner(
+        chain_safe_config,
+        create_benchmark(chain_safe_config.benchmark, root=Path.cwd(), seed=122),
+        workdir=Path.cwd(),
+    ).run()
+
+    governance = chain_safe.metrics["active_memory_governance"]
+    circuit = governance["circuit_breaker"]
+    revival = governance["dormant_revival"]
+    assert chain_safe.metrics["overall"]["mean_score"] > lineage.metrics["overall"]["mean_score"]
+    assert chain_safe.metrics["feedback_trust_model"]["temporally_deferred_changes"] >= 1
+    assert chain_safe.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+    assert governance["false_retirement_rate"] == 0.0
+    assert circuit["confirmation_precision"] == 1.0
+    assert revival["false_confirmation_rate"] == 0.0
+
+    connection = sqlite3.connect(chain_safe.run_dir / "state.sqlite3")
+    try:
+        quarantined_reasons = [
+            json.loads(row[0])["reason"]
+            for row in connection.execute(
+                "SELECT payload_json FROM evolution_events WHERE event_type='feedback_quarantined'"
+            )
+        ]
+    finally:
+        connection.close()
+    assert "dynamic_pending_change_span" in quarantined_reasons
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_quarantined_feedback_can_only_reach_memory_through_verified_shadow_lane(
     tmp_path: Path,
 ) -> None:

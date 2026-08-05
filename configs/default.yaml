@@ -53,6 +53,7 @@ evolution:
   feedback_mode: reward_only
   feedback_default_trust: 1.0
   feedback_source_trust: {}
+  dynamic_feedback_change_min_span: 0
   min_feedback_trust_for_drift: 0.60
   min_feedback_trust_for_memory_update: 0.60
   min_feedback_trust_for_candidate: 0.60
@@ -85,6 +86,7 @@ evolution:
   dormant_revival_delta: 0.75
   dormant_revival_max_age: 8
   dormant_revival_min_retired_age: 18
+  dormant_revival_status_index_enabled: false
 
 benchmark:
   kind: synthetic_shift

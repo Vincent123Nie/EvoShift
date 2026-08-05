@@ -81,6 +81,7 @@ class EvolutionConfig(ConfigModel):
     dynamic_feedback_trust_enabled: bool = False
     dynamic_feedback_context_field: str = "feedback_context"
     dynamic_feedback_min_consistent_observations: int = Field(default=2, ge=2, le=100)
+    dynamic_feedback_change_min_span: int = Field(default=0, ge=0, le=10000)
     dynamic_feedback_cold_start_trust: float = Field(default=0.40, ge=0.0, le=1.0)
     dynamic_feedback_conflict_trust: float = Field(default=0.10, ge=0.0, le=1.0)
     dynamic_feedback_prior_strength: float = Field(default=8.0, ge=0.0, le=1000.0)
@@ -129,6 +130,7 @@ class EvolutionConfig(ConfigModel):
     dormant_revival_delta: float = Field(default=0.75, ge=0.0, le=1.0)
     dormant_revival_max_age: int = Field(default=8, ge=1, le=10000)
     dormant_revival_min_retired_age: int = Field(default=18, ge=1, le=10000)
+    dormant_revival_status_index_enabled: bool = False
     conflict_supersession_enabled: bool = True
 
     @model_validator(mode="after")
@@ -209,6 +211,8 @@ class EvolutionConfig(ConfigModel):
             raise ValueError("lineage control requires the active audit circuit breaker")
         if self.dormant_revival_enabled and not self.dynamic_feedback_trust_enabled:
             raise ValueError("dormant memory revival requires dynamic feedback trust")
+        if self.dormant_revival_status_index_enabled and not self.dormant_revival_enabled:
+            raise ValueError("status-indexed lifecycle requires dormant memory revival")
         if (
             self.dormant_revival_enabled
             and self.dormant_revival_min_trust >= self.min_feedback_trust_for_active_audit

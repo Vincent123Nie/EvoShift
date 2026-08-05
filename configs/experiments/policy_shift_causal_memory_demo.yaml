@@ -57,6 +57,7 @@ evolution:
   dynamic_feedback_trust_enabled: true
   dynamic_feedback_context_field: feedback_context
   dynamic_feedback_min_consistent_observations: 2
+  dynamic_feedback_change_min_span: 0
   dynamic_feedback_cold_start_trust: 0.40
   dynamic_feedback_conflict_trust: 0.10
   dynamic_feedback_prior_strength: 8.0
@@ -96,6 +97,7 @@ evolution:
   dormant_revival_delta: 0.75
   dormant_revival_max_age: 8
   dormant_revival_min_retired_age: 18
+  dormant_revival_status_index_enabled: false
   conflict_supersession_enabled: true
 
 evaluation:

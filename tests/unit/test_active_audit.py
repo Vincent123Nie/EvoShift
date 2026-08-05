@@ -189,6 +189,8 @@ def test_circuit_breaker_configuration_requires_dynamic_trust_and_lower_floor() 
 def test_dormant_revival_configuration_requires_dynamic_trust_and_lower_floor() -> None:
     with pytest.raises(ValueError, match="requires dynamic feedback trust"):
         EvolutionConfig(dormant_revival_enabled=True)
+    with pytest.raises(ValueError, match="requires dormant memory revival"):
+        EvolutionConfig(dormant_revival_status_index_enabled=True)
     with pytest.raises(ValueError, match="revival trust floor"):
         EvolutionConfig(
             dynamic_feedback_trust_enabled=True,

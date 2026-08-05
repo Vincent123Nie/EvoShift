@@ -108,6 +108,7 @@ _AGGREGATE_FIELDS = {
     "revival_mean_oracle_intervention_delta": "revival_mean_oracle_intervention_delta",
     "revival_control_requests": "revival_control_requests",
     "confirmed_context_changes": "confirmed_context_changes",
+    "temporally_deferred_changes": "temporally_deferred_changes",
     "total_requests": "total_requests",
     "total_tokens": "total_tokens",
 }
@@ -380,6 +381,7 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 ),
                 "revival_control_requests": revival.get("control_requests"),
                 "confirmed_context_changes": trust_model.get("confirmed_context_changes"),
+                "temporally_deferred_changes": trust_model.get("temporally_deferred_changes"),
             }
         )
     aggregates = aggregate_sweep(rows)
@@ -829,6 +831,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "revival_mean_oracle_intervention_delta",
         "revival_control_requests",
         "confirmed_context_changes",
+        "temporally_deferred_changes",
         "run_dir",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:

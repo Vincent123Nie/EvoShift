@@ -39,6 +39,7 @@ class DormantMemoryRevival:
         self.delta_threshold = config.dormant_revival_delta
         self.max_age = config.dormant_revival_max_age
         self.min_retired_age = config.dormant_revival_min_retired_age
+        self.status_indexed = config.dormant_revival_status_index_enabled
         self._pending: dict[tuple[str, str], PendingRevivalCanary] = {}
         self.probes = 0
         self.registrations = 0
@@ -141,6 +142,7 @@ class DormantMemoryRevival:
             "delta_threshold": self.delta_threshold,
             "max_age": self.max_age,
             "min_retired_age": self.min_retired_age,
+            "status_indexed": self.status_indexed,
             "probes": self.probes,
             "registrations": self.registrations,
             "interventions": self.interventions,

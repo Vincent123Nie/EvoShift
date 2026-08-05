@@ -262,6 +262,56 @@ def test_dormant_revival_rejects_non_latest_retired_version(tmp_path: Path) -> N
     store.close()
 
 
+def test_status_indexed_revival_survives_newer_rejected_draft(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store, status_indexed_lifecycle=True)
+    retired = _memory("rule", "refund policy", "Use the recurring rule.").model_copy(
+        update={"status": MemoryStatus.RETIRED}
+    )
+    store.save_memory(retired)
+    store.save_memory(
+        retired.model_copy(
+            update={
+                "version": 2,
+                "status": MemoryStatus.REJECTED,
+                "directive": "Rejected newer draft.",
+            }
+        )
+    )
+
+    reactivated = manager.reactivate_retired(retired)
+
+    assert reactivated is not None
+    assert reactivated.version == 1
+    assert manager.active() == [reactivated]
+    assert store.get_memory("rule").status == MemoryStatus.REJECTED  # type: ignore[union-attr]
+
+    manager.record_outcome(["rule"], success=True, policy=PolicyGenome())
+    updated = store.get_memory("rule", version=1)
+    assert updated is not None
+    assert updated.use_count == reactivated.use_count + 1
+    retired_again = manager.apply_active_audit(updated, retire=True)
+    assert [(item.memory_id, item.version) for item in retired_again.rolled_back] == [("rule", 1)]
+    store.close()
+
+
+def test_status_indexed_revival_requires_latest_exact_retired_version(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store, status_indexed_lifecycle=True)
+    retired_v1 = _memory("rule", "refund policy", "Use rule one.").model_copy(
+        update={"status": MemoryStatus.RETIRED}
+    )
+    retired_v2 = retired_v1.model_copy(update={"version": 2, "directive": "Use rule two."})
+    rejected_v3 = retired_v2.model_copy(update={"version": 3, "status": MemoryStatus.REJECTED})
+    store.save_memory(retired_v1)
+    store.save_memory(retired_v2)
+    store.save_memory(rejected_v3)
+
+    assert manager.reactivate_retired(retired_v1) is None
+    assert manager.reactivate_retired(retired_v2) is not None
+    store.close()
+
+
 def test_probation_memory_is_retrievable_without_superseding_prior_rule(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
     manager = MemoryManager(store)

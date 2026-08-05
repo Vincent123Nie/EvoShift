@@ -172,7 +172,12 @@ class EvoShiftRunner:
             store.save_policy(policy)
             for item in self.initial_memories:
                 store.save_memory(item)
-            memory = MemoryManager(store)
+            memory = MemoryManager(
+                store,
+                status_indexed_lifecycle=(
+                    self.config.evolution.dormant_revival_status_index_enabled
+                ),
+            )
             behavior = behavior_for(self.config.algorithm)
             agent = MemoryAgent(client, self.config.provider, memory)
             critic = ExperienceCritic(client, self.config.provider, self.config.evolution)
@@ -634,10 +639,15 @@ class EvoShiftRunner:
                         )
                 active_before = memory.active()
                 known_before = store.list_memories()
+                retired_before = (
+                    store.list_memories([MemoryStatus.RETIRED])
+                    if self.config.evolution.dormant_revival_status_index_enabled
+                    else known_before
+                )
                 superseded_before = store.list_memories([MemoryStatus.SUPERSEDED])
                 occupied_memory_scopes = {item.scope for item in active_before}
                 latest_retired_by_scope: Dict[str, MemoryItem] = {}
-                for known_memory in known_before:
+                for known_memory in retired_before:
                     known_key = (known_memory.memory_id, known_memory.version)
                     if (
                         known_memory.status != MemoryStatus.RETIRED
@@ -706,7 +716,7 @@ class EvoShiftRunner:
                         episode_index=index,
                         retired_latest_versions={
                             (item.memory_id, item.version)
-                            for item in known_before
+                            for item in retired_before
                             if item.status == MemoryStatus.RETIRED
                             and item.scope not in occupied_memory_scopes
                             and (item.memory_id, item.version) in latest_retired_keys
@@ -803,7 +813,7 @@ class EvoShiftRunner:
                     if active_before and prediction.retrieved
                     else (1.0 if active_before else 0.0)
                 )
-                assessment = trust_model.assess(sample)
+                assessment = trust_model.assess(sample, episode_index=index)
                 feedback_eligible = (
                     assessment.trust >= self.config.evolution.min_feedback_trust_for_candidate
                 )
@@ -1318,7 +1328,7 @@ class EvoShiftRunner:
                 ):
                     eligible_dormant = [
                         item
-                        for item in known_before
+                        for item in retired_before
                         if item.status == MemoryStatus.RETIRED
                         and item.scope not in occupied_memory_scopes
                         and (item.memory_id, item.version) in latest_retired_keys
@@ -1380,6 +1390,14 @@ class EvoShiftRunner:
                                 "episode_index": index,
                                 "source": assessment.source,
                                 "context": assessment.context,
+                                "candidate_status": dormant_memory.status.value,
+                                "status_indexed_candidate_view": (
+                                    self.config.evolution.dormant_revival_status_index_enabled
+                                ),
+                                "latest_retired_scope_key": [
+                                    dormant_memory.memory_id,
+                                    dormant_memory.version,
+                                ],
                                 "retired_index": retired_memory_indices[
                                     (dormant_memory.memory_id, dormant_memory.version)
                                 ],
@@ -2280,6 +2298,7 @@ class EvoShiftRunner:
                                 if dormant_revival is not None
                                 else {
                                     "enabled": False,
+                                    "status_indexed": False,
                                     "probes": 0,
                                     "registrations": 0,
                                     "interventions": 0,
