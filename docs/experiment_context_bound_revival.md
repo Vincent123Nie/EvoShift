@@ -38,6 +38,11 @@ registrations, registration precision, confirmation coverage, provisional
 valid-memory retirement exposure, and expiry rate. These metrics may inspect
 oracle tags only after the online action and may never drive a transition.
 
+Track revival path effects as well: confirmation coverage, applications after
+confirmed revival, and post-revival harmful exposure. Exact context agreement
+is only a guardrail, not proof that a globally reactivated composite card is
+safe inside every subcase of that context.
+
 ## Frozen targeted matrix
 
 Use seeds `[233, 255]`, feedback noise `0.10`, attack bursts `[0, 2]`, and four
@@ -60,6 +65,10 @@ development matrix only if:
 - revival and retirement confirmation precision are `1.0` whenever defined;
 - no confirmed revival crosses its recorded retirement context;
 - mismatch exclusions are non-zero on the known seed-255 path;
+- post-revival harmful exposure is no higher than the unguarded sequential
+  variant;
+- if the unguarded variant has a context-consistent confirmed revival, the
+  candidate must not reduce confirmation coverage for those safe paths;
 - unconfirmed persistent transitions remain zero;
 - the new path metrics are present and provisional valid-memory exposure does
   not exceed the unguarded sequential variant.
