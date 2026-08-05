@@ -227,6 +227,9 @@ async def test_causal_memory_governance_forgets_stale_and_reacquires_recurring_r
         > baseline_governance["selective_forgetting_recall"]
     )
     assert governance["false_retirement_rate"] == 0.0
+    assert governance["early_causal_retirements"] >= 1
+    assert governance["early_causal_retirement_precision"] == 1.0
+    assert governance["early_causal_false_retirement_rate"] == 0.0
     assert (
         governance["harmful_active_memory_exposure_n"]
         < baseline_governance["harmful_active_memory_exposure_n"]
@@ -241,6 +244,8 @@ async def test_causal_memory_governance_forgets_stale_and_reacquires_recurring_r
     )
     assert governance["reacquisitions"] >= 1
     assert governance["correct_reacquisition_rate"] == 1.0
+    assert governance["reactivations"] >= 1
+    assert governance["correct_reactivation_rate"] == 1.0
     assert (
         causal.metrics["policy_shift"]["invariant_retention_rate"]
         >= baseline.metrics["policy_shift"]["invariant_retention_rate"]

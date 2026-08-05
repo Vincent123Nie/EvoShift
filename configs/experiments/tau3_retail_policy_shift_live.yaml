@@ -91,8 +91,10 @@ evolution:
   active_audit_min_observations: 2
   active_audit_min_negative_observations: 2
   active_audit_retire_mean_delta: -0.50
+  active_audit_early_retire_enabled: true
+  active_audit_early_retire_delta: -0.75
   active_audit_cooldown_episodes: 0
-  active_audit_restore_predecessors: false
+  active_audit_restore_predecessors: true
   conflict_supersession_enabled: true
 
 evaluation:

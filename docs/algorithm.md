@@ -443,18 +443,23 @@ observations, delta sum, and last audit index. Hidden oracle scores are not
 accepted by `ActiveMemoryAuditor.observe`; the runner attaches them later for
 precision, false-retirement, and harm metrics.
 
-The default retirement rule requires two negative observations and a mean delta
-at or below `active_audit_retire_mean_delta`. At most
+The ordinary retirement rule requires two negative observations and a mean
+delta at or below `active_audit_retire_mean_delta`. The adopted PolicyShift
+configuration adds a stricter fast path: one exact-version audit may retire a
+card only when the same episode also triggers the shift detector and the
+learner-visible delta is at or below `active_audit_early_retire_delta`. At most
 `active_audit_max_per_episode` controls are issued. Probation memories are
 ineligible, so future admission audit and active governance never compete for
 the same version.
 
-If a retired successor names a superseded predecessor, active causal retirement
-does not restore it immediately. A multi-step policy reversion can invalidate
-both. Instead, the candidate pool releases the predecessor signature while
-SQLite retains provenance; a recurring rule must be proposed as a new version
-and pass replay plus probation again. Eager restoration remains an explicit
-ablation.
+For explicitly versioned policy recurrence, the adopted configuration restores
+only predecessor IDs declared in the retired successor's
+`supersedes_memory_ids`, and only when the predecessor remains `SUPERSEDED`.
+Successor retirement and predecessor activation are written in one SQLite
+transaction. Rejected, unrelated, probationary, and already-active cards cannot
+enter through this path. Restored cards remain subject to ordinary utility and
+causal retirement, so a false recurrence can be corrected online. Hidden
+policy labels and oracle stale/valid tags are metrics-only.
 
 ## Slow-loop policy mutation
 

@@ -71,9 +71,9 @@ validation decision, event, and rollback is persisted with provenance.
   likelihood-ratio e-process; trusted evidence keeps an independent fast path.
 - Probationary memory, later memory-on/off counterfactual audit, asymmetric
   harm stopping, stream-end expiration, and explicit realized-audit coverage.
-- Conflict-aware supersession with predecessor reactivation after legacy
-  posterior rollback; causal retirement instead requires verified
-  reacquisition because the predecessor may also be stale.
+- Conflict-aware supersession with atomic predecessor restoration after a
+  shift-gated, exact-version causal rollback; restored cards remain under
+  online utility and causal monitoring.
 - Continuous active-memory governance with budgeted exact-version
   leave-one-out controls, persisted learner-visible causal ledgers, selective
   retirement, and replay/probation-based recurring-rule reacquisition.
@@ -193,12 +193,19 @@ evoshift run --config configs/experiments/policy_shift_causal_memory_demo.yaml
 evoshift sweep --spec configs/sweeps/policy_shift_causal_memory_baselines.yaml
 evoshift sweep --spec configs/sweeps/policy_shift_causal_memory_ablations.yaml
 evoshift sweep --spec configs/sweeps/policy_shift_causal_memory_stress.yaml
+evoshift sweep --spec configs/sweeps/policy_shift_recurrence_rollback.yaml
 ```
 
 This schedule tests whether an already-active rule is selectively forgotten
 when policy versions are revoked and whether a recurring rule can be reacquired
 through normal verification. Oracle regime tags are metrics-only; online
 retirement uses trusted learner-visible memory-on/off deltas.
+
+The recurrence-aware rollback experiment improves deterministic mean score from
+`0.9167` to `0.9306` in clean streams and from `0.8958` to `0.9194` under
+feedback noise, with positive paired hierarchical confidence intervals and no
+protected or false-retirement regression. These are mechanism results, not a
+public-model SOTA claim.
 
 ## Reproducibility and quality gates
 
@@ -213,12 +220,12 @@ python scripts/verify_bbh_manifest.py
 
 Verified locally on 2026-08-05:
 
-- 139 tests passed;
-- branch-aware coverage: 84.20% (`fail_under = 80`);
-- Ruff and strict mypy passed over 51 source files;
+- 142 tests passed;
+- branch-aware coverage: 84.32% (`fail_under = 80`);
+- Ruff and strict mypy passed over 52 source files;
 - source and wheel distributions built successfully;
-- all 40 experiment, benchmark fragment, provider fragment, and sweep YAML
-  files passed schema/loading validation, including 846 expanded sweep
+- all 42 experiment, benchmark fragment, provider fragment, and sweep YAML
+  files passed schema/loading validation, including 946 expanded sweep
   assignments;
 - the OpenAI-compatible provider contract suite passed, and an opt-in live
   smoke against a private compatible gateway returned exactly `OK`;
@@ -260,6 +267,7 @@ dataset hash, and comparison artifact.
 - [Robust-feedback experiment](docs/experiment_robust_feedback_promotion.md)
 - [Dynamic-trust and future-audit experiment](docs/experiment_dynamic_trust_conflict_memory.md)
 - [Active-memory causal-governance experiment](docs/experiment_causal_memory_governance.md)
+- [Recurrence-aware causal rollback experiment](docs/experiment_recurrence_aware_rollback.md)
 
 ## Security
 

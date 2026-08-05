@@ -251,6 +251,9 @@ class EvoShiftRunner:
             active_audit_retirements = 0
             active_audit_correct_retirements = 0
             active_audit_false_retirements = 0
+            active_audit_early_retirements = 0
+            active_audit_early_correct_retirements = 0
+            active_audit_early_false_retirements = 0
             active_audit_control_requests = 0
             active_audit_control_input_tokens = 0
             active_audit_control_output_tokens = 0
@@ -555,6 +558,7 @@ class EvoShiftRunner:
                             episode_index=index,
                             feedback_control=control_feedback.primary,
                             feedback_candidate=feedback_score.primary,
+                            shift_detected=shift.detected,
                         )
                         audit_outcome = memory.apply_active_audit(
                             audit_decision.memory_after,
@@ -587,6 +591,9 @@ class EvoShiftRunner:
                                     audit_decision.memory_after.causal_mean_delta
                                 ),
                                 "retirement_decision": audit_decision.retire,
+                                "early_retirement": audit_decision.reason.startswith(
+                                    "early retire:"
+                                ),
                                 "retirement_applied": actually_retired,
                                 "reason": audit_decision.reason,
                                 "online_decision_uses": "learner_visible_feedback_only",
@@ -600,6 +607,8 @@ class EvoShiftRunner:
                             memory_retired_this_episode = True
                             rollbacks += 1
                             active_audit_retirements += 1
+                            early_retirement = audit_decision.reason.startswith("early retire:")
+                            active_audit_early_retirements += int(early_retirement)
                             candidate_pool.mark_memory_retired(retired)
                             for predecessor_id in retired.supersedes_memory_ids:
                                 predecessor = store.get_memory(predecessor_id)
@@ -611,6 +620,11 @@ class EvoShiftRunner:
                                 stale_pair_active_at_last_opportunity[pair] = False
                             else:
                                 active_audit_false_retirements += 1
+                            if early_retirement:
+                                if is_oracle_stale:
+                                    active_audit_early_correct_retirements += 1
+                                else:
+                                    active_audit_early_false_retirements += 1
                             first_stale = stale_pair_first_active_index.get(pair)
                             if first_stale is not None:
                                 active_audit_retirement_latencies.append(index - first_stale + 1)
@@ -1360,6 +1374,17 @@ class EvoShiftRunner:
                             else 0.0
                         ),
                         "causal_retirements": active_audit_retirements,
+                        "early_causal_retirements": active_audit_early_retirements,
+                        "early_causal_retirement_precision": (
+                            active_audit_early_correct_retirements / active_audit_early_retirements
+                            if active_audit_early_retirements
+                            else 0.0
+                        ),
+                        "early_causal_false_retirement_rate": (
+                            active_audit_early_false_retirements / active_audit_early_retirements
+                            if active_audit_early_retirements
+                            else 0.0
+                        ),
                         "selective_forgetting_precision": (
                             active_audit_correct_retirements / active_audit_retirements
                             if active_audit_retirements
