@@ -49,6 +49,10 @@ window and model-call budget with an observable historical-compatibility lane:
 - explicitly configured `benchmark.protected_phases` consume this same safety
   quota first; they are deployment contracts, not inferred invariants;
 - fill the remainder with the existing relevance-ranked current-regime replay;
+- if current-regime examples plus distinct-context anchors do not fill the
+  fixed window, backfill deterministically with the most recent remaining
+  trusted pre-boundary episodes; these are still ordinary global-regression
+  examples and receive no protected label;
 - historical context anchors are not labelled protected and receive no special
   promotion rule; they enter the existing global mean, confidence, and
   regression-rate gates like every other replay example;
