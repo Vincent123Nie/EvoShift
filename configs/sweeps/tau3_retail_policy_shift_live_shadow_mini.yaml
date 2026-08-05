@@ -1,0 +1,21 @@
+base_config: configs/experiments/tau3_retail_policy_shift_live.yaml
+seeds: [11]
+algorithms:
+  - evoshift
+grid:
+  benchmark.phase_size: [8]
+  benchmark.policy_schedule: [[v1, v2]]
+  benchmark.coverage_balanced: [true]
+  benchmark.coverage_min_per_slice: [2]
+  benchmark.feedback_noise_rate: [0.0]
+  benchmark.feedback_attack_burst_length: [0]
+variants:
+  current_full:
+    evolution.shadow_candidate_enabled: false
+    evolution.candidate_min_trusted_observations: 1
+  shadow_admission:
+    evolution.shadow_candidate_enabled: true
+    evolution.min_feedback_trust_for_shadow_candidate: 0.10
+    evolution.candidate_min_trusted_observations: 0
+# Same-model bounded diagnostic: 2 variants * 1 paired seed = 2 paid runs.
+max_runs: 2

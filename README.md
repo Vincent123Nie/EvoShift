@@ -67,6 +67,8 @@ validation decision, event, and rollback is persisted with provenance.
   per-context committed/pending labels, with no hidden-oracle online access.
 - Per-domain post-alarm-reset drift detectors, candidate evidence scheduling,
   current-regime ordinary replay, and cross-regime protected replay.
+- Lane-isolated low-trust shadow hypotheses with an explicit recurrence
+  likelihood-ratio e-process; trusted evidence keeps an independent fast path.
 - Probationary memory, later memory-on/off counterfactual audit, asymmetric
   harm stopping, stream-end expiration, and explicit realized-audit coverage.
 - Conflict-aware supersession with predecessor reactivation after legacy
@@ -205,12 +207,12 @@ python scripts/verify_bbh_manifest.py
 
 Verified locally on 2026-08-05:
 
-- 120 tests passed;
-- branch-aware coverage: 85.03% (`fail_under = 80`);
-- Ruff and strict mypy passed over 50 source files;
+- 139 tests passed;
+- branch-aware coverage: 84.20% (`fail_under = 80`);
+- Ruff and strict mypy passed over 51 source files;
 - source and wheel distributions built successfully;
-- all 31 experiment, benchmark fragment, provider fragment, and sweep YAML
-  files passed schema/loading validation, including 668 expanded sweep
+- all 40 experiment, benchmark fragment, provider fragment, and sweep YAML
+  files passed schema/loading validation, including 846 expanded sweep
   assignments;
 - the OpenAI-compatible provider contract suite passed, and an opt-in live
   smoke against a private compatible gateway returned exactly `OK`;

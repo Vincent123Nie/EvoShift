@@ -177,8 +177,17 @@ class EvoShiftRunner:
             )
             candidate_pool = CandidateEvidencePool(
                 min_observations=self.config.evolution.candidate_min_observations,
+                min_trusted_observations=(self.config.evolution.candidate_min_trusted_observations),
                 min_new_observations=(self.config.evolution.candidate_min_new_observations),
                 cooldown_episodes=self.config.evolution.candidate_cooldown_episodes,
+                shadow_eprocess_enabled=self.config.evolution.shadow_eprocess_enabled,
+                shadow_eprocess_null_match_probability=(
+                    self.config.evolution.shadow_eprocess_null_match_probability
+                ),
+                shadow_eprocess_alternative_match_probability=(
+                    self.config.evolution.shadow_eprocess_alternative_match_probability
+                ),
+                shadow_eprocess_alpha=self.config.evolution.shadow_eprocess_alpha,
             )
             candidate_pool.seed_accepted(memory.active())
             future_auditor = (
@@ -205,6 +214,15 @@ class EvoShiftRunner:
             candidate_deferred = 0
             candidate_replay_attempts = 0
             candidate_duplicate_active = 0
+            shadow_failure_extractions = 0
+            shadow_candidate_observations = 0
+            shadow_candidate_replay_attempts = 0
+            shadow_only_candidate_replay_attempts = 0
+            shadow_candidate_probations = 0
+            shadow_candidate_activations = 0
+            shadow_candidate_rejections = 0
+            shadow_candidate_expirations = 0
+            trusted_candidate_shadow_cooldown_bypasses = 0
             shift_detection_events = 0
             policy_evolution_suppressed_by_memory = 0
             supersession_events = 0
@@ -284,6 +302,9 @@ class EvoShiftRunner:
                 nonlocal future_audit_confirmed
                 nonlocal future_audit_rolled_back
                 nonlocal future_audit_expired
+                nonlocal shadow_candidate_activations
+                nonlocal shadow_candidate_rejections
+                nonlocal shadow_candidate_expirations
                 decision = outcome.decision
                 decisions.append(decision)
                 future_audit_outcomes.append(outcome)
@@ -295,9 +316,11 @@ class EvoShiftRunner:
                 )
                 candidate = current or outcome.audit.memory
                 evidence = audit_evidence.pop(candidate.memory_id, None)
+                shadow_derived = bool(evidence and evidence.has_shadow_evidence)
                 if outcome.completion_reason == "stream_end":
                     memory.reject(candidate)
                     future_audit_expired += 1
+                    shadow_candidate_expirations += int(shadow_derived)
                     if evidence is not None:
                         candidate_pool.mark_rejected(evidence)
                 elif decision.promote:
@@ -314,12 +337,14 @@ class EvoShiftRunner:
                     if activation_index is not None:
                         note_reacquisition(activation.active, activation_index)
                     future_audit_confirmed += 1
+                    shadow_candidate_activations += int(shadow_derived)
                     if evidence is not None:
                         candidate_pool.mark_accepted(evidence)
                 else:
                     future_audit_completed += 1
                     memory.reject(candidate)
                     future_audit_rolled_back += 1
+                    shadow_candidate_rejections += int(shadow_derived)
                     if evidence is not None:
                         candidate_pool.mark_rejected(evidence)
                 store.record_event(
@@ -330,6 +355,18 @@ class EvoShiftRunner:
                         "evidence_signature": outcome.audit.evidence_signature,
                         "decision": decision.model_dump(mode="json"),
                         "completion_reason": outcome.completion_reason,
+                        "shadow_derived": shadow_derived,
+                        "candidate_trust": (
+                            {
+                                "trusted_observations": evidence.trusted_observation_count,
+                                "shadow_observations": evidence.shadow_observation_count,
+                                "mean": evidence.mean_trust,
+                                "min": evidence.min_trust,
+                                "max": evidence.max_trust,
+                            }
+                            if evidence is not None
+                            else None
+                        ),
                         "online_decision_uses": "learner_visible_feedback_only",
                         "oracle_metrics_are_post_hoc_only": True,
                     },
@@ -374,6 +411,11 @@ class EvoShiftRunner:
                 assessment = trust_model.assess(sample)
                 feedback_eligible = (
                     assessment.trust >= self.config.evolution.min_feedback_trust_for_candidate
+                )
+                shadow_candidate_eligible = (
+                    self.config.evolution.shadow_candidate_enabled
+                    and assessment.trust
+                    >= self.config.evolution.min_feedback_trust_for_shadow_candidate
                 )
                 applied_ids = set(prediction.output.applied_memory_ids)
                 applied_active = [
@@ -635,7 +677,7 @@ class EvoShiftRunner:
                     )
 
                 should_extract = (
-                    feedback_eligible
+                    (feedback_eligible or shadow_candidate_eligible)
                     and (
                         not feedback_score.success
                         or (
@@ -651,6 +693,8 @@ class EvoShiftRunner:
                     and behavior.generate_experience
                     and should_extract
                 ):
+                    evidence_lane = "trusted" if feedback_eligible else "shadow"
+                    shadow_failure_extractions += int(evidence_lane == "shadow")
                     failure = await critic.analyze(episode, memory.active(), shift)
                     failures.append(failure)
                     artifacts.append_failure(failure)
@@ -658,7 +702,12 @@ class EvoShiftRunner:
                         run_id,
                         "failure_attribution",
                         failure.failure_id,
-                        failure.model_dump(mode="json"),
+                        {
+                            **failure.model_dump(mode="json"),
+                            "evidence_lane": evidence_lane,
+                            "feedback_trust": assessment.trust,
+                            "feedback_trust_reason": assessment.reason,
+                        },
                     )
                     if failure.proposed_memory is not None:
                         if not behavior.verify_before_promotion:
@@ -692,11 +741,21 @@ class EvoShiftRunner:
                             evidence = candidate_pool.observe(
                                 failure.proposed_memory,
                                 index,
+                                trust=assessment.trust,
+                                trusted=feedback_eligible,
+                            )
+                            shadow_candidate_observations += int(not feedback_eligible)
+                            shadow_cooldown_active = (
+                                feedback_eligible
+                                and candidate_pool.shadow_cooldown_would_block(evidence, index)
                             )
                             ready, readiness_reason = candidate_pool.readiness(
                                 evidence,
                                 index,
+                                trusted=feedback_eligible,
                             )
+                            if ready and shadow_cooldown_active:
+                                trusted_candidate_shadow_cooldown_bypasses += 1
                             if not ready:
                                 candidate_deferred += 1
                                 if readiness_reason == "duplicate_of_active_memory":
@@ -711,14 +770,40 @@ class EvoShiftRunner:
                                         "last_validation_observation_count": (
                                             evidence.last_validation_observation_count
                                         ),
+                                        "last_trusted_validation_observation_count": (
+                                            evidence.last_trusted_validation_observation_count
+                                        ),
+                                        "last_shadow_validation_observation_count": (
+                                            evidence.last_shadow_validation_observation_count
+                                        ),
+                                        "trusted_observation_count": (
+                                            evidence.trusted_observation_count
+                                        ),
+                                        "shadow_observation_count": (
+                                            evidence.shadow_observation_count
+                                        ),
+                                        "mean_evidence_trust": evidence.mean_trust,
+                                        "evidence_lane": evidence_lane,
+                                        "shadow_e_value": evidence.shadow_e_value,
+                                        "shadow_eprocess_ready": (evidence.shadow_eprocess_ready),
+                                        "shadow_eprocess_threshold": (
+                                            candidate_pool.shadow_eprocess_threshold
+                                        ),
                                     },
                                 )
                             else:
                                 regime_start = regime_starts.get(sample.domain)
                                 if self.config.evolution.candidate_replay_since_first_evidence:
+                                    lane_first_evidence = (
+                                        evidence.first_trusted_episode_index
+                                        if feedback_eligible
+                                        else evidence.first_shadow_episode_index
+                                    )
                                     regime_start = max(
                                         regime_start or 0,
-                                        evidence.first_episode_index,
+                                        lane_first_evidence
+                                        if lane_first_evidence is not None
+                                        else evidence.first_episode_index,
                                     )
                                 replay_buffer, _ = verifier.memory_buffer(
                                     evidence.candidate,
@@ -739,6 +824,11 @@ class EvoShiftRunner:
                                             "observation_count": evidence.observation_count,
                                             "replay_count": len(replay_buffer),
                                             "regime_start_index": regime_start,
+                                            "evidence_lane": evidence_lane,
+                                            "shadow_e_value": evidence.shadow_e_value,
+                                            "shadow_eprocess_ready": (
+                                                evidence.shadow_eprocess_ready
+                                            ),
                                         },
                                     )
                                 else:
@@ -751,11 +841,26 @@ class EvoShiftRunner:
                                             "status": candidate.status.value,
                                             "candidate_signature": evidence.signature,
                                             "observation_count": evidence.observation_count,
+                                            "evidence_lane": evidence_lane,
+                                            "shadow_e_value": evidence.shadow_e_value,
+                                            "shadow_eprocess_ready": (
+                                                evidence.shadow_eprocess_ready
+                                            ),
                                         },
                                     )
-                                    candidate_pool.mark_validated(evidence, index)
+                                    candidate_pool.mark_validated(
+                                        evidence,
+                                        index,
+                                        trusted=feedback_eligible,
+                                    )
                                     if candidate.status != MemoryStatus.REJECTED:
                                         candidate_replay_attempts += 1
+                                        shadow_candidate_replay_attempts += int(
+                                            evidence.has_shadow_evidence
+                                        )
+                                        shadow_only_candidate_replay_attempts += int(
+                                            not feedback_eligible
+                                        )
                                         decision = await verifier.validate_memory(
                                             candidate,
                                             episodes,
@@ -769,6 +874,9 @@ class EvoShiftRunner:
                                             if future_auditor is not None:
                                                 if future_auditor.is_pending(candidate.memory_id):
                                                     memory.reject(candidate)
+                                                    shadow_candidate_rejections += int(
+                                                        evidence.has_shadow_evidence
+                                                    )
                                                     candidate_pool.mark_rejected(evidence)
                                                     candidate_deferred += 1
                                                     store.record_event(
@@ -804,6 +912,9 @@ class EvoShiftRunner:
                                                     )
                                                     candidate_pool.mark_probation(evidence)
                                                     future_audit_registered += 1
+                                                    shadow_candidate_probations += int(
+                                                        evidence.has_shadow_evidence
+                                                    )
                                                     memory_promoted_this_episode = True
                                                     store.record_event(
                                                         run_id,
@@ -818,6 +929,25 @@ class EvoShiftRunner:
                                                             ),
                                                             "future_audit_min_observations": (
                                                                 self.config.evolution.future_audit_min_observations
+                                                            ),
+                                                            "shadow_derived": (
+                                                                evidence.has_shadow_evidence
+                                                            ),
+                                                            "trusted_observation_count": (
+                                                                evidence.trusted_observation_count
+                                                            ),
+                                                            "shadow_observation_count": (
+                                                                evidence.shadow_observation_count
+                                                            ),
+                                                            "mean_evidence_trust": (
+                                                                evidence.mean_trust
+                                                            ),
+                                                            "evidence_lane": evidence_lane,
+                                                            "shadow_e_value": (
+                                                                evidence.shadow_e_value
+                                                            ),
+                                                            "shadow_eprocess_ready": (
+                                                                evidence.shadow_eprocess_ready
                                                             ),
                                                         },
                                                     )
@@ -837,6 +967,13 @@ class EvoShiftRunner:
                                                 memory_promoted_this_episode = True
                                         else:
                                             memory.reject(candidate)
+                                            shadow_candidate_rejections += int(
+                                                evidence.has_shadow_evidence
+                                            )
+                                    else:
+                                        shadow_candidate_rejections += int(
+                                            evidence.has_shadow_evidence
+                                        )
 
                 if (
                     shift.detected
@@ -1090,6 +1227,23 @@ class EvoShiftRunner:
                         "candidate_replay_attempts": candidate_replay_attempts,
                         "candidate_deferred": candidate_deferred,
                         "candidate_duplicate_active": candidate_duplicate_active,
+                        "shadow_failure_extractions": shadow_failure_extractions,
+                        "shadow_candidate_observations": shadow_candidate_observations,
+                        "shadow_candidate_replay_attempts": (shadow_candidate_replay_attempts),
+                        "shadow_only_candidate_replay_attempts": (
+                            shadow_only_candidate_replay_attempts
+                        ),
+                        "shadow_candidate_probations": shadow_candidate_probations,
+                        "shadow_candidate_activations": shadow_candidate_activations,
+                        "shadow_candidate_rejections": shadow_candidate_rejections,
+                        "shadow_candidate_expirations": shadow_candidate_expirations,
+                        "shadow_eprocess_opportunities": (
+                            candidate_pool.shadow_eprocess_opportunities
+                        ),
+                        "shadow_eprocess_crossings": (candidate_pool.shadow_eprocess_crossings),
+                        "trusted_candidate_shadow_cooldown_bypasses": (
+                            trusted_candidate_shadow_cooldown_bypasses
+                        ),
                         "feedback_quarantined": feedback_quarantined,
                         "detector_domains": len(detectors),
                         "shift_detection_events": shift_detection_events,

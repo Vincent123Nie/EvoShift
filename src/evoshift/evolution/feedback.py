@@ -66,9 +66,7 @@ class FeedbackTrustModel:
             source.strip(): float(trust) for source, trust in config.feedback_source_trust.items()
         }
         self.dynamic_enabled = (
-            config.dynamic_feedback_trust_enabled
-            if dynamic_enabled is None
-            else dynamic_enabled
+            config.dynamic_feedback_trust_enabled if dynamic_enabled is None else dynamic_enabled
         )
         self.context_field = config.dynamic_feedback_context_field.strip()
         self.min_consistent = config.dynamic_feedback_min_consistent_observations

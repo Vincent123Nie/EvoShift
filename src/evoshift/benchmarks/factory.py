@@ -76,6 +76,8 @@ def create_benchmark(
             feedback_shared_source_name=config.feedback_shared_source_name,
             feedback_attack_burst_length=config.feedback_attack_burst_length,
             policy_schedule=config.policy_schedule or None,
+            coverage_balanced=config.coverage_balanced,
+            coverage_min_per_slice=config.coverage_min_per_slice,
             shuffle_within_phase=config.shuffle,
             limit=config.limit,
         )

@@ -158,9 +158,7 @@ def benchmark_list() -> None:
 
 @data_app.command("pull")
 def data_pull(
-    dataset: str = typer.Argument(
-        "bbh", help="Dataset kind: bbh or tau3-retail-policy."
-    ),
+    dataset: str = typer.Argument("bbh", help="Dataset kind: bbh or tau3-retail-policy."),
     config: Optional[Path] = typer.Option(None, help="Configuration YAML."),
     set_value: List[str] = typer.Option([], "--set", help="Override dotted key=value."),
 ) -> None:

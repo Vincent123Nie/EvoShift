@@ -260,6 +260,7 @@ async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
     assert matrix["runs"][0]["promotion_precision_basis"] == "not_applicable"
     assert matrix["runs"][0]["replay_estimated_promotion_precision"] is None
     assert matrix["runs"][0]["realized_promotion_precision"] is None
+    assert matrix["runs"][0]["phase_slice_counts"] == {}
     assert "run_id,algorithm,variant,seed" in (destination / "matrix.csv").read_text(
         encoding="utf-8"
     )

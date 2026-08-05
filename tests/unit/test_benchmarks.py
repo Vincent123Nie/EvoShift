@@ -319,6 +319,69 @@ def test_tau_retail_policy_shift_is_pinned_multi_rule_and_hidden(
     assert adapter.verify_cache()["official_tau3_benchmark"] is False
 
 
+def test_tau_retail_balanced_sampler_covers_nonempty_policy_slices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy, tasks, manifest = _fake_tau_sources()
+
+    for seed in (11, 22, 33, 44, 55):
+        adapter = TauRetailPolicyShiftBenchmark(
+            tmp_path / str(seed),
+            seed=seed,
+            phase_size=8,
+            policy_schedule=["v1", "v2"],
+            coverage_balanced=True,
+            coverage_min_per_slice=2,
+            feedback_noise_rate=0.0,
+            feedback_attack_burst_length=0,
+            expected_manifest=manifest,
+            expected_task_count=1,
+            required_policy_snippets=(),
+            required_task_actions=(),
+        )
+        monkeypatch.setattr(
+            adapter,
+            "_download_bytes",
+            lambda url: policy if url.endswith("policy.md") else tasks,
+        )
+
+        samples = adapter.load()
+        phase_zero = [sample for sample in samples if sample.phase == "phase_0"]
+        phase_one = [sample for sample in samples if sample.phase == "phase_1"]
+
+        assert sum(bool(item.metadata["future_change_case"]) for item in phase_zero) >= 2
+        assert sum(bool(item.metadata["protected"]) for item in phase_zero) >= 2
+        assert sum(bool(item.metadata["transition_case"]) for item in phase_one) >= 2
+        assert sum(bool(item.metadata["protected"]) for item in phase_one) >= 2
+        assert all(item.metadata["coverage_balanced"] is True for item in samples)
+
+
+def test_tau_retail_balanced_sampler_fails_when_coverage_is_impossible(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(DatasetError, match="balanced coverage requires"):
+        TauRetailPolicyShiftBenchmark(
+            tmp_path,
+            phase_size=8,
+            policy_schedule=["v1", "v2"],
+            coverage_balanced=True,
+            coverage_min_per_slice=5,
+        )
+
+
+def test_tau_retail_balanced_sampler_fails_for_undersized_nonempty_slice(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(DatasetError, match="insufficient unique cases"):
+        TauRetailPolicyShiftBenchmark(
+            tmp_path,
+            phase_size=10,
+            policy_schedule=["v1", "v2"],
+            coverage_balanced=True,
+            coverage_min_per_slice=5,
+        )
+
+
 def test_tau_retail_policy_shift_rejects_tampered_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -349,6 +412,8 @@ def test_tau_retail_policy_shift_factory_contract(tmp_path: Path) -> None:
         path="data/tau3",
         phase_size=12,
         policy_schedule=["v1", "v2"],
+        coverage_balanced=True,
+        coverage_min_per_slice=3,
     )
 
     adapter = create_benchmark(config, root=tmp_path, seed=9)
@@ -357,6 +422,8 @@ def test_tau_retail_policy_shift_factory_contract(tmp_path: Path) -> None:
     assert adapter.dataset_dir == tmp_path / "data/tau3/v1.0.1"
     assert adapter.phase_size == 12
     assert adapter.policy_schedule == ("v1", "v2")
+    assert adapter.coverage_balanced is True
+    assert adapter.coverage_min_per_slice == 3
 
 
 def _fake_bbh_payload() -> bytes:

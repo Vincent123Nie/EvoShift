@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -243,6 +244,80 @@ async def test_causal_memory_governance_forgets_stale_and_reacquires_recurring_r
     assert (
         causal.metrics["policy_shift"]["invariant_retention_rate"]
         >= baseline.metrics["policy_shift"]["invariant_retention_rate"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_quarantined_feedback_can_only_reach_memory_through_verified_shadow_lane(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 11}),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "shadow_candidate_enabled": True,
+                    "min_feedback_trust_for_shadow_candidate": 0.10,
+                    "candidate_min_trusted_observations": 0,
+                    "shadow_eprocess_enabled": True,
+                    "shadow_eprocess_null_match_probability": 0.25,
+                    "shadow_eprocess_alternative_match_probability": 0.75,
+                    "shadow_eprocess_alpha": 0.05,
+                }
+            ),
+        }
+    )
+    adapter = create_benchmark(config.benchmark, root=Path.cwd(), seed=11)
+
+    result = await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
+
+    evolution = result.metrics["evolution"]
+    assert evolution["shadow_failure_extractions"] > 0
+    assert evolution["shadow_candidate_observations"] > 0
+    assert evolution["shadow_candidate_replay_attempts"] > 0
+    assert evolution["shadow_candidate_probations"] > 0
+    assert evolution["shadow_eprocess_opportunities"] > 0
+    assert evolution["shadow_eprocess_crossings"] > 0
+    assert evolution["trusted_candidate_shadow_cooldown_bypasses"] >= 0
+    assert evolution["shadow_candidate_activations"] <= result.metrics["future_audit"]["confirmed"]
+
+    connection = sqlite3.connect(result.run_dir / "state.sqlite3")
+    try:
+        events = connection.execute(
+            "SELECT event_type, entity_id, payload_json FROM evolution_events "
+            "WHERE event_type IN "
+            "('memory_probation_started', 'future_counterfactual_audit', "
+            "'memory_promoted_unverified')"
+        ).fetchall()
+    finally:
+        connection.close()
+    assert all(event_type != "memory_promoted_unverified" for event_type, _, _ in events)
+    probation = {
+        entity_id: json.loads(payload)
+        for event_type, entity_id, payload in events
+        if event_type == "memory_probation_started"
+    }
+    future = {
+        entity_id: json.loads(payload)
+        for event_type, entity_id, payload in events
+        if event_type == "future_counterfactual_audit"
+    }
+    assert probation
+    assert set(probation) <= set(future)
+    assert all(payload["shadow_derived"] is True for payload in probation.values())
+    assert all(payload["candidate_trust"]["shadow_observations"] > 0 for payload in future.values())
+    assert all(
+        0.0
+        <= payload["candidate_trust"]["min"]
+        <= payload["candidate_trust"]["mean"]
+        <= payload["candidate_trust"]["max"]
+        <= 1.0
+        for payload in future.values()
     )
 
 

@@ -88,8 +88,15 @@ class EvolutionConfig(ConfigModel):
     min_feedback_trust_for_drift: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_memory_update: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_candidate: float = Field(default=0.60, ge=0.0, le=1.0)
+    shadow_candidate_enabled: bool = False
+    min_feedback_trust_for_shadow_candidate: float = Field(default=0.10, ge=0.0, le=1.0)
+    shadow_eprocess_enabled: bool = False
+    shadow_eprocess_null_match_probability: float = Field(default=0.25, gt=0.0, lt=1.0)
+    shadow_eprocess_alternative_match_probability: float = Field(default=0.75, gt=0.0, lt=1.0)
+    shadow_eprocess_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     min_feedback_trust_for_replay: float = Field(default=0.60, ge=0.0, le=1.0)
     candidate_min_observations: int = Field(default=1, ge=1, le=1000)
+    candidate_min_trusted_observations: int = Field(default=1, ge=0, le=1000)
     candidate_min_new_observations: int = Field(default=1, ge=1, le=1000)
     candidate_cooldown_episodes: int = Field(default=4, ge=0, le=10000)
     replay_current_regime_only: bool = True
@@ -128,6 +135,35 @@ class EvolutionConfig(ConfigModel):
             )
         if not self.dynamic_feedback_context_field.strip():
             raise ValueError("dynamic_feedback_context_field must not be empty")
+        if (
+            self.shadow_candidate_enabled
+            and self.min_feedback_trust_for_shadow_candidate > self.min_feedback_trust_for_candidate
+        ):
+            raise ValueError(
+                "shadow candidate trust threshold must not exceed the trusted candidate threshold"
+            )
+        if self.shadow_candidate_enabled and not self.paired_replay:
+            raise ValueError("shadow candidate admission requires paired replay")
+        if self.shadow_candidate_enabled and not self.future_audit_enabled:
+            raise ValueError("shadow candidate admission requires future audit")
+        if self.shadow_eprocess_enabled and not self.shadow_candidate_enabled:
+            raise ValueError("shadow e-process requires shadow candidate admission")
+        if (
+            self.shadow_eprocess_enabled
+            and self.shadow_eprocess_alternative_match_probability
+            <= self.shadow_eprocess_null_match_probability
+        ):
+            raise ValueError(
+                "shadow e-process alternative probability must exceed the null probability"
+            )
+        if (
+            self.shadow_candidate_enabled
+            and self.min_feedback_trust_for_replay < self.min_feedback_trust_for_candidate
+        ):
+            raise ValueError(
+                "shadow candidate admission requires replay trust to be at least the "
+                "trusted candidate threshold"
+            )
         if self.future_audit_min_observations > self.future_audit_max_observations:
             raise ValueError(
                 "future_audit_min_observations must not exceed future_audit_max_observations"
@@ -161,6 +197,8 @@ class BenchmarkConfig(ConfigModel):
     feedback_shared_source_name: str = "customer_support_portal"
     feedback_attack_burst_length: int = Field(default=0, ge=0, le=1000)
     policy_schedule: List[str] = Field(default_factory=list)
+    coverage_balanced: bool = False
+    coverage_min_per_slice: int = Field(default=2, ge=1, le=100)
 
     @model_validator(mode="after")
     def validate_feedback_source(self) -> "BenchmarkConfig":
@@ -195,6 +233,12 @@ class EvoShiftConfig(ConfigModel):
     benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     policy: PolicyGenome = Field(default_factory=PolicyGenome)
+
+    @model_validator(mode="after")
+    def validate_algorithm_safety(self) -> "EvoShiftConfig":
+        if self.evolution.shadow_candidate_enabled and self.algorithm != Algorithm.EVOSHIFT:
+            raise ValueError("shadow candidate admission is supported only by evoshift")
+        return self
 
     def fingerprint(self) -> str:
         payload = self.model_dump(mode="json")

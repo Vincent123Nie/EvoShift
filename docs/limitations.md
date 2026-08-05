@@ -93,8 +93,14 @@ the cost of more evaluations and a larger safety surface.
 Schema bounds, shadow staging, replay, protected examples, and solver
 instructions reduce poisoning risk. They cannot prove that a seemingly useful
 directive is universally safe, free of hidden prompt injection, or robust to
-adversarial tasks. No production deployment should auto-promote untrusted
-memory without domain-specific policy checks and adversarial evaluation.
+semantic paraphrases. The shadow recurrence e-process is anytime-valid only
+under its declared bound on exact-signature recurrence probability. Exact
+signatures can fragment equivalent hypotheses, while semantic clustering would
+introduce a new false-merge attack surface. It also cannot identify a
+coordinated source whose repeated false feedback satisfies the alternative
+recurrence model. Independent delayed evidence remains necessary for that case.
+No production deployment should auto-promote untrusted memory without
+domain-specific policy checks and adversarial evaluation.
 
 ### Dynamic trust can be slow or captured
 

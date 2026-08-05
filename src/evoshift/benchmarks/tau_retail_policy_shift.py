@@ -411,6 +411,8 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
         feedback_shared_source_name: str = "customer_support_portal",
         feedback_attack_burst_length: int = 2,
         policy_schedule: Sequence[str] | None = None,
+        coverage_balanced: bool = False,
+        coverage_min_per_slice: int = 2,
         shuffle_within_phase: bool = False,
         limit: int = 0,
         timeout_seconds: float = 30.0,
@@ -435,6 +437,8 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
                 raise DatasetError(f"{name} must be between 0 and 1")
         if feedback_attack_burst_length < 0:
             raise DatasetError("feedback_attack_burst_length cannot be negative")
+        if coverage_min_per_slice < 1:
+            raise DatasetError("tau retail coverage minimum must be positive")
         if feedback_shared_source and not feedback_shared_source_name.strip():
             raise DatasetError("feedback_shared_source_name must not be empty")
         schedule = tuple(policy_schedule or DEFAULT_TAU_POLICY_SCHEDULE)
@@ -455,6 +459,8 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
         self.feedback_shared_source_name = feedback_shared_source_name.strip()
         self.feedback_attack_burst_length = feedback_attack_burst_length
         self.policy_schedule = schedule
+        self.coverage_balanced = coverage_balanced
+        self.coverage_min_per_slice = coverage_min_per_slice
         self.shuffle_within_phase = shuffle_within_phase
         self.limit = limit
         self.timeout_seconds = timeout_seconds
@@ -464,6 +470,8 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
         self.expected_task_count = expected_task_count
         self.required_policy_snippets = tuple(required_policy_snippets)
         self.required_task_actions = frozenset(required_task_actions)
+        if self.coverage_balanced:
+            self._validate_coverage_feasibility()
 
     @property
     def dataset_dir(self) -> Path:
@@ -564,18 +572,110 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
         return manifest
 
     def _phase_cases(self, phase_index: int) -> list[tuple[TauRetailCase, int]]:
+        if self.coverage_balanced:
+            return self._balanced_phase_cases(phase_index)
         indexed = [(case, repetition) for repetition in range(2) for case in _CASES]
         rotation = stable_seed(self.seed, f"tau3:case-rotation:{phase_index}") % len(_CASES)
         ordered = indexed[rotation:] + indexed[:rotation]
         if len(ordered) < self.phase_size:
             repetitions = (self.phase_size + len(_CASES) - 1) // len(_CASES)
-            ordered = [
-                (case, repetition)
-                for repetition in range(repetitions)
-                for case in _CASES
-            ]
+            ordered = [(case, repetition) for repetition in range(repetitions) for case in _CASES]
             ordered = ordered[rotation:] + ordered[:rotation]
         return ordered[: self.phase_size]
+
+    def _balanced_phase_cases(self, phase_index: int) -> list[tuple[TauRetailCase, int]]:
+        buckets = self._coverage_buckets(phase_index)
+        selected: list[tuple[TauRetailCase, int]] = []
+        selected_ids: set[str] = set()
+        for slice_name in ("transition", "future", "protected"):
+            bucket = buckets[slice_name]
+            if not bucket:
+                continue
+            rotation = stable_seed(
+                self.seed,
+                f"tau3:balanced:{phase_index}:{slice_name}",
+            ) % len(bucket)
+            ordered = bucket[rotation:] + bucket[:rotation]
+            chosen = self._prefer_distinct_contexts(
+                ordered,
+                self.coverage_min_per_slice,
+            )
+            selected.extend((case, 0) for case in chosen)
+            selected_ids.update(case.case_id for case in chosen)
+
+        rotation = stable_seed(self.seed, f"tau3:balanced-fill:{phase_index}") % len(_CASES)
+        ordered_cases = list(_CASES[rotation:] + _CASES[:rotation])
+        for repetition in range(2 + self.phase_size // len(_CASES)):
+            for case in ordered_cases:
+                if repetition == 0 and case.case_id in selected_ids:
+                    continue
+                selected.append((case, repetition))
+                if len(selected) >= self.phase_size:
+                    return selected
+        raise DatasetError("tau retail balanced sampler could not fill the configured phase")
+
+    def _validate_coverage_feasibility(self) -> None:
+        for phase_index in range(len(self.policy_schedule)):
+            buckets = self._coverage_buckets(phase_index)
+            nonempty = sum(bool(items) for items in buckets.values())
+            required = nonempty * self.coverage_min_per_slice
+            if required > self.phase_size:
+                raise DatasetError(
+                    "tau retail balanced coverage requires "
+                    f"{required} examples in phase {phase_index}, exceeding phase_size="
+                    f"{self.phase_size}"
+                )
+            undersized = {
+                name: len(items)
+                for name, items in buckets.items()
+                if items and len(items) < self.coverage_min_per_slice
+            }
+            if undersized:
+                detail = ", ".join(f"{name}={count}" for name, count in sorted(undersized.items()))
+                raise DatasetError(
+                    "tau retail balanced coverage slice has insufficient unique cases "
+                    f"in phase {phase_index}: {detail}; requested "
+                    f"coverage_min_per_slice={self.coverage_min_per_slice}"
+                )
+
+    def _coverage_buckets(self, phase_index: int) -> dict[str, list[TauRetailCase]]:
+        version = self.policy_schedule[phase_index]
+        previous_version = self.policy_schedule[phase_index - 1] if phase_index else None
+        future_versions = self.policy_schedule[phase_index + 1 :]
+        buckets: dict[str, list[TauRetailCase]] = {
+            "transition": [],
+            "future": [],
+            "protected": [],
+        }
+        for case in _CASES:
+            oracle = case.label(version)
+            transition = previous_version is not None and case.label(previous_version) != oracle
+            future = not transition and any(case.label(item) != oracle for item in future_versions)
+            slice_name = "transition" if transition else "future" if future else "protected"
+            buckets[slice_name].append(case)
+        return buckets
+
+    @staticmethod
+    def _prefer_distinct_contexts(
+        cases: Sequence[TauRetailCase],
+        count: int,
+    ) -> list[TauRetailCase]:
+        selected: list[TauRetailCase] = []
+        seen_contexts: set[str] = set()
+        for case in cases:
+            if case.context in seen_contexts:
+                continue
+            selected.append(case)
+            seen_contexts.add(case.context)
+            if len(selected) >= count:
+                return selected
+        for case in cases:
+            if case in selected:
+                continue
+            selected.append(case)
+            if len(selected) >= count:
+                return selected
+        raise DatasetError("tau retail balanced coverage slice has insufficient examples")
 
     def _make_sample(
         self,
@@ -621,6 +721,8 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
                 "benchmark": "policy_shift",
                 "benchmark_variant": "tau3_retail_policy_shift",
                 "official_tau3_benchmark": False,
+                "coverage_balanced": self.coverage_balanced,
+                "coverage_min_per_slice": self.coverage_min_per_slice,
                 "source_repository": TAU3_RETAIL_REPOSITORY,
                 "source_revision": TAU3_RETAIL_REVISION,
                 "source_commit": TAU3_RETAIL_COMMIT,
@@ -766,8 +868,7 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
             raise DatasetError("tau3 retail policy is missing required pinned clauses")
         if not isinstance(tasks, list) or len(tasks) != self.expected_task_count:
             raise DatasetError(
-                "tau3 retail tasks must contain the pinned "
-                f"{self.expected_task_count}-task list"
+                f"tau3 retail tasks must contain the pinned {self.expected_task_count}-task list"
             )
         actions = {
             str(action.get("name"))

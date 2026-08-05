@@ -37,6 +37,17 @@ _AGGREGATE_FIELDS = {
     "unrecovered_shifts": "unrecovered_shifts",
     "shift_detection_events": "shift_detection_events",
     "memory_candidates_promoted": "memory_candidates_promoted",
+    "shadow_failure_extractions": "shadow_failure_extractions",
+    "shadow_candidate_observations": "shadow_candidate_observations",
+    "shadow_candidate_replay_attempts": "shadow_candidate_replay_attempts",
+    "shadow_only_candidate_replay_attempts": "shadow_only_candidate_replay_attempts",
+    "shadow_candidate_probations": "shadow_candidate_probations",
+    "shadow_candidate_activations": "shadow_candidate_activations",
+    "shadow_candidate_rejections": "shadow_candidate_rejections",
+    "shadow_candidate_expirations": "shadow_candidate_expirations",
+    "shadow_eprocess_opportunities": "shadow_eprocess_opportunities",
+    "shadow_eprocess_crossings": "shadow_eprocess_crossings",
+    "trusted_candidate_shadow_cooldown_bypasses": ("trusted_candidate_shadow_cooldown_bypasses"),
     "promotion_precision": "promotion_precision",
     "replay_estimated_promotion_precision": "replay_estimated_promotion_precision",
     "realized_promotion_precision": "realized_promotion_precision",
@@ -211,6 +222,8 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "future_change_case_success_rate": policy_shift.get(
                     "future_change_case_success_rate"
                 ),
+                "future_change_case_n": policy_shift.get("future_change_case_n"),
+                "phase_slice_counts": policy_shift.get("phase_slice_counts", {}),
                 "premature_update_rate": policy_shift.get("premature_update_rate"),
                 "corrupted_feedback_follow_rate": policy_shift.get(
                     "corrupted_feedback_follow_rate"
@@ -226,6 +239,23 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "unrecovered_shifts": sum(value is None for value in recovery_steps.values()),
                 "shift_detection_events": evolution.get("shift_detection_events"),
                 "memory_candidates_promoted": evolution.get("memory_candidates_promoted"),
+                "shadow_failure_extractions": evolution.get("shadow_failure_extractions"),
+                "shadow_candidate_observations": evolution.get("shadow_candidate_observations"),
+                "shadow_candidate_replay_attempts": evolution.get(
+                    "shadow_candidate_replay_attempts"
+                ),
+                "shadow_only_candidate_replay_attempts": evolution.get(
+                    "shadow_only_candidate_replay_attempts"
+                ),
+                "shadow_candidate_probations": evolution.get("shadow_candidate_probations"),
+                "shadow_candidate_activations": evolution.get("shadow_candidate_activations"),
+                "shadow_candidate_rejections": evolution.get("shadow_candidate_rejections"),
+                "shadow_candidate_expirations": evolution.get("shadow_candidate_expirations"),
+                "shadow_eprocess_opportunities": evolution.get("shadow_eprocess_opportunities"),
+                "shadow_eprocess_crossings": evolution.get("shadow_eprocess_crossings"),
+                "trusted_candidate_shadow_cooldown_bypasses": evolution.get(
+                    "trusted_candidate_shadow_cooldown_bypasses"
+                ),
                 "promotion_precision": result.metrics.get("promotion_precision"),
                 "promotion_precision_basis": result.metrics.get("promotion_precision_basis"),
                 "replay_estimated_promotion_precision": result.metrics.get(
@@ -371,15 +401,11 @@ def compare_sweep_runs(
             ] = {
                 "score": (lambda _episode: True, lambda episode: episode.score.primary),
                 "changed_case_success": (
-                    lambda episode: bool(
-                        episode.sample.metadata.get("policy_changed_case")
-                    ),
+                    lambda episode: bool(episode.sample.metadata.get("policy_changed_case")),
                     lambda episode: float(episode.score.success),
                 ),
                 "old_rule_leakage": (
-                    lambda episode: bool(
-                        episode.sample.metadata.get("policy_changed_case")
-                    ),
+                    lambda episode: bool(episode.sample.metadata.get("policy_changed_case")),
                     lambda episode: float(not episode.score.success),
                 ),
                 "invariant_retention": (
@@ -387,9 +413,7 @@ def compare_sweep_runs(
                     lambda episode: float(episode.score.success),
                 ),
                 "premature_update": (
-                    lambda episode: bool(
-                        episode.sample.metadata.get("future_change_case")
-                    ),
+                    lambda episode: bool(episode.sample.metadata.get("future_change_case")),
                     lambda episode: float(not episode.score.success),
                 ),
                 "attack_feedback_follow": (
@@ -553,6 +577,8 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "old_rule_leakage_rate",
         "invariant_retention_rate",
         "future_change_case_success_rate",
+        "future_change_case_n",
+        "phase_slice_counts",
         "premature_update_rate",
         "corrupted_feedback_follow_rate",
         "attack_feedback_follow_rate",
@@ -564,6 +590,17 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "unrecovered_shifts",
         "shift_detection_events",
         "memory_candidates_promoted",
+        "shadow_failure_extractions",
+        "shadow_candidate_observations",
+        "shadow_candidate_replay_attempts",
+        "shadow_only_candidate_replay_attempts",
+        "shadow_candidate_probations",
+        "shadow_candidate_activations",
+        "shadow_candidate_rejections",
+        "shadow_candidate_expirations",
+        "shadow_eprocess_opportunities",
+        "shadow_eprocess_crossings",
+        "trusted_candidate_shadow_cooldown_bypasses",
         "promotion_precision",
         "promotion_precision_basis",
         "replay_estimated_promotion_precision",
@@ -604,6 +641,9 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         for row in rows:
             encoded = dict(row)
             encoded["parameters"] = json.dumps(row["parameters"], sort_keys=True)
+            encoded["phase_slice_counts"] = json.dumps(
+                row.get("phase_slice_counts", {}), sort_keys=True
+            )
             writer.writerow(encoded)
 
 
@@ -641,9 +681,7 @@ def _write_comparison_csv(
                         "candidate_algorithm": comparison["candidate_algorithm"],
                         "baseline_algorithm": comparison["baseline_algorithm"],
                         "variant": comparison["variant"],
-                        "parameters": json.dumps(
-                            comparison["parameters"], sort_keys=True
-                        ),
+                        "parameters": json.dumps(comparison["parameters"], sort_keys=True),
                         "metric": metric_name,
                         "delta_mean": interval.get("delta_mean"),
                         "ci_low": interval.get("ci_low"),

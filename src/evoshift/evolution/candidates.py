@@ -31,8 +31,32 @@ class CandidateEvidence:
     last_episode_index: int
     last_validation_episode: int = -1
     last_validation_observation_count: int = 0
+    first_trusted_episode_index: int | None = None
+    first_shadow_episode_index: int | None = None
+    last_trusted_validation_episode: int = -1
+    last_trusted_validation_observation_count: int = 0
+    last_shadow_validation_episode: int = -1
+    last_shadow_validation_observation_count: int = 0
+    trusted_observation_count: int = 0
+    shadow_observation_count: int = 0
+    trust_sum: float = 0.0
+    min_trust: float = 1.0
+    max_trust: float = 0.0
+    shadow_e_value: float = 1.0
+    shadow_eprocess_ready: bool = False
+    shadow_eprocess_opportunities_since_validation: int = 0
+    shadow_eprocess_crossings: int = 0
+    shadow_eprocess_resets: int = 0
     accepted: bool = False
     probationary: bool = False
+
+    @property
+    def mean_trust(self) -> float:
+        return self.trust_sum / self.observation_count if self.observation_count else 0.0
+
+    @property
+    def has_shadow_evidence(self) -> bool:
+        return self.shadow_observation_count > 0
 
 
 class CandidateEvidencePool:
@@ -42,12 +66,37 @@ class CandidateEvidencePool:
         self,
         *,
         min_observations: int,
+        min_trusted_observations: int,
         min_new_observations: int,
         cooldown_episodes: int,
+        shadow_eprocess_enabled: bool = False,
+        shadow_eprocess_null_match_probability: float = 0.25,
+        shadow_eprocess_alternative_match_probability: float = 0.75,
+        shadow_eprocess_alpha: float = 0.05,
     ) -> None:
+        if not 0.0 < shadow_eprocess_alpha < 1.0:
+            raise ValueError("shadow e-process alpha must be in (0, 1)")
+        if not (
+            0.0
+            < shadow_eprocess_null_match_probability
+            < shadow_eprocess_alternative_match_probability
+            < 1.0
+        ):
+            raise ValueError(
+                "shadow e-process probabilities must satisfy 0 < null < alternative < 1"
+            )
         self.min_observations = min_observations
+        self.min_trusted_observations = min_trusted_observations
         self.min_new_observations = min_new_observations
         self.cooldown_episodes = cooldown_episodes
+        self.shadow_eprocess_enabled = shadow_eprocess_enabled
+        self.shadow_eprocess_null_match_probability = shadow_eprocess_null_match_probability
+        self.shadow_eprocess_alternative_match_probability = (
+            shadow_eprocess_alternative_match_probability
+        )
+        self.shadow_eprocess_threshold = 1.0 / shadow_eprocess_alpha
+        self.shadow_eprocess_opportunities = 0
+        self.shadow_eprocess_crossings = 0
         self._items: Dict[str, CandidateEvidence] = {}
 
     def seed_accepted(self, memories: Iterable[MemoryItem]) -> None:
@@ -59,12 +108,30 @@ class CandidateEvidencePool:
                 observation_count=max(1, len(memory.provenance_episode_ids)),
                 first_episode_index=-1,
                 last_episode_index=-1,
+                first_trusted_episode_index=-1,
+                trusted_observation_count=max(1, len(memory.provenance_episode_ids)),
+                trust_sum=float(max(1, len(memory.provenance_episode_ids))),
+                min_trust=1.0,
+                max_trust=1.0,
                 accepted=True,
             )
 
-    def observe(self, candidate: MemoryItem, episode_index: int) -> CandidateEvidence:
+    def observe(
+        self,
+        candidate: MemoryItem,
+        episode_index: int,
+        *,
+        trust: float = 1.0,
+        trusted: bool = True,
+    ) -> CandidateEvidence:
+        if not 0.0 <= trust <= 1.0:
+            raise ValueError("candidate evidence trust must be in [0, 1]")
         signature = candidate_signature(candidate)
         existing = self._items.get(signature)
+        if not trusted and self.shadow_eprocess_enabled:
+            for item in self._items.values():
+                if item.has_shadow_evidence and not item.accepted and not item.probationary:
+                    self._update_shadow_eprocess(item, matched=item.signature == signature)
         if existing is None:
             evidence = CandidateEvidence(
                 signature=signature,
@@ -72,6 +139,13 @@ class CandidateEvidencePool:
                 observation_count=1,
                 first_episode_index=episode_index,
                 last_episode_index=episode_index,
+                first_trusted_episode_index=episode_index if trusted else None,
+                first_shadow_episode_index=episode_index if not trusted else None,
+                trusted_observation_count=int(trusted),
+                shadow_observation_count=int(not trusted),
+                trust_sum=trust,
+                min_trust=trust,
+                max_trust=trust,
             )
             self._items[signature] = evidence
             return evidence
@@ -103,30 +177,114 @@ class CandidateEvidencePool:
             }
         )
         existing.observation_count += 1
+        existing.trusted_observation_count += int(trusted)
+        existing.shadow_observation_count += int(not trusted)
+        if trusted and existing.first_trusted_episode_index is None:
+            existing.first_trusted_episode_index = episode_index
+        if not trusted and existing.first_shadow_episode_index is None:
+            existing.first_shadow_episode_index = episode_index
+        existing.trust_sum += trust
+        existing.min_trust = min(existing.min_trust, trust)
+        existing.max_trust = max(existing.max_trust, trust)
         existing.last_episode_index = episode_index
         return existing
 
-    def readiness(self, evidence: CandidateEvidence, episode_index: int) -> tuple[bool, str]:
+    def readiness(
+        self,
+        evidence: CandidateEvidence,
+        episode_index: int,
+        *,
+        trusted: bool = True,
+    ) -> tuple[bool, str]:
         if evidence.accepted:
             return False, "duplicate_of_active_memory"
         if evidence.probationary:
             return False, "candidate_in_probation"
         if evidence.observation_count < self.min_observations:
             return False, "insufficient_observations"
-        new_observations = evidence.observation_count - evidence.last_validation_observation_count
+        if evidence.trusted_observation_count < self.min_trusted_observations:
+            return False, "insufficient_trusted_observations"
+        if not trusted and self.shadow_eprocess_enabled and not evidence.shadow_eprocess_ready:
+            return False, "shadow_eprocess_below_threshold"
+        observation_count = (
+            evidence.trusted_observation_count if trusted else evidence.shadow_observation_count
+        )
+        last_validation_observation_count = (
+            evidence.last_trusted_validation_observation_count
+            if trusted
+            else evidence.last_shadow_validation_observation_count
+        )
+        new_observations = observation_count - last_validation_observation_count
         if new_observations < self.min_new_observations:
             return False, "insufficient_new_evidence"
+        last_validation_episode = (
+            evidence.last_trusted_validation_episode
+            if trusted
+            else evidence.last_shadow_validation_episode
+        )
         if (
-            evidence.last_validation_episode >= 0
-            and episode_index - evidence.last_validation_episode < self.cooldown_episodes
+            last_validation_episode >= 0
+            and episode_index - last_validation_episode < self.cooldown_episodes
         ):
             return False, "candidate_cooldown"
         return True, "ready"
 
-    @staticmethod
-    def mark_validated(evidence: CandidateEvidence, episode_index: int) -> None:
+    def mark_validated(
+        self,
+        evidence: CandidateEvidence,
+        episode_index: int,
+        *,
+        trusted: bool = True,
+    ) -> None:
         evidence.last_validation_episode = episode_index
         evidence.last_validation_observation_count = evidence.observation_count
+        if trusted:
+            evidence.last_trusted_validation_episode = episode_index
+            evidence.last_trusted_validation_observation_count = evidence.trusted_observation_count
+        else:
+            evidence.last_shadow_validation_episode = episode_index
+            evidence.last_shadow_validation_observation_count = evidence.shadow_observation_count
+            if self.shadow_eprocess_enabled:
+                evidence.shadow_e_value = 1.0
+                evidence.shadow_eprocess_ready = False
+                evidence.shadow_eprocess_opportunities_since_validation = 0
+                evidence.shadow_eprocess_resets += 1
+
+    def shadow_cooldown_would_block(
+        self,
+        evidence: CandidateEvidence,
+        episode_index: int,
+    ) -> bool:
+        return (
+            evidence.last_shadow_validation_episode >= 0
+            and episode_index - evidence.last_shadow_validation_episode < self.cooldown_episodes
+        )
+
+    def _update_shadow_eprocess(
+        self,
+        evidence: CandidateEvidence,
+        *,
+        matched: bool,
+    ) -> None:
+        if evidence.shadow_eprocess_ready:
+            return
+        previous = evidence.shadow_e_value
+        if matched:
+            multiplier = (
+                self.shadow_eprocess_alternative_match_probability
+                / self.shadow_eprocess_null_match_probability
+            )
+        else:
+            multiplier = (1.0 - self.shadow_eprocess_alternative_match_probability) / (
+                1.0 - self.shadow_eprocess_null_match_probability
+            )
+        evidence.shadow_e_value *= multiplier
+        evidence.shadow_eprocess_opportunities_since_validation += 1
+        self.shadow_eprocess_opportunities += 1
+        if previous < self.shadow_eprocess_threshold <= evidence.shadow_e_value:
+            evidence.shadow_eprocess_ready = True
+            evidence.shadow_eprocess_crossings += 1
+            self.shadow_eprocess_crossings += 1
 
     @staticmethod
     def mark_accepted(evidence: CandidateEvidence) -> None:
