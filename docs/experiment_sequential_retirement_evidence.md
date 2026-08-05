@@ -55,3 +55,32 @@ The executable frozen slice is
 
 The full 400-run diagnostic and 240-run fresh confirmation retain the adoption
 gates in `experiment_transactional_retirement.md`. Failure remains non-mergeable.
+
+## Targeted result: combined candidate rejected
+
+The frozen 20-run slice completed at
+`runs/sweeps/20260805T153522Z`. Sequential evidence removed the known seed-233
+regression: `transactional_semantic_recurrence` scored `0.9236` versus
+`semantic_revival` at `0.9097` without an attack burst, and tied it at `0.8750`
+with burst length two. Retirement confirmation precision was `1.0` whenever
+defined and no unconfirmed persistent transition remained.
+
+The preregistered combined candidate nevertheless failed its invariant gate.
+On seed 255, invariant retention fell from `1.0` for `semantic_revival` to
+`0.9512` in both burst conditions. Across all four inspected conditions its
+mean score was `0.9080`, below `semantic_revival` at `0.9184`.
+
+The failure was not a retirement false confirmation. A semantically indexed
+dormant memory retired for `refund:premium:days_15_30` was later revived from
+evidence in `refund:any:days_8_14`. It was locally useful in that registration
+context but globally reactivation made it harmful in another invariant
+context. This exposes a lifecycle-granularity defect: revival evidence is
+context keyed, while the resulting state transition is global.
+
+The non-semantic `transactional_retirement` row retained the invariant and
+matched the semantic baseline's four-condition mean, but it was not the frozen
+candidate and is not adopted post hoc. The 400-run diagnostic and 240-run
+confirmation were not opened. This branch remains non-mergeable; the next
+candidate must bind revival eligibility to the learner-visible context in
+which the exact version was retired, and must report provisional path harm in
+addition to resolution-only precision.
