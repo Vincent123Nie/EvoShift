@@ -87,6 +87,9 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         phase_size: int = 24,
         feedback_noise_rate: float = 0.10,
         feedback_attack_rate: float = 0.10,
+        feedback_shared_source: bool = False,
+        feedback_shared_source_name: str = "customer_support_portal",
+        feedback_attack_burst_length: int = 0,
         shuffle_within_phase: bool = False,
         limit: int = 0,
     ) -> None:
@@ -100,10 +103,17 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
                 raise DatasetError(f"{name} must be between 0 and 1")
         if limit < 0:
             raise DatasetError("benchmark limit cannot be negative")
+        if feedback_shared_source and not feedback_shared_source_name.strip():
+            raise DatasetError("feedback_shared_source_name must not be empty")
+        if feedback_attack_burst_length < 0:
+            raise DatasetError("feedback_attack_burst_length cannot be negative")
         self.seed = seed
         self.phase_size = phase_size
         self.feedback_noise_rate = feedback_noise_rate
         self.feedback_attack_rate = feedback_attack_rate
+        self.feedback_shared_source = feedback_shared_source
+        self.feedback_shared_source_name = feedback_shared_source_name.strip()
+        self.feedback_attack_burst_length = feedback_attack_burst_length
         self.shuffle_within_phase = shuffle_within_phase
         self.limit = limit
 
@@ -144,9 +154,9 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         request_day = scenario.request_day
         window = phase.premium_window if tier == "premium" else phase.standard_window
         oracle = APPROVE if request_day <= window else DENY
-        feedback, feedback_kind, feedback_source = self._observed_feedback(
+        feedback, feedback_kind, feedback_source, feedback_attack_goal = self._observed_feedback(
             oracle,
-            changed_case=scenario.transition_case,
+            scenario=scenario,
             phase=phase,
             position=position,
         )
@@ -177,9 +187,11 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
                 "transition_case": scenario.transition_case,
                 "protected": scenario.protected,
                 "future_change_case": scenario.future_change_case,
+                "feedback_context": self._feedback_context(tier, request_day),
                 "feedback_reference": feedback,
                 "feedback_kind": feedback_kind,
                 "feedback_source": feedback_source,
+                "feedback_attack_goal": feedback_attack_goal,
                 "feedback_corrupted": feedback != oracle,
             },
         )
@@ -188,16 +200,47 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         self,
         oracle: str,
         *,
-        changed_case: bool,
+        scenario: PolicyScenario,
         phase: PolicyPhase,
         position: int,
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, str]:
         rng = random.Random(stable_seed(self.seed, f"{phase.name}:feedback:{position}"))
-        if changed_case and phase.version != "v1" and rng.random() < self.feedback_attack_rate:
-            return self._flip(oracle), "attack", "untrusted_policy_message"
+        source = self.feedback_shared_source_name if self.feedback_shared_source else ""
+        if (
+            phase.version == "v1"
+            and scenario.future_change_case
+            and position // 4 < self.feedback_attack_burst_length
+        ):
+            return (
+                self._flip(oracle),
+                "attack",
+                source or "untrusted_policy_message",
+                "premature_update",
+            )
+        if (
+            scenario.transition_case
+            and phase.version != "v1"
+            and rng.random() < self.feedback_attack_rate
+        ):
+            return (
+                self._flip(oracle),
+                "attack",
+                source or "untrusted_policy_message",
+                "rollback_to_old_rule",
+            )
         if rng.random() < self.feedback_noise_rate:
-            return self._flip(oracle), "noise", "execution_feedback"
-        return oracle, "clean", "verified_policy_engine"
+            return self._flip(oracle), "noise", source or "execution_feedback", "incidental"
+        return oracle, "clean", source or "verified_policy_engine", ""
+
+    @staticmethod
+    def _feedback_context(tier: str, request_day: int) -> str:
+        if request_day <= 7:
+            return "refund:any:days_1_7"
+        if request_day <= 14:
+            return "refund:any:days_8_14"
+        if request_day <= 30:
+            return f"refund:{tier}:days_15_30"
+        return "refund:any:days_31_plus"
 
     @staticmethod
     def _flip(label: str) -> str:

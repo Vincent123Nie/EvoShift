@@ -27,12 +27,36 @@ _AGGREGATE_FIELDS = {
     "premature_update_rate": "premature_update",
     "corrupted_feedback_follow_rate": "corrupted_feedback_follow",
     "attack_feedback_follow_rate": "attack_feedback_follow",
+    "premature_attack_follow_rate": "premature_attack_follow",
+    "poison_persistence_error_rate": "poison_persistence_error",
     "corrupted_feedback_quarantine_rate": "corrupted_feedback_quarantine",
     "clean_feedback_quarantine_rate": "clean_feedback_quarantine",
     "mean_recovery_steps": "mean_recovery_steps",
     "unrecovered_shifts": "unrecovered_shifts",
     "shift_detection_events": "shift_detection_events",
     "memory_candidates_promoted": "memory_candidates_promoted",
+    "promotion_precision": "promotion_precision",
+    "replay_estimated_promotion_precision": "replay_estimated_promotion_precision",
+    "realized_promotion_precision": "realized_promotion_precision",
+    "future_audit_confirmed": "future_audit_confirmed",
+    "future_audit_rolled_back": "future_audit_rolled_back",
+    "future_audit_expired": "future_audit_expired",
+    "future_audit_realized_promotion_coverage": "future_audit_realized_promotion_coverage",
+    "future_audit_harmful_promotion_rate": "future_audit_harmful_promotion_rate",
+    "future_audit_false_rollback_rate": "future_audit_false_rollback_rate",
+    "future_audit_mean_oracle_delta": "future_audit_mean_oracle_delta",
+    "future_audit_mean_audit_latency": "future_audit_mean_audit_latency",
+    "future_audit_mean_confirmation_latency": "future_audit_mean_confirmation_latency",
+    "future_audit_mean_rollback_latency": "future_audit_mean_rollback_latency",
+    "future_audit_mean_harmful_exposure_latency": ("future_audit_mean_harmful_exposure_latency"),
+    "future_audit_mean_confirmation_observations": ("future_audit_mean_confirmation_observations"),
+    "future_audit_mean_rollback_observations": "future_audit_mean_rollback_observations",
+    "future_audit_mean_harmful_exposure_observations": (
+        "future_audit_mean_harmful_exposure_observations"
+    ),
+    "memory_supersessions": "memory_supersessions",
+    "memory_reactivations": "memory_reactivations",
+    "confirmed_context_changes": "confirmed_context_changes",
     "total_requests": "total_requests",
     "total_tokens": "total_tokens",
 }
@@ -145,6 +169,8 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         policy_shift = result.metrics.get("policy_shift", {})
         feedback = result.metrics.get("feedback", {})
         evolution = result.metrics.get("evolution", {})
+        future_audit = result.metrics.get("future_audit", {})
+        trust_model = result.metrics.get("feedback_trust_model", {})
         recovery_steps = result.metrics.get("recovery_steps", {})
         recovered = [
             float(value) for value in recovery_steps.values() if isinstance(value, (int, float))
@@ -176,6 +202,8 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                     "corrupted_feedback_follow_rate"
                 ),
                 "attack_feedback_follow_rate": policy_shift.get("attack_feedback_follow_rate"),
+                "premature_attack_follow_rate": policy_shift.get("premature_attack_follow_rate"),
+                "poison_persistence_error_rate": policy_shift.get("poison_persistence_error_rate"),
                 "corrupted_feedback_quarantine_rate": feedback.get(
                     "corrupted_feedback_quarantine_rate"
                 ),
@@ -184,6 +212,41 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "unrecovered_shifts": sum(value is None for value in recovery_steps.values()),
                 "shift_detection_events": evolution.get("shift_detection_events"),
                 "memory_candidates_promoted": evolution.get("memory_candidates_promoted"),
+                "promotion_precision": result.metrics.get("promotion_precision"),
+                "promotion_precision_basis": result.metrics.get("promotion_precision_basis"),
+                "replay_estimated_promotion_precision": result.metrics.get(
+                    "replay_estimated_promotion_precision"
+                ),
+                "realized_promotion_precision": result.metrics.get("realized_promotion_precision"),
+                "future_audit_confirmed": future_audit.get("confirmed"),
+                "future_audit_rolled_back": future_audit.get("rolled_back"),
+                "future_audit_expired": future_audit.get("expired"),
+                "future_audit_realized_promotion_coverage": future_audit.get(
+                    "realized_promotion_coverage"
+                ),
+                "future_audit_harmful_promotion_rate": future_audit.get("harmful_promotion_rate"),
+                "future_audit_false_rollback_rate": future_audit.get("false_rollback_rate"),
+                "future_audit_mean_oracle_delta": future_audit.get("mean_oracle_delta"),
+                "future_audit_mean_audit_latency": future_audit.get("mean_audit_latency"),
+                "future_audit_mean_confirmation_latency": future_audit.get(
+                    "mean_confirmation_latency"
+                ),
+                "future_audit_mean_rollback_latency": future_audit.get("mean_rollback_latency"),
+                "future_audit_mean_harmful_exposure_latency": future_audit.get(
+                    "mean_harmful_exposure_latency"
+                ),
+                "future_audit_mean_confirmation_observations": future_audit.get(
+                    "mean_confirmation_observations"
+                ),
+                "future_audit_mean_rollback_observations": future_audit.get(
+                    "mean_rollback_observations"
+                ),
+                "future_audit_mean_harmful_exposure_observations": future_audit.get(
+                    "mean_harmful_exposure_observations"
+                ),
+                "memory_supersessions": evolution.get("memory_supersessions"),
+                "memory_reactivations": evolution.get("memory_reactivations"),
+                "confirmed_context_changes": trust_model.get("confirmed_context_changes"),
             }
         )
     aggregates = aggregate_sweep(rows)
@@ -250,12 +313,35 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "premature_update_rate",
         "corrupted_feedback_follow_rate",
         "attack_feedback_follow_rate",
+        "premature_attack_follow_rate",
+        "poison_persistence_error_rate",
         "corrupted_feedback_quarantine_rate",
         "clean_feedback_quarantine_rate",
         "mean_recovery_steps",
         "unrecovered_shifts",
         "shift_detection_events",
         "memory_candidates_promoted",
+        "promotion_precision",
+        "promotion_precision_basis",
+        "replay_estimated_promotion_precision",
+        "realized_promotion_precision",
+        "future_audit_confirmed",
+        "future_audit_rolled_back",
+        "future_audit_expired",
+        "future_audit_realized_promotion_coverage",
+        "future_audit_harmful_promotion_rate",
+        "future_audit_false_rollback_rate",
+        "future_audit_mean_oracle_delta",
+        "future_audit_mean_audit_latency",
+        "future_audit_mean_confirmation_latency",
+        "future_audit_mean_rollback_latency",
+        "future_audit_mean_harmful_exposure_latency",
+        "future_audit_mean_confirmation_observations",
+        "future_audit_mean_rollback_observations",
+        "future_audit_mean_harmful_exposure_observations",
+        "memory_supersessions",
+        "memory_reactivations",
+        "confirmed_context_changes",
         "run_dir",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -273,36 +359,55 @@ def _write_sweep_markdown(path: Path, aggregates: Iterable[Mapping[str, Any]]) -
         "",
         (
             "| Algorithm | Variant | Parameters | Seeds | Score | Changed | Old leakage | "
-            "Invariant | Attack follow | Corrupt quarantine | Recovery | Requests | Tokens |"
+            "Invariant | Premature | Attack follow | Corrupt quarantine | Promotion precision | "
+            "Replay-est. precision | Realized precision | Realized coverage | Audit rollback | "
+            "Harmful promotion | False rollback | Rollback observations | Recovery | Requests | "
+            "Tokens |"
         ),
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        (
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+            "---:|---:|---:|---:|---:|---:|---:|---:|"
+        ),
     ]
     for item in aggregates:
         lines.append(
-            (
-                "| {} | {} | `{}` | {} | {:.4f}±{:.4f} | {} | {} | {} | {} | {} | "
-                "{} | {:.1f} | {:.1f} |"
-            ).format(
-                item["algorithm"],
-                item["variant"],
-                json.dumps(item["parameters"], sort_keys=True),
-                item["n_seeds"],
-                item["score_mean"],
-                item["score_std"],
-                _format_mean(item, "changed_case_success"),
-                _format_mean(item, "old_rule_leakage"),
-                _format_mean(item, "invariant_retention"),
-                _format_mean(item, "attack_feedback_follow"),
-                _format_mean(item, "corrupted_feedback_quarantine"),
-                _format_mean(item, "mean_recovery_steps"),
-                item.get("total_requests_mean", 0.0),
-                item.get("total_tokens_mean", 0.0),
+            "| "
+            + " | ".join(
+                [
+                    item["algorithm"],
+                    item["variant"],
+                    f"`{json.dumps(item['parameters'], sort_keys=True)}`",
+                    str(item["n_seeds"]),
+                    f"{item['score_mean']:.4f}±{item['score_std']:.4f}",
+                    _format_mean(item, "changed_case_success"),
+                    _format_mean(item, "old_rule_leakage"),
+                    _format_mean(item, "invariant_retention"),
+                    _format_mean(item, "premature_update"),
+                    _format_mean(item, "attack_feedback_follow"),
+                    _format_mean(item, "corrupted_feedback_quarantine"),
+                    _format_mean(item, "promotion_precision"),
+                    _format_mean(item, "replay_estimated_promotion_precision"),
+                    _format_mean(item, "realized_promotion_precision"),
+                    _format_mean(item, "future_audit_realized_promotion_coverage"),
+                    _format_mean(item, "future_audit_rolled_back"),
+                    _format_mean(item, "future_audit_harmful_promotion_rate"),
+                    _format_mean(item, "future_audit_false_rollback_rate"),
+                    _format_mean(item, "future_audit_mean_rollback_observations"),
+                    _format_mean(item, "mean_recovery_steps"),
+                    f"{item.get('total_requests_mean', 0.0):.1f}",
+                    f"{item.get('total_tokens_mean', 0.0):.1f}",
+                ]
             )
+            + " |"
         )
     lines.extend(
         [
             "",
             "Only same-model, same-dataset, same-budget rows are directly comparable.",
+            (
+                "The legacy promotion-precision column is basis-dependent; use replay-estimated "
+                "and realized columns plus realized coverage for claims."
+            ),
             "Synthetic demo results validate plumbing and must not be reported as SOTA evidence.",
             "",
         ]

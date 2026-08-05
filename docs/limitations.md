@@ -12,16 +12,20 @@ Memory and policy candidates are generated from observed stream failures and
 validated on a recent/protected replay buffer. Paired replay reduces variance
 and catches immediate regressions, but repeated testing can overfit that buffer.
 
-The implemented `evoshift audit` closes one part of this gap by evaluating the
-entire evolved state on a distinct, mutation-free stream. It does **not** yet:
+The online probation audit now closes part of this gap by pairing later relevant
+interactions with and without each replay-passing card. The separate
+`evoshift audit` evaluates the entire evolved state on a distinct,
+mutation-free stream. The system still does **not**:
 
 - reserve a disjoint promotion buffer during online learning;
-- run leave-one-memory-out counterfactuals for every promoted card;
-- map every replay decision to a future realized gain;
-- compute held-out promotion precision automatically.
+- guarantee that every probation receives enough later evidence before stream
+  end;
+- run per-card counterfactuals on a fully untouched public held-out dataset;
+- compute anytime-valid confidence under repeated sequential looks.
 
-Whole-state forward transfer is therefore measurable; candidate-level causal
-generalization remains future work.
+Within-stream candidate attribution and whole-state held-out transfer are
+measurable. Candidate-level **held-out** causal generalization remains future
+work.
 
 ### Statistical power and dependence
 
@@ -92,6 +96,22 @@ directive is universally safe, free of hidden prompt injection, or robust to
 adversarial tasks. No production deployment should auto-promote untrusted
 memory without domain-specific policy checks and adversarial evaluation.
 
+### Dynamic trust can be slow or captured
+
+The dynamic trust model treats an isolated contradiction as suspect and waits
+for repeated per-context agreement. This reduces premature updates but delays
+legitimate change when contexts repeat slowly. A sufficiently persistent
+attacker can also become the committed label because the model measures
+temporal consistency, not semantic truth or signer authenticity.
+
+### Future audit is not sequentially calibrated
+
+Asymmetric early rollback limits exposure after negative future utility, but
+the current bootstrap gate was designed for a fixed replay window. Repeated
+looks up to `future_audit_max_observations` are not backed by an anytime-valid
+confidence sequence. Ordinary noise can therefore increase unnecessary
+rollback, as observed in the static-trust ablation.
+
 ## Dataset limitations
 
 ### BBH is a proxy for changing task distributions
@@ -145,12 +165,15 @@ EvoShift currently does not attempt to:
 
 ## Prioritized roadmap
 
-1. Add a disjoint online promotion buffer and candidate-to-future-outcome audit.
-2. Implement exact McNemar plus block/cluster bootstrap for repeated seeds.
-3. Add a dedicated LongMemEval-V2 adapter and temporal scorers.
-4. Add dense/hybrid retrieval and contradiction-aware memory admission.
-5. Add BFCL structured tool-call state and official executable scoring.
-6. Add tenant-aware storage/cache isolation and encrypted artifact export.
+1. Reduce dynamic-trust adaptation delay with sequentially valid change
+   evidence while preserving premature-update and poison-persistence safety.
+2. Run per-card counterfactual audit on an untouched public or realistic policy
+   stream with a frozen API model.
+3. Implement exact McNemar plus block/cluster bootstrap for repeated seeds.
+4. Add a dedicated LongMemEval-V2 adapter and temporal scorers.
+5. Add dense/hybrid retrieval and contradiction-aware memory admission.
+6. Add BFCL structured tool-call state and official executable scoring.
+7. Add tenant-aware storage/cache isolation and encrypted artifact export.
 
 Until those items are complete, the strongest honest claim is a tested,
 auditable framework for studying API-only test-time adaptation—not a proven

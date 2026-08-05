@@ -166,6 +166,9 @@ def test_policy_shift_factory_uses_noise_configuration(tmp_path: Path) -> None:
         phase_size=8,
         feedback_noise_rate=0.25,
         feedback_attack_rate=0.50,
+        feedback_shared_source=True,
+        feedback_shared_source_name="shared_portal",
+        feedback_attack_burst_length=2,
     )
 
     adapter = create_benchmark(config, root=tmp_path, seed=9)
@@ -173,6 +176,34 @@ def test_policy_shift_factory_uses_noise_configuration(tmp_path: Path) -> None:
     assert isinstance(adapter, PolicyShiftBenchmark)
     assert adapter.feedback_noise_rate == 0.25
     assert adapter.feedback_attack_rate == 0.50
+    assert adapter.feedback_shared_source is True
+    assert adapter.feedback_shared_source_name == "shared_portal"
+    assert adapter.feedback_attack_burst_length == 2
+
+
+def test_policy_shift_shared_source_burst_creates_observable_contexts() -> None:
+    samples = PolicyShiftBenchmark(
+        seed=7,
+        phase_size=24,
+        feedback_noise_rate=0.0,
+        feedback_attack_rate=0.0,
+        feedback_shared_source=True,
+        feedback_shared_source_name="shared_portal",
+        feedback_attack_burst_length=2,
+    ).load()
+
+    assert {sample.metadata["feedback_source"] for sample in samples} == {"shared_portal"}
+    early_attacks = [
+        sample
+        for sample in samples
+        if sample.phase == "phase_0" and sample.metadata["feedback_kind"] == "attack"
+    ]
+    assert len(early_attacks) == 4
+    assert all(
+        sample.metadata["feedback_attack_goal"] == "premature_update" for sample in early_attacks
+    )
+    assert all(sample.metadata["future_change_case"] for sample in early_attacks)
+    assert all(sample.metadata["feedback_context"] for sample in samples)
 
 
 def _fake_bbh_payload() -> bytes:

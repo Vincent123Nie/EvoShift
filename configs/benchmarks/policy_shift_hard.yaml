@@ -1,11 +1,11 @@
 benchmark:
   kind: policy_shift
-  name: enterprise_refund_policy_shift
+  name: enterprise_refund_policy_shift_same_source
   path: null
   phase_size: 24
   shuffle: false
   feedback_noise_rate: 0.10
-  feedback_attack_rate: 0.10
-  feedback_shared_source: false
+  feedback_attack_rate: 0.0
+  feedback_shared_source: true
   feedback_shared_source_name: customer_support_portal
-  feedback_attack_burst_length: 0
+  feedback_attack_burst_length: 2

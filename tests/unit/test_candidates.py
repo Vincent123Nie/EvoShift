@@ -49,3 +49,20 @@ def test_candidate_pool_suppresses_an_already_active_memory() -> None:
 
     assert candidate_signature(active) == evidence.signature
     assert pool.readiness(evidence, 20) == (False, "duplicate_of_active_memory")
+
+
+def test_candidate_pool_blocks_probation_and_reopens_after_future_rejection() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_new_observations=1,
+        cooldown_episodes=0,
+    )
+    evidence = pool.observe(_candidate(), 3)
+    pool.mark_validated(evidence, 3)
+    pool.mark_probation(evidence)
+
+    assert pool.readiness(evidence, 4) == (False, "candidate_in_probation")
+
+    pool.mark_rejected(evidence)
+    evidence = pool.observe(_candidate("e2"), 5)
+    assert pool.readiness(evidence, 5) == (True, "ready")

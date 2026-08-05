@@ -127,6 +127,64 @@ async def test_policy_shift_evolution_adapts_and_quarantines_untrusted_feedback(
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_policy_shift_hard_rolls_back_poison_and_relearns_real_change(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_hard_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            )
+        }
+    )
+    adapter = create_benchmark(config.benchmark, root=Path.cwd(), seed=config.evaluation.seed)
+
+    result = await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
+
+    future = result.metrics["future_audit"]
+    policy_shift = result.metrics["policy_shift"]
+    assert future["registered"] == 3
+    assert future["completed"] == 3
+    assert future["confirmed"] == 2
+    assert future["rolled_back"] == 1
+    assert future["harmful_promotion_rate"] == pytest.approx(1.0 / 3.0)
+    assert future["false_rollback_rate"] == 0.0
+    assert future["mean_rollback_observations"] == 1.0
+    assert result.metrics["promotion_precision_basis"] == "future_counterfactual"
+    assert result.metrics["replay_estimated_promotion_precision"] == 1.0
+    assert result.metrics["realized_promotion_precision"] == pytest.approx(2.0 / 3.0)
+    assert result.metrics["promotion_precision"] == pytest.approx(2.0 / 3.0)
+    evolution = result.metrics["evolution"]
+    assert (
+        evolution["candidates_promoted"] + evolution["candidates_rejected"]
+        == evolution["candidates_evaluated"]
+    )
+    assert evolution["memory_candidates_evaluated"] == 6
+    assert evolution["memory_replay_gates_passed"] == 3
+    assert evolution["memory_candidates_promoted"] == 2
+    assert evolution["memory_candidates_rejected"] == 4
+    assert policy_shift["premature_update_rate"] == 0.125
+    assert policy_shift["poison_persistence_error_rate"] == pytest.approx(2.0 / 7.0)
+    assert policy_shift["invariant_retention_rate"] == 1.0
+
+    audits = [
+        decision
+        for decision in result.decisions
+        if decision.result.candidate_type == "memory_future_audit"
+    ]
+    harmful = [decision for decision in audits if not decision.promote]
+    confirmed = [decision for decision in audits if decision.promote]
+    assert len(harmful) == 1
+    assert harmful[0].reason.startswith("early rollback")
+    rejected_memory_id = harmful[0].result.candidate_id.split("@", maxsplit=1)[0]
+    assert any(
+        decision.result.candidate_id.startswith(f"{rejected_memory_id}@") for decision in confirmed
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_frozen_audit_reuses_state_without_mutating_it(tmp_path: Path) -> None:
     source_config = load_config(Path("configs/experiments/offline_demo.yaml"))
     source_config = source_config.model_copy(
@@ -182,6 +240,9 @@ async def test_frozen_audit_reuses_state_without_mutating_it(tmp_path: Path) -> 
     assert result.metrics["audit"]["frozen"] is True
     assert result.metrics["audit"]["state_unchanged"] is True
     assert result.metrics["promotion_precision"] is None
+    assert result.metrics["promotion_precision_basis"] == "not_applicable"
+    assert result.metrics["replay_estimated_promotion_precision"] is None
+    assert result.metrics["realized_promotion_precision"] is None
     assert result.metrics["evolution"]["candidates_evaluated"] == 0
     assert summary["store_counts"]["validations"] == 0
     assert summary["notes"]["state_mutation"] == "disabled"

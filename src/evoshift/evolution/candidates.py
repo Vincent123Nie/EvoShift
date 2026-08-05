@@ -32,6 +32,7 @@ class CandidateEvidence:
     last_validation_episode: int = -1
     last_validation_observation_count: int = 0
     accepted: bool = False
+    probationary: bool = False
 
 
 class CandidateEvidencePool:
@@ -83,10 +84,21 @@ class CandidateEvidencePool:
         source_domains = list(
             dict.fromkeys(existing.candidate.source_domains + candidate.source_domains)
         )
+        supersedes = list(
+            dict.fromkeys(
+                existing.candidate.supersedes_memory_ids + candidate.supersedes_memory_ids
+            )
+        )
         existing.candidate = candidate.model_copy(
             update={
                 "provenance_episode_ids": provenance,
                 "source_domains": source_domains,
+                "supersedes_memory_ids": supersedes,
+                "valid_from_episode_id": existing.candidate.valid_from_episode_id,
+                "valid_from_index": min(
+                    existing.candidate.valid_from_index,
+                    candidate.valid_from_index,
+                ),
                 "confidence": max(existing.candidate.confidence, candidate.confidence),
             }
         )
@@ -97,6 +109,8 @@ class CandidateEvidencePool:
     def readiness(self, evidence: CandidateEvidence, episode_index: int) -> tuple[bool, str]:
         if evidence.accepted:
             return False, "duplicate_of_active_memory"
+        if evidence.probationary:
+            return False, "candidate_in_probation"
         if evidence.observation_count < self.min_observations:
             return False, "insufficient_observations"
         new_observations = evidence.observation_count - evidence.last_validation_observation_count
@@ -117,6 +131,16 @@ class CandidateEvidencePool:
     @staticmethod
     def mark_accepted(evidence: CandidateEvidence) -> None:
         evidence.accepted = True
+        evidence.probationary = False
+
+    @staticmethod
+    def mark_probation(evidence: CandidateEvidence) -> None:
+        evidence.probationary = True
+
+    @staticmethod
+    def mark_rejected(evidence: CandidateEvidence) -> None:
+        evidence.accepted = False
+        evidence.probationary = False
 
 
 __all__ = [

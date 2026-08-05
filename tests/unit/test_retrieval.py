@@ -97,8 +97,66 @@ def test_manager_rolls_back_harmful_memory(tmp_path: Path) -> None:
     store.save_memory(item)
 
     manager.record_outcome(["bad"], success=False, policy=policy)
-    rolled_back = manager.record_outcome(["bad"], success=False, policy=policy)
+    outcome = manager.record_outcome(["bad"], success=False, policy=policy)
 
-    assert rolled_back[0].status == MemoryStatus.RETIRED
+    assert outcome.rolled_back[0].status == MemoryStatus.RETIRED
     assert store.get_memory("bad").status == MemoryStatus.RETIRED  # type: ignore[union-attr]
+    store.close()
+
+
+def test_confirmed_successor_supersedes_and_rollback_restores_prior_rule(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    prior = _memory("prior", "refund policy", "Use the 14 day rule.")
+    successor = _memory("successor", "refund policy", "Use the premium 30 day rule.").model_copy(
+        update={"supersedes_memory_ids": ["prior"]}
+    )
+    store.save_memory(prior)
+
+    activation = manager.activate(successor, 0.2, 0.1, 0.0)
+
+    assert activation.active.status == MemoryStatus.ACTIVE
+    assert [item.memory_id for item in activation.superseded] == ["prior"]
+    assert store.get_memory("prior").status == MemoryStatus.SUPERSEDED  # type: ignore[union-attr]
+
+    policy = PolicyGenome(rollback_min_uses=1, rollback_utility_threshold=0.6)
+    outcome = manager.record_outcome(["successor"], success=False, policy=policy)
+
+    assert [item.memory_id for item in outcome.rolled_back] == ["successor"]
+    assert [item.memory_id for item in outcome.reactivated] == ["prior"]
+    assert store.get_memory("prior").status == MemoryStatus.ACTIVE  # type: ignore[union-attr]
+    store.close()
+
+
+def test_probation_memory_is_retrievable_without_superseding_prior_rule(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    prior = _memory("prior", "refund policy", "Use the 14 day rule.")
+    successor = _memory("successor", "refund policy", "Use the premium 30 day rule.").model_copy(
+        update={"supersedes_memory_ids": ["prior"]}
+    )
+    store.save_memory(prior)
+    probation = manager.probation(successor, 0.2, 0.1, 0.0)
+
+    assert probation.status == MemoryStatus.PROBATION
+    assert {item.memory_id for item in manager.active()} == {"prior", "successor"}
+    assert store.get_memory("prior").status == MemoryStatus.ACTIVE  # type: ignore[union-attr]
+    store.close()
+
+
+def test_probation_lifecycle_is_not_preempted_by_posterior_rollback(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    probation = _memory("candidate", "refund policy", "Use the 14 day rule.").model_copy(
+        update={"status": MemoryStatus.PROBATION}
+    )
+    store.save_memory(probation)
+    policy = PolicyGenome(rollback_min_uses=1, rollback_utility_threshold=0.9)
+
+    outcome = manager.record_outcome(["candidate"], success=False, policy=policy)
+
+    assert outcome.rolled_back == ()
+    assert store.get_memory("candidate").status == MemoryStatus.PROBATION  # type: ignore[union-attr]
     store.close()

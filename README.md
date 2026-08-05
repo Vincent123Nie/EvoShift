@@ -21,22 +21,27 @@ flowchart LR
     X["Task stream x_t"] --> R["Retrieve active memories"]
     R --> S["Frozen LLM solver"]
     S --> Y["Score before feedback"]
-    Y --> D["Page-Hinkley + novelty drift"]
+    Y --> T["Dynamic source/context trust"]
+    T --> D["Page-Hinkley + novelty drift"]
     Y --> C["Failure attribution"]
     C --> M["Shadow experience card"]
     M --> V["Paired champion/challenger replay"]
     D --> P["Allowlisted policy patch"]
     P --> V
     V --> G{"Quality, CI, regression, cost gates"}
-    G -->|pass| A["Promote version"]
+    G -->|pass| Q["Probationary memory"]
     G -->|fail| J["Reject"]
-    A --> U["Online utility + rollback"]
+    Q --> F["Later memory-on/off future audit"]
+    F -->|confirm| A["Activate + supersede conflicts"]
+    F -->|harm| J
+    A --> U["Online utility + rollback/reactivation"]
 ```
 
 VERA has two time scales:
 
 - The fast loop turns eligible failures into typed experience cards, stages
-  them in shadow state, and promotes them only after paired replay.
+  them in shadow state, deploys replay-passing cards in probation, and confirms
+  or rolls them back from later paired counterfactuals.
 - The slow loop detects sustained reward/retrieval shift and proposes a typed
   patch over allowlisted retrieval and write hyperparameters.
 
@@ -56,10 +61,14 @@ validation decision, event, and rollback is persisted with provenance.
 - Provenance-domain-scoped BM25 retrieval with Beta posterior utility,
   UCB-style exploration, MMR diversity, token budgeting, versioning,
   deduplication, and rollback.
-- Observable-provenance feedback trust gates for drift, memory credit,
-  candidate generation, and replay, with explicit quarantine metrics.
+- Dynamic same-source feedback trust using a Beta source posterior plus
+  per-context committed/pending labels, with no hidden-oracle online access.
 - Per-domain post-alarm-reset drift detectors, candidate evidence scheduling,
   current-regime ordinary replay, and cross-regime protected replay.
+- Probationary memory, later memory-on/off counterfactual audit, asymmetric
+  harm stopping, stream-end expiration, and explicit realized-audit coverage.
+- Conflict-aware supersession with predecessor reactivation after successor
+  rollback.
 - Paired bootstrap promotion gates with protected-slice and resource checks.
 - Immutable run artifacts, SQLite audit state, sweeps, paired run comparison,
   and Markdown/JSON reports.
@@ -145,8 +154,23 @@ The audit command:
   promotions, and rollbacks;
 - recomputes the final state hash and fails if any state changed.
 
-This measures whole-state forward transfer. Per-candidate held-out attribution
-and held-out promotion precision remain future work.
+This measures whole-state forward transfer. Per-candidate attribution on an
+untouched held-out dataset remains future work; later within-stream candidate
+counterfactual attribution is implemented.
+
+## Same-source PolicyShift research diagnostic
+
+```bash
+evoshift run --config configs/experiments/policy_shift_hard_demo.yaml
+evoshift sweep --spec configs/sweeps/policy_shift_hard_baselines.yaml
+evoshift sweep --spec configs/sweeps/policy_shift_hard_ablations.yaml
+```
+
+The hard stream tests whether the agent distinguishes a real policy update from
+isolated noise and a short future-policy poison burst when every event may share
+one visible source. Replay-passing memories enter probation and are confirmed
+or rolled back on later paired counterfactuals. This is deterministic mechanism
+evidence, not a public-model benchmark.
 
 ## Reproducibility and quality gates
 
@@ -161,18 +185,19 @@ python scripts/verify_bbh_manifest.py
 
 Verified locally on 2026-08-05:
 
-- 96 tests passed;
-- branch-aware coverage: 82.77% (`fail_under = 80`);
+- 109 tests passed;
+- branch-aware coverage: 84.77% (`fail_under = 80`);
 - Ruff and strict mypy passed;
 - source and wheel distributions built successfully;
-- every experiment, benchmark fragment, provider fragment, and sweep YAML
-  passed schema/loading validation;
+- all 27 experiment, benchmark fragment, provider fragment, and sweep YAML
+  files passed schema/loading validation, including 408 expanded sweep
+  assignments;
 - the OpenAI-compatible provider contract suite passed, and an opt-in live
   smoke against a private compatible gateway returned exactly `OK`;
 - four BBH task files and 16 public smoke samples passed integrity checks.
 
 The final deterministic evidence includes a 60-run same-stream baseline sweep
-and a 100-run named ablation sweep. These diagnose algorithm semantics and
+and a 140-run named ablation sweep. These diagnose algorithm semantics and
 resource tradeoffs; they are not public-model or SOTA results.
 
 The live smoke proves protocol compatibility only. It is not a benchmark result.
@@ -203,6 +228,7 @@ dataset hash, and comparison artifact.
 - [Interview defense notes](docs/interview_notes.md)
 - [Results template](docs/results_template.md)
 - [Robust-feedback experiment](docs/experiment_robust_feedback_promotion.md)
+- [Dynamic-trust and future-audit experiment](docs/experiment_dynamic_trust_conflict_memory.md)
 
 ## Security
 

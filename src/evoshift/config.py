@@ -78,6 +78,13 @@ class EvolutionConfig(ConfigModel):
     feedback_mode: str = "reward_only"
     feedback_default_trust: float = Field(default=1.0, ge=0.0, le=1.0)
     feedback_source_trust: Dict[str, float] = Field(default_factory=dict)
+    dynamic_feedback_trust_enabled: bool = False
+    dynamic_feedback_context_field: str = "feedback_context"
+    dynamic_feedback_min_consistent_observations: int = Field(default=2, ge=2, le=100)
+    dynamic_feedback_cold_start_trust: float = Field(default=0.40, ge=0.0, le=1.0)
+    dynamic_feedback_conflict_trust: float = Field(default=0.10, ge=0.0, le=1.0)
+    dynamic_feedback_prior_strength: float = Field(default=8.0, ge=0.0, le=1000.0)
+    dynamic_feedback_max_contexts: int = Field(default=10000, ge=1, le=1000000)
     min_feedback_trust_for_drift: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_memory_update: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_candidate: float = Field(default=0.60, ge=0.0, le=1.0)
@@ -86,10 +93,16 @@ class EvolutionConfig(ConfigModel):
     candidate_min_new_observations: int = Field(default=1, ge=1, le=1000)
     candidate_cooldown_episodes: int = Field(default=4, ge=0, le=10000)
     replay_current_regime_only: bool = True
+    candidate_replay_since_first_evidence: bool = False
     max_candidates_per_round: int = Field(default=1, ge=1, le=8)
     policy_evolution_enabled: bool = True
     policy_evolve_on_shift: bool = True
     policy_evolve_if_memory_promoted: bool = False
+    future_audit_enabled: bool = False
+    future_audit_min_observations: int = Field(default=4, ge=1, le=100)
+    future_audit_max_observations: int = Field(default=8, ge=1, le=1000)
+    future_audit_early_harm_observations: int = Field(default=0, ge=0, le=100)
+    conflict_supersession_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_feedback_mode(self) -> "EvolutionConfig":
@@ -104,6 +117,16 @@ class EvolutionConfig(ConfigModel):
             raise ValueError(
                 "feedback_source_trust requires non-empty sources and values in [0, 1]: "
                 + ", ".join(invalid_sources)
+            )
+        if not self.dynamic_feedback_context_field.strip():
+            raise ValueError("dynamic_feedback_context_field must not be empty")
+        if self.future_audit_min_observations > self.future_audit_max_observations:
+            raise ValueError(
+                "future_audit_min_observations must not exceed future_audit_max_observations"
+            )
+        if self.future_audit_early_harm_observations > self.future_audit_max_observations:
+            raise ValueError(
+                "future_audit_early_harm_observations must not exceed future_audit_max_observations"
             )
         return self
 
@@ -121,6 +144,15 @@ class BenchmarkConfig(ConfigModel):
     protected_phases: List[str] = Field(default_factory=list)
     feedback_noise_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     feedback_attack_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    feedback_shared_source: bool = False
+    feedback_shared_source_name: str = "customer_support_portal"
+    feedback_attack_burst_length: int = Field(default=0, ge=0, le=1000)
+
+    @model_validator(mode="after")
+    def validate_feedback_source(self) -> "BenchmarkConfig":
+        if self.feedback_shared_source and not self.feedback_shared_source_name.strip():
+            raise ValueError("feedback_shared_source_name must not be empty")
+        return self
 
 
 class EvaluationConfig(ConfigModel):

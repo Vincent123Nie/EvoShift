@@ -102,6 +102,9 @@ def render_markdown_report(
         "cumulative_regret",
         "cumulative_regret_vs_baseline",
         "promotion_precision",
+        "promotion_precision_basis",
+        "replay_estimated_promotion_precision",
+        "realized_promotion_precision",
     ):
         if key in safe:
             overview[key] = safe[key]

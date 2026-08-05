@@ -79,10 +79,11 @@ state mutation, and verifies the same state SHA-256 after evaluation. Use
 `configs/experiments/audit_bbh_heldout.yaml` for the evolved state and
 `static_bbh_heldout.yaml` for the paired no-memory control.
 
-This command measures whole-state forward transfer. It does not yet run a
-separate held-out counterfactual for every promoted card or automatically
-produce realized held-out promotion precision. Report those candidate-level
-fields as `N/A`, not zero, until that analysis is added.
+This command measures whole-state forward transfer. The online runner now maps
+replay-passing memories to later within-stream counterfactual outcomes, but it
+does not yet run a separate untouched-BBH counterfactual for every promoted
+card. Report **held-out** candidate-level precision as `N/A`, not zero, until
+that stricter analysis is added.
 
 ### 2.3 Seeds
 
@@ -227,12 +228,13 @@ memory credit, failure extraction, and replay. Ordinary benchmarks leave
 `feedback_reference` unset, making both channels identical. PolicyShift sets it
 explicitly to test noise and attacks without redefining ground truth.
 
-Before adaptation, `FeedbackTrustModel` assigns a trust prior using only the
-observable `feedback_source`. Independent thresholds gate drift, memory credit,
-candidate generation, and replay. `feedback_kind`, `feedback_corrupted`, the
-hidden oracle label, and the phase identifier are benchmark annotations and
-must not enter the online trust decision. The implemented model is a configured
-provenance prior, not a learned same-source reliability estimator.
+Before adaptation, `FeedbackTrustModel` uses observable `feedback_source`, an
+application-provided context key, and learner-visible feedback. It maintains a
+Beta source posterior and per-context committed/pending labels. Independent
+thresholds gate drift, memory credit, candidate generation, and replay.
+`feedback_kind`, `feedback_corrupted`, the hidden oracle label, phase, and
+attack annotations are benchmark-only fields and must not enter the online
+trust decision.
 
 The report includes oracle/feedback agreement, false-positive and
 false-negative feedback rates, annotated noise rate, score gap, mean trust,
@@ -258,8 +260,11 @@ policy-role slice:
 - `future_change_case`: it has not changed yet but will change at a later
   boundary, so adopting the future rule early is an error.
 
-Deterministic noise flips arbitrary feedback, while targeted attack feedback
-reinforces the superseded policy only on current transition cases.
+Deterministic noise flips arbitrary feedback. The original attack mode
+reinforces a superseded policy on transition cases. The hard same-source mode
+also injects a short, internally consistent future-policy burst before the real
+change. Clean, noisy, and attack events can share the same visible source, so
+source allowlisting alone cannot solve the benchmark.
 
 PolicyShift reports changed-case success, old-rule leakage, invariant
 retention, future-change success, premature-update rate, corrupted-feedback
@@ -368,7 +373,7 @@ Held-out forward transfer should be reported as the paired frozen-memory gain
 over the static agent on untouched domains. It must not include updates made
 on the held-out domain itself.
 
-### 6.7 Promotion precision
+### 6.7 Promotion precision and audit coverage
 
 For promotion decisions `p_i` and independently measured realized gains `g_i`:
 
@@ -378,11 +383,31 @@ For promotion decisions `p_i` and independently measured realized gains `g_i`:
 {\sum_i \mathbb{1}[p_i=1]}.
 \]
 
-If no candidate is promoted, the implementation returns zero. When
-`realized_gains` are omitted, it uses replay `mean_delta`; the current runner's
-reported value is therefore **replay-estimated promotion precision**, not an
-independent generalization estimate. A held-out audit must supply future or
-untouched-domain gains before this metric supports a reliability claim.
+The runner reports two explicit quantities:
+
+- `replay_estimated_promotion_precision`, using replay `mean_delta`;
+- `realized_promotion_precision`, using post-hoc oracle deltas only for
+  candidates whose later learner-visible future audit reached an evidence
+  decision.
+
+It also reports:
+
+```text
+realized_promotion_coverage = completed evidence-audited replay promotions
+                              / all replay promotions
+```
+
+Stream-end `expired` candidates are excluded from realized precision and false
+rollback. When future audit is disabled, realized precision is `N/A` and
+coverage is zero even if replay-estimated precision is `1.0`. The legacy
+`promotion_precision` field is retained with `promotion_precision_basis` for
+compatibility and must not be quoted without that basis. Methods with no replay
+validation decisions, such as Static and the unverified Reflexion mode, report
+both precision fields as `N/A` rather than implying a measured zero.
+
+Future-audit harm, false rollback, latency, and observation-count metrics use
+only evidence-completed audits. Hidden oracle deltas score the result after the
+learner-visible decision; they do not choose confirmation or rollback.
 
 ### 6.8 Resource and latency metrics
 
@@ -477,12 +502,13 @@ dataset hash, source state hash, target dataset hash, and `state_unchanged`
 invariant. Audit scores are never passed to the critic, utility posterior,
 memory writer, policy proposer, or promotion gate.
 
-Candidate-level audit is stricter: freeze each promoted card and the final
-policy, then run paired counterfactual inference on untouched samples with and
-without that card. Record realized gain, harm rate, token delta, and agreement
-with the replay decision. This per-card workflow is not automated yet and is
-the missing evidence for held-out promotion precision and memory-utility
-calibration.
+The implemented online candidate audit runs paired inference on later relevant
+samples with and without the probationary card. It records realized gain, harm,
+latency, observations, and agreement with the replay decision. The still
+stricter held-out audit freezes each confirmed card and policy, then repeats
+that counterfactual on an untouched dataset. That held-out per-card workflow is
+not automated yet and remains necessary for a publication-level reliability
+claim.
 
 ## 9. Ablation matrix
 
@@ -502,6 +528,10 @@ uses the same model, stream, seed list, and reporting protocol.
 | A5 | No utility term | `policy.utility_weight: 0` | Value of learned card utility |
 | A6 | No MMR diversity | `policy.mmr_lambda: 1` | Value of redundancy suppression |
 | A7 | BM25-only retrieval | relevance weight 1; utility/exploration 0; `mmr_lambda: 1` | Value of the full hybrid retriever |
+| A8 | Static source trust | `dynamic_feedback_trust_enabled: false` | Same-source temporal consistency versus configured prior only |
+| A9 | No future audit | `future_audit_enabled: false` | Replay estimate versus later realized utility |
+| A10 | Symmetric audit | `future_audit_early_harm_observations: 0` | Harm exposure versus false rollback trade-off |
+| A11 | No conflict supersession | `conflict_supersession_enabled: false` | State hygiene and predecessor restoration semantics |
 
 `Reflexion` is a useful baseline but not a perfectly isolated “minus
 verification” ablation because it also lacks slow policy evolution. A strict

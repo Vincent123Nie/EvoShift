@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
 
@@ -21,6 +22,18 @@ def _similarity(left: MemoryItem, right: MemoryItem) -> float:
     return len(left_tokens & right_tokens) / len(union) if union else 1.0
 
 
+@dataclass(frozen=True)
+class MemoryActivation:
+    active: MemoryItem
+    superseded: tuple[MemoryItem, ...] = ()
+
+
+@dataclass(frozen=True)
+class MemoryOutcome:
+    rolled_back: tuple[MemoryItem, ...] = ()
+    reactivated: tuple[MemoryItem, ...] = ()
+
+
 class MemoryManager:
     def __init__(self, store: SQLiteStore, retriever: Optional[BM25MemoryRetriever] = None):
         self.store = store
@@ -32,7 +45,7 @@ class MemoryManager:
         return f"mem-{digest}"
 
     def active(self) -> List[MemoryItem]:
-        return self.store.list_memories([MemoryStatus.ACTIVE])
+        return self.store.list_memories([MemoryStatus.ACTIVE, MemoryStatus.PROBATION])
 
     def retrieve(
         self, query: str, policy: PolicyGenome, *, domain: str = ""
@@ -58,6 +71,9 @@ class MemoryManager:
                 dict.fromkeys(nearest.provenance_episode_ids + candidate.provenance_episode_ids)
             )
             source_domains = list(dict.fromkeys(nearest.source_domains + candidate.source_domains))
+            supersedes = list(
+                dict.fromkeys(nearest.supersedes_memory_ids + candidate.supersedes_memory_ids)
+            )
             merged = candidate.model_copy(
                 update={
                     "memory_id": nearest.memory_id,
@@ -65,6 +81,7 @@ class MemoryManager:
                     "status": MemoryStatus.SHADOW,
                     "provenance_episode_ids": provenance,
                     "source_domains": source_domains,
+                    "supersedes_memory_ids": supersedes,
                     "alpha": nearest.alpha,
                     "beta": nearest.beta,
                     "use_count": nearest.use_count,
@@ -82,13 +99,50 @@ class MemoryManager:
         self.store.save_memory(candidate)
         return candidate
 
-    def activate(
+    def probation(
         self,
         candidate: MemoryItem,
         gain: float,
         lcb: float,
         regression_rate: float,
     ) -> MemoryItem:
+        probationary = candidate.model_copy(
+            update={
+                "status": MemoryStatus.PROBATION,
+                "validation_gain": gain,
+                "validation_lcb": lcb,
+                "regression_rate": regression_rate,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.store.save_memory(probationary)
+        return probationary
+
+    def activate(
+        self,
+        candidate: MemoryItem,
+        gain: float,
+        lcb: float,
+        regression_rate: float,
+        *,
+        apply_supersession: bool = True,
+    ) -> MemoryActivation:
+        superseded: list[MemoryItem] = []
+        if apply_supersession:
+            for memory_id in candidate.supersedes_memory_ids:
+                if memory_id == candidate.memory_id:
+                    continue
+                previous = self.store.get_memory(memory_id)
+                if previous is None or previous.status != MemoryStatus.ACTIVE:
+                    continue
+                replaced = previous.model_copy(
+                    update={
+                        "status": MemoryStatus.SUPERSEDED,
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                )
+                self.store.save_memory(replaced)
+                superseded.append(replaced)
         active = candidate.model_copy(
             update={
                 "status": MemoryStatus.ACTIVE,
@@ -99,7 +153,7 @@ class MemoryManager:
             }
         )
         self.store.save_memory(active)
-        return active
+        return MemoryActivation(active=active, superseded=tuple(superseded))
 
     def reject(self, candidate: MemoryItem) -> MemoryItem:
         rejected = candidate.model_copy(
@@ -110,11 +164,15 @@ class MemoryManager:
 
     def record_outcome(
         self, memory_ids: Sequence[str], success: bool, policy: PolicyGenome
-    ) -> List[MemoryItem]:
+    ) -> MemoryOutcome:
         rolled_back: List[MemoryItem] = []
+        reactivated: List[MemoryItem] = []
         for memory_id in memory_ids:
             current = self.store.get_memory(memory_id)
-            if current is None or current.status != MemoryStatus.ACTIVE:
+            if current is None or current.status not in {
+                MemoryStatus.ACTIVE,
+                MemoryStatus.PROBATION,
+            }:
                 continue
             updated = current.model_copy(
                 update={
@@ -126,10 +184,26 @@ class MemoryManager:
                 }
             )
             if (
-                updated.use_count >= policy.rollback_min_uses
+                current.status == MemoryStatus.ACTIVE
+                and updated.use_count >= policy.rollback_min_uses
                 and updated.posterior_utility < policy.rollback_utility_threshold
             ):
                 updated = updated.model_copy(update={"status": MemoryStatus.RETIRED})
                 rolled_back.append(updated)
+                for superseded_id in updated.supersedes_memory_ids:
+                    previous = self.store.get_memory(superseded_id)
+                    if previous is None or previous.status != MemoryStatus.SUPERSEDED:
+                        continue
+                    restored = previous.model_copy(
+                        update={
+                            "status": MemoryStatus.ACTIVE,
+                            "updated_at": datetime.now(timezone.utc),
+                        }
+                    )
+                    self.store.save_memory(restored)
+                    reactivated.append(restored)
             self.store.save_memory(updated)
-        return rolled_back
+        return MemoryOutcome(tuple(rolled_back), tuple(reactivated))
+
+
+__all__ = ["MemoryActivation", "MemoryManager", "MemoryOutcome"]

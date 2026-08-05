@@ -213,9 +213,12 @@ class HeuristicDemoClient:
         window = premium_window if tier == "premium" else standard_window
         answer = "APPROVE" if request_day <= window else "DENY"
         applied: list[str] = []
-        if has_v2:
+        if has_v2 and 8 <= request_day <= 14:
             applied.extend(self._memory_ids_with_directive(_REFUND_V2_DIRECTIVE, cards))
-        if has_v3 and tier == "premium":
+        if has_v3 and (
+            (tier == "premium" and 15 <= request_day <= 30)
+            or (not has_v2 and 8 <= request_day <= 14)
+        ):
             applied.extend(self._memory_ids_with_directive(_REFUND_V3_DIRECTIVE, cards))
         return {
             "answer": answer,
@@ -238,12 +241,19 @@ class HeuristicDemoClient:
             anti_pattern = "Do not apply the 14-day standard limit to premium customers."
             tags = ["refund_policy", "premium_exception", "policy_v3"]
             signature = "refund_policy_premium_exception_not_applied"
+            supersedes = [
+                str(item.get("id"))
+                for item in payload.get("active_memories", [])
+                if isinstance(item, Mapping)
+                and _REFUND_V2_DIRECTIVE.casefold() in str(item.get("directive", "")).casefold()
+            ]
         else:
             directive = _REFUND_V2_DIRECTIVE
             trigger = "A refund request is made after day 7 but no later than day 14."
             anti_pattern = "Do not keep applying the superseded 7-day refund window."
             tags = ["refund_policy", "expanded_window", "policy_v2"]
             signature = "refund_policy_expanded_window_not_applied"
+            supersedes = []
         return {
             "failure_type": "reasoning_error",
             "signature": signature,
@@ -257,6 +267,7 @@ class HeuristicDemoClient:
                 "anti_pattern": anti_pattern,
                 "evidence": "Distilled from an observed PolicyShift feedback event.",
                 "tags": tags,
+                "supersedes_memory_ids": supersedes,
             },
         }
 

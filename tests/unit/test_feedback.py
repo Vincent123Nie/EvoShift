@@ -56,3 +56,73 @@ def test_feedback_trust_falls_back_for_unconfigured_sources() -> None:
     assert assessment.source == "unspecified"
     assert assessment.trust == 0.42
     assert assessment.reason == "default_source:unspecified"
+
+
+def test_dynamic_feedback_trust_quarantines_isolated_conflict_and_accepts_persistence() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.90,
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_min_consistent_observations=2,
+            dynamic_feedback_cold_start_trust=0.40,
+            dynamic_feedback_conflict_trust=0.10,
+        )
+    )
+
+    def sample(sample_id: str, label: str) -> BenchmarkSample:
+        return BenchmarkSample(
+            sample_id=sample_id,
+            prompt="Refund case: days 8 to 14",
+            reference="hidden-oracle-not-used",
+            metadata={
+                "feedback_source": "shared_portal",
+                "feedback_context": "refund:any:days_8_14",
+                "feedback_reference": label,
+                "feedback_kind": "hidden-test-annotation",
+                "feedback_corrupted": label == "APPROVE",
+            },
+        )
+
+    first = model.assess(sample("one", "DENY"))
+    consensus = model.assess(sample("two", "DENY"))
+    isolated = model.assess(sample("three", "APPROVE"))
+    recovered = model.assess(sample("four", "DENY"))
+    pending_shift = model.assess(sample("five", "APPROVE"))
+    confirmed_shift = model.assess(sample("six", "APPROVE"))
+
+    assert first.reason == "dynamic_cold_start"
+    assert first.trust == 0.40
+    assert consensus.reason == "dynamic_initial_consensus"
+    assert consensus.trust > 0.60
+    assert isolated.reason == "dynamic_pending_change"
+    assert isolated.trust == 0.10
+    assert recovered.reason == "dynamic_consistent"
+    assert recovered.trust > 0.60
+    assert pending_shift.reason == "dynamic_pending_change"
+    assert confirmed_shift.reason == "dynamic_confirmed_change"
+    assert confirmed_shift.trust > 0.60
+    assert model.snapshot()["confirmed_context_changes"] == 1
+
+
+def test_dynamic_feedback_trust_bounds_context_state() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_max_contexts=2,
+        )
+    )
+    for index in range(3):
+        model.assess(
+            BenchmarkSample(
+                sample_id=str(index),
+                prompt=f"task {index}",
+                reference="hidden",
+                metadata={
+                    "feedback_source": "source",
+                    "feedback_context": f"context-{index}",
+                    "feedback_reference": "OK",
+                },
+            )
+        )
+
+    assert model.snapshot()["tracked_contexts"] == 2

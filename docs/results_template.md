@@ -101,7 +101,19 @@ Bootstrap level: task / clustered by seed and sample ID / other: TBD.
 | Memory cards | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
 | Policy patches | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
 
-### 7.2 Independent frozen-memory audit
+### 7.2 Later within-stream candidate audit
+
+| Variant | Replay-est. precision | Realized precision | Realized coverage | Confirmed | Rolled back | Expired | Harmful promotion rate | False rollback rate | Mean rollback observations |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Full VERA | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| No dynamic trust | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| Symmetric future audit | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| Replay only | TBD | N/A | 0 | 0 | 0 | 0 | N/A | N/A | N/A |
+
+Do not call replay-estimated precision “realized.” Stream-end expirations are
+not rollbacks and do not enter realized precision or false-rollback rate.
+
+### 7.3 Independent frozen-memory audit
 
 | Audit domain | Samples | Static frozen score | VERA frozen score | Transfer gain | Harm rate | Token delta | No audit feedback consumed? |
 |---|---:|---:|---:|---:|---:|---:|---|

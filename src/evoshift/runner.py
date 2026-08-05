@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import statistics
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -13,13 +14,21 @@ from evoshift.agents.baselines import behavior_for
 from evoshift.audit import state_fingerprint
 from evoshift.benchmarks.base import BenchmarkAdapter, sample_fingerprint
 from evoshift.config import EvoShiftConfig
-from evoshift.evaluation import compute_stream_metrics, score_feedback_sample, score_sample
+from evoshift.evaluation import (
+    compute_stream_metrics,
+    promotion_precision,
+    score_feedback_sample,
+    score_sample,
+)
 from evoshift.evolution import (
     CandidateEvidencePool,
     ExperienceCritic,
     FeedbackTrustModel,
+    FutureAuditOutcome,
+    FutureCounterfactualAuditor,
     PageHinkleyShiftDetector,
 )
+from evoshift.evolution.candidates import CandidateEvidence
 from evoshift.evolution.replay import ReplayVerifier
 from evoshift.memory import MemoryManager, apply_policy_patch
 from evoshift.memory.policy import propose_bounded_policy_patch
@@ -165,6 +174,11 @@ class EvoShiftRunner:
             )
             candidate_pool.seed_accepted(memory.active())
             behavior = behavior_for(self.config.algorithm)
+            future_auditor = (
+                FutureCounterfactualAuditor(self.config.evolution)
+                if self.config.evolution.future_audit_enabled and behavior.verify_before_promotion
+                else None
+            )
             episodes: List[Episode] = []
             failures: List[FailureRecord] = []
             decisions: List[PromotionDecision] = []
@@ -176,6 +190,69 @@ class EvoShiftRunner:
             candidate_duplicate_active = 0
             shift_detection_events = 0
             policy_evolution_suppressed_by_memory = 0
+            supersession_events = 0
+            memory_reactivations = 0
+            future_audit_registered = 0
+            future_audit_completed = 0
+            future_audit_confirmed = 0
+            future_audit_rolled_back = 0
+            future_audit_expired = 0
+            future_audit_outcomes: List[FutureAuditOutcome] = []
+            audit_evidence: Dict[str, CandidateEvidence] = {}
+
+            def complete_future_audit(outcome: FutureAuditOutcome) -> None:
+                nonlocal supersession_events
+                nonlocal future_audit_completed
+                nonlocal future_audit_confirmed
+                nonlocal future_audit_rolled_back
+                nonlocal future_audit_expired
+                decision = outcome.decision
+                decisions.append(decision)
+                future_audit_outcomes.append(outcome)
+                store.save_validation(run_id, decision)
+                artifacts.append_decision(decision)
+                current = store.get_memory(
+                    outcome.audit.memory.memory_id,
+                    version=outcome.audit.memory.version,
+                )
+                candidate = current or outcome.audit.memory
+                evidence = audit_evidence.pop(candidate.memory_id, None)
+                if outcome.completion_reason == "stream_end":
+                    memory.reject(candidate)
+                    future_audit_expired += 1
+                    if evidence is not None:
+                        candidate_pool.mark_rejected(evidence)
+                elif decision.promote:
+                    future_audit_completed += 1
+                    activation = memory.activate(
+                        candidate,
+                        decision.result.mean_delta,
+                        decision.result.ci_low,
+                        decision.result.regression_rate,
+                        apply_supersession=(self.config.evolution.conflict_supersession_enabled),
+                    )
+                    supersession_events += len(activation.superseded)
+                    future_audit_confirmed += 1
+                    if evidence is not None:
+                        candidate_pool.mark_accepted(evidence)
+                else:
+                    future_audit_completed += 1
+                    memory.reject(candidate)
+                    future_audit_rolled_back += 1
+                    if evidence is not None:
+                        candidate_pool.mark_rejected(evidence)
+                store.record_event(
+                    run_id,
+                    "future_counterfactual_audit",
+                    decision.result.candidate_id,
+                    {
+                        "evidence_signature": outcome.audit.evidence_signature,
+                        "decision": decision.model_dump(mode="json"),
+                        "completion_reason": outcome.completion_reason,
+                        "online_decision_uses": "learner_visible_feedback_only",
+                        "oracle_metrics_are_post_hoc_only": True,
+                    },
+                )
 
             for index, sample in enumerate(samples):
                 memory_promoted_this_episode = False
@@ -244,13 +321,50 @@ class EvoShiftRunner:
                 artifacts.append_episode(episode)
 
                 if (
+                    future_auditor is not None
+                    and assessment.trust >= self.config.evolution.min_feedback_trust_for_replay
+                ):
+                    for audit in future_auditor.pending_for(prediction.output.applied_memory_ids):
+                        control_prediction = await agent.solve(
+                            sample,
+                            policy,
+                            exclude_memory_ids=[audit.memory.memory_id],
+                            use_memory=behavior.use_memory,
+                        )
+                        control_score = score_sample(
+                            sample,
+                            control_prediction.output.answer,
+                        )
+                        control_feedback = score_feedback_sample(
+                            sample,
+                            control_prediction.output.answer,
+                        )
+                        future_result = future_auditor.record(
+                            audit,
+                            index=index,
+                            feedback_control=control_feedback.primary,
+                            feedback_candidate=feedback_score.primary,
+                            oracle_control=control_score.primary,
+                            oracle_candidate=score.primary,
+                            control_usage=control_prediction.usage,
+                            candidate_usage=prediction.usage,
+                            protected=bool(sample.metadata.get("protected")),
+                        )
+                        if future_result is not None:
+                            complete_future_audit(future_result)
+
+                if (
                     not self.frozen_audit
                     and assessment.trust
                     >= self.config.evolution.min_feedback_trust_for_memory_update
                 ):
                     credited_ids = prediction.output.applied_memory_ids or selected_ids
-                    retired = memory.record_outcome(credited_ids, feedback_score.success, policy)
-                    for item in retired:
+                    memory_outcome = memory.record_outcome(
+                        credited_ids,
+                        feedback_score.success,
+                        policy,
+                    )
+                    for item in memory_outcome.rolled_back:
                         rollbacks += 1
                         payload = {"reason": "posterior utility below rollback threshold"}
                         store.record_event(
@@ -258,6 +372,14 @@ class EvoShiftRunner:
                             "memory_rollback",
                             item.memory_id,
                             payload,
+                        )
+                    for item in memory_outcome.reactivated:
+                        memory_reactivations += 1
+                        store.record_event(
+                            run_id,
+                            "memory_reactivated",
+                            item.memory_id,
+                            {"reason": "superseding successor rolled back"},
                         )
                 elif not self.frozen_audit:
                     feedback_quarantined += 1
@@ -267,7 +389,12 @@ class EvoShiftRunner:
                         episode.episode_id,
                         {
                             "source": assessment.source,
+                            "context": assessment.context,
+                            "signal": assessment.signal,
                             "trust": assessment.trust,
+                            "source_posterior_mean": assessment.source_posterior_mean,
+                            "context_observations": assessment.context_observations,
+                            "pending_observations": assessment.pending_observations,
                             "reason": assessment.reason,
                         },
                     )
@@ -304,11 +431,20 @@ class EvoShiftRunner:
                                 {"status": candidate.status.value},
                             )
                             if candidate.status != MemoryStatus.REJECTED:
-                                active = memory.activate(candidate, 0.0, 0.0, 0.0)
+                                activation = memory.activate(
+                                    candidate,
+                                    0.0,
+                                    0.0,
+                                    0.0,
+                                    apply_supersession=(
+                                        self.config.evolution.conflict_supersession_enabled
+                                    ),
+                                )
+                                supersession_events += len(activation.superseded)
                                 store.record_event(
                                     run_id,
                                     "memory_promoted_unverified",
-                                    f"{active.memory_id}@v{active.version}",
+                                    (f"{activation.active.memory_id}@v{activation.active.version}"),
                                     {"algorithm": self.config.algorithm.value},
                                 )
                         else:
@@ -339,6 +475,11 @@ class EvoShiftRunner:
                                 )
                             else:
                                 regime_start = regime_starts.get(sample.domain)
+                                if self.config.evolution.candidate_replay_since_first_evidence:
+                                    regime_start = max(
+                                        regime_start or 0,
+                                        evidence.first_episode_index,
+                                    )
                                 replay_buffer, _ = verifier.memory_buffer(
                                     evidence.candidate,
                                     episodes,
@@ -385,14 +526,74 @@ class EvoShiftRunner:
                                         store.save_validation(run_id, decision)
                                         artifacts.append_decision(decision)
                                         if decision.promote:
-                                            memory.activate(
-                                                candidate,
-                                                decision.result.mean_delta,
-                                                decision.result.ci_low,
-                                                decision.result.regression_rate,
-                                            )
-                                            candidate_pool.mark_accepted(evidence)
-                                            memory_promoted_this_episode = True
+                                            if future_auditor is not None:
+                                                if future_auditor.is_pending(candidate.memory_id):
+                                                    memory.reject(candidate)
+                                                    candidate_pool.mark_rejected(evidence)
+                                                    candidate_deferred += 1
+                                                    store.record_event(
+                                                        run_id,
+                                                        "memory_probation_deferred",
+                                                        (
+                                                            f"{candidate.memory_id}"
+                                                            f"@v{candidate.version}"
+                                                        ),
+                                                        {
+                                                            "reason": (
+                                                                "older_version_future_audit_pending"
+                                                            ),
+                                                            "candidate_signature": (
+                                                                evidence.signature
+                                                            ),
+                                                        },
+                                                    )
+                                                else:
+                                                    probationary = memory.probation(
+                                                        candidate,
+                                                        decision.result.mean_delta,
+                                                        decision.result.ci_low,
+                                                        decision.result.regression_rate,
+                                                    )
+                                                    future_auditor.register(
+                                                        probationary,
+                                                        evidence_signature=evidence.signature,
+                                                        start_index=index,
+                                                    )
+                                                    audit_evidence[probationary.memory_id] = (
+                                                        evidence
+                                                    )
+                                                    candidate_pool.mark_probation(evidence)
+                                                    future_audit_registered += 1
+                                                    memory_promoted_this_episode = True
+                                                    store.record_event(
+                                                        run_id,
+                                                        "memory_probation_started",
+                                                        (
+                                                            f"{probationary.memory_id}"
+                                                            f"@v{probationary.version}"
+                                                        ),
+                                                        {
+                                                            "candidate_signature": (
+                                                                evidence.signature
+                                                            ),
+                                                            "future_audit_min_observations": (
+                                                                self.config.evolution.future_audit_min_observations
+                                                            ),
+                                                        },
+                                                    )
+                                            else:
+                                                activation = memory.activate(
+                                                    candidate,
+                                                    decision.result.mean_delta,
+                                                    decision.result.ci_low,
+                                                    decision.result.regression_rate,
+                                                    apply_supersession=(
+                                                        self.config.evolution.conflict_supersession_enabled
+                                                    ),
+                                                )
+                                                supersession_events += len(activation.superseded)
+                                                candidate_pool.mark_accepted(evidence)
+                                                memory_promoted_this_episode = True
                                         else:
                                             memory.reject(candidate)
 
@@ -467,6 +668,10 @@ class EvoShiftRunner:
                             challenger, status="rejected", parent_version=policy.version
                         )
 
+            if future_auditor is not None:
+                for outcome in future_auditor.finalize():
+                    complete_future_audit(outcome)
+
             final_memories = tuple(memory.active())
             final_state_hash = state_fingerprint(policy, final_memories)
             if (
@@ -476,22 +681,140 @@ class EvoShiftRunner:
             ):
                 raise RuntimeError("frozen audit state changed during evaluation")
 
-            metrics = compute_stream_metrics(
-                episodes,
-                recovery_fraction=self.config.evaluation.recovery_fraction,
-                promotions=None if self.frozen_audit else decisions,
-            )
-            if self.frozen_audit:
-                metrics["promotion_precision"] = None
-            memory_decisions = [
+            replay_memory_decisions = [
                 decision for decision in decisions if decision.result.candidate_type == "memory"
+            ]
+            future_memory_decisions = [
+                decision
+                for decision in decisions
+                if decision.result.candidate_type == "memory_future_audit"
             ]
             policy_decisions = [
                 decision for decision in decisions if decision.result.candidate_type == "policy"
             ]
-            promoted = sum(int(decision.promote) for decision in decisions)
-            promoted_memories = sum(int(decision.promote) for decision in memory_decisions)
+            completed_future_audits = [
+                outcome
+                for outcome in future_audit_outcomes
+                if outcome.completion_reason == "evidence"
+            ]
+            realized_gain_by_candidate = {
+                outcome.decision.result.candidate_id: (
+                    outcome.decision.result.oracle_mean_delta or 0.0
+                )
+                for outcome in completed_future_audits
+            }
+            replay_precision_inputs = None if self.frozen_audit else replay_memory_decisions
+            realized_precision_inputs: List[PromotionDecision] = []
+            realized_gains: List[float] = []
+            if future_auditor is not None and replay_precision_inputs is not None:
+                realized_precision_inputs = [
+                    decision
+                    for decision in replay_precision_inputs
+                    if decision.result.candidate_id in realized_gain_by_candidate
+                ]
+                realized_gains = [
+                    realized_gain_by_candidate[decision.result.candidate_id]
+                    for decision in realized_precision_inputs
+                ]
+            metrics = compute_stream_metrics(
+                episodes,
+                recovery_fraction=self.config.evaluation.recovery_fraction,
+                promotions=replay_precision_inputs,
+            )
+            replay_estimated_precision = (
+                metrics.get("promotion_precision") if replay_memory_decisions else None
+            )
+            realized_precision = (
+                promotion_precision(realized_precision_inputs, realized_gains)
+                if realized_precision_inputs
+                else None
+            )
+            if self.frozen_audit:
+                metrics["promotion_precision"] = None
+                metrics["promotion_precision_basis"] = "not_applicable"
+                replay_estimated_precision = None
+            elif future_auditor is not None:
+                metrics["promotion_precision"] = realized_precision
+                metrics["promotion_precision_basis"] = "future_counterfactual"
+            elif replay_memory_decisions:
+                metrics["promotion_precision"] = replay_estimated_precision
+                metrics["promotion_precision_basis"] = "replay_estimated"
+            else:
+                metrics["promotion_precision"] = None
+                metrics["promotion_precision_basis"] = "not_applicable"
+            metrics["replay_estimated_promotion_precision"] = replay_estimated_precision
+            metrics["realized_promotion_precision"] = realized_precision
+            promoted_memories = sum(
+                int(decision.promote)
+                for decision in (
+                    future_memory_decisions
+                    if future_auditor is not None
+                    else replay_memory_decisions
+                )
+            )
             promoted_policies = sum(int(decision.promote) for decision in policy_decisions)
+            promoted = promoted_memories + promoted_policies
+            rejected_memories = len(replay_memory_decisions) - promoted_memories
+            rejected_policies = len(policy_decisions) - promoted_policies
+            replay_promotions = [
+                decision for decision in replay_memory_decisions if decision.promote
+            ]
+            realized_replay_promotions = [
+                decision
+                for decision in replay_promotions
+                if decision.result.candidate_id in realized_gain_by_candidate
+            ]
+            audit_oracle_gains = [
+                outcome.decision.result.oracle_mean_delta
+                for outcome in completed_future_audits
+                if outcome.decision.result.oracle_mean_delta is not None
+            ]
+            audit_latencies = [
+                outcome.decision.result.observation_end_index - outcome.audit.start_index
+                for outcome in completed_future_audits
+                if outcome.decision.result.observation_end_index is not None
+            ]
+            confirmation_latencies = [
+                outcome.decision.result.observation_end_index - outcome.audit.start_index
+                for outcome in completed_future_audits
+                if outcome.decision.promote
+                and outcome.decision.result.observation_end_index is not None
+            ]
+            rollback_latencies = [
+                outcome.decision.result.observation_end_index - outcome.audit.start_index
+                for outcome in completed_future_audits
+                if not outcome.decision.promote
+                and outcome.decision.result.observation_end_index is not None
+            ]
+            harmful_exposure_latencies = [
+                outcome.decision.result.observation_end_index - outcome.audit.start_index
+                for outcome in completed_future_audits
+                if outcome.decision.result.oracle_mean_delta is not None
+                and outcome.decision.result.oracle_mean_delta < 0.0
+                and outcome.decision.result.observation_end_index is not None
+            ]
+            rollback_oracle_gains = [
+                outcome.decision.result.oracle_mean_delta
+                for outcome in completed_future_audits
+                if not outcome.decision.promote
+                and outcome.decision.result.oracle_mean_delta is not None
+            ]
+            confirmation_observations = [
+                outcome.decision.result.n
+                for outcome in completed_future_audits
+                if outcome.decision.promote
+            ]
+            rollback_observations = [
+                outcome.decision.result.n
+                for outcome in completed_future_audits
+                if not outcome.decision.promote
+            ]
+            harmful_exposure_observations = [
+                outcome.decision.result.n
+                for outcome in completed_future_audits
+                if outcome.decision.result.oracle_mean_delta is not None
+                and outcome.decision.result.oracle_mean_delta < 0.0
+            ]
             metrics.update(
                 {
                     "algorithm": self.config.algorithm.value,
@@ -505,15 +828,20 @@ class EvoShiftRunner:
                     "dataset_hash": dataset_hash,
                     "evolution": {
                         "validation_decisions": len(decisions),
-                        "candidates_evaluated": len(decisions),
+                        "candidates_evaluated": (
+                            len(replay_memory_decisions) + len(policy_decisions)
+                        ),
                         "candidates_promoted": promoted,
-                        "candidates_rejected": len(decisions) - promoted,
-                        "memory_candidates_evaluated": len(memory_decisions),
+                        "candidates_rejected": rejected_memories + rejected_policies,
+                        "memory_candidates_evaluated": len(replay_memory_decisions),
                         "memory_candidates_promoted": promoted_memories,
-                        "memory_candidates_rejected": (len(memory_decisions) - promoted_memories),
+                        "memory_candidates_rejected": rejected_memories,
+                        "memory_replay_gates_passed": sum(
+                            int(decision.promote) for decision in replay_memory_decisions
+                        ),
                         "policy_candidates_evaluated": len(policy_decisions),
                         "policy_candidates_promoted": promoted_policies,
-                        "policy_candidates_rejected": (len(policy_decisions) - promoted_policies),
+                        "policy_candidates_rejected": rejected_policies,
                         "policy_evolution_suppressed_by_memory": (
                             policy_evolution_suppressed_by_memory
                         ),
@@ -526,8 +854,68 @@ class EvoShiftRunner:
                         "shift_detection_events": shift_detection_events,
                         "domains_with_detected_shift": len(regime_starts),
                         "memory_rollbacks": rollbacks,
+                        "memory_supersessions": supersession_events,
+                        "memory_reactivations": memory_reactivations,
                         "final_active_memories": len(final_memories),
                         "final_policy_version": policy.version,
+                    },
+                    "feedback_trust_model": trust_model.snapshot(),
+                    "future_audit": {
+                        "enabled": future_auditor is not None,
+                        "registered": future_audit_registered,
+                        "completed": future_audit_completed,
+                        "confirmed": future_audit_confirmed,
+                        "rolled_back": future_audit_rolled_back,
+                        "expired": future_audit_expired,
+                        "realized_promotion_coverage": (
+                            len(realized_replay_promotions) / len(replay_promotions)
+                            if replay_promotions
+                            else 0.0
+                        ),
+                        "mean_oracle_delta": (
+                            statistics.fmean(audit_oracle_gains) if audit_oracle_gains else None
+                        ),
+                        "harmful_promotion_rate": (
+                            statistics.fmean(float(value < 0.0) for value in audit_oracle_gains)
+                            if audit_oracle_gains
+                            else 0.0
+                        ),
+                        "false_rollback_rate": (
+                            statistics.fmean(float(value >= 0.0) for value in rollback_oracle_gains)
+                            if rollback_oracle_gains
+                            else 0.0
+                        ),
+                        "mean_audit_latency": (
+                            statistics.fmean(audit_latencies) if audit_latencies else None
+                        ),
+                        "mean_confirmation_latency": (
+                            statistics.fmean(confirmation_latencies)
+                            if confirmation_latencies
+                            else None
+                        ),
+                        "mean_rollback_latency": (
+                            statistics.fmean(rollback_latencies) if rollback_latencies else None
+                        ),
+                        "mean_harmful_exposure_latency": (
+                            statistics.fmean(harmful_exposure_latencies)
+                            if harmful_exposure_latencies
+                            else None
+                        ),
+                        "mean_confirmation_observations": (
+                            statistics.fmean(confirmation_observations)
+                            if confirmation_observations
+                            else None
+                        ),
+                        "mean_rollback_observations": (
+                            statistics.fmean(rollback_observations)
+                            if rollback_observations
+                            else None
+                        ),
+                        "mean_harmful_exposure_observations": (
+                            statistics.fmean(harmful_exposure_observations)
+                            if harmful_exposure_observations
+                            else None
+                        ),
                     },
                     "audit": {
                         "frozen": self.frozen_audit,
@@ -564,7 +952,17 @@ class EvoShiftRunner:
                         "promotion_precision": (
                             "not applicable in frozen audit"
                             if self.frozen_audit
-                            else "replay-estimated; held-out audit required for claims"
+                            else (
+                                "future counterfactual oracle attribution; online decisions use "
+                                "learner-visible feedback only; precision covers completed "
+                                "evidence audits and excludes stream-end expirations"
+                                if future_auditor is not None
+                                else (
+                                    "replay-estimated; held-out audit required for claims"
+                                    if replay_memory_decisions
+                                    else "not applicable: no replay validation decisions"
+                                )
+                            )
                         ),
                         "state_mutation": (
                             "disabled"

@@ -33,6 +33,8 @@ flowchart LR
     R --> V["Paired replay verifier"]
     V --> A
     V --> G["Promotion gate"]
+    G --> F["Probation + future counterfactual audit"]
+    F --> M
     R --> X["Run artifacts"]
     R --> L["Budget ledger"]
     O --> Q["SQLite response cache"]
@@ -52,11 +54,12 @@ cache behavior remain behind `LLMClient`.
 | `MemoryAgent` | Retrieval, context injection, solve/self-refine calls, structured answer parsing | Memory promotion decisions |
 | `MemoryManager` | Versioned memory lifecycle, deduplication, retrieval, online utility updates | LLM calls |
 | `ExperienceCritic` | Typed failure attribution and procedural-memory proposal | Direct activation of its proposal |
-| `FeedbackTrustModel` | Observable-source trust prior and adaptation eligibility | Hidden oracle correctness or same-source inference |
+| `FeedbackTrustModel` | Observable source/context temporal consistency, Beta reliability, and adaptation eligibility | Hidden oracle correctness or semantic truth |
 | `PageHinkleyShiftDetector` | Online performance/novelty alarm and cooldown | Mutation generation |
 | `CandidateEvidencePool` | Candidate signature aggregation, retry cooldown, active-duplicate suppression | Promotion scoring |
 | `ReplayVerifier` | Same-example champion/challenger replay and protected-buffer construction | Threshold policy |
 | `PromotionGate` | Statistical, regression, and resource gates | Candidate generation |
+| `FutureCounterfactualAuditor` | Later memory-on/off evidence, confirmation, rollback, expiration, and post-hoc oracle attribution | Hidden-oracle online decisions |
 | `ResponsesClient` | `/responses`, retry, parsing, idempotency, cache and budget integration | Benchmark semantics |
 | `SQLiteStore` | Transactional audit state | Large-scale vector search |
 | `RunArtifacts` | Human- and machine-readable experiment evidence | Secret storage |
@@ -92,7 +95,7 @@ sequenceDiagram
     L-->>A: normalized GenerationResponse
     A-->>R: AgentPrediction
     R->>R: score hidden oracle and observable feedback
-    R->>R: assess observable feedback provenance
+    R->>R: assess source/context temporal consistency
     R->>D: update trusted observable reward and retrieval novelty
     D-->>R: ShiftReport
     R->>S: persist Episode and trace
@@ -105,7 +108,13 @@ sequenceDiagram
         R->>V: current-regime paired replay plus protected history
         V->>A: repeated control/challenger solves
         V-->>R: PromotionDecision
-        R->>S: activate or reject candidate
+        R->>S: probation or reject candidate
+    end
+    opt probationary card is applied later
+        R->>A: solve control with only that card excluded
+        A-->>R: paired future control
+        R->>R: decide from learner-visible future delta
+        R->>S: confirm, rollback, or keep pending
     end
     alt detected shift and policy evolution enabled
         R->>R: deterministic bounded PolicyPatch
@@ -119,8 +128,8 @@ sequenceDiagram
 `Episode.feedback_score` stores the observation used by the online learner.
 They are identical for ordinary clean benchmarks and intentionally differ in
 feedback-robustness experiments. `Episode.feedback_trust` records the
-observable provenance prior, and `feedback_eligible` records candidate-path
-eligibility. Component-specific thresholds independently gate drift, memory
+observable source/context assessment, and `feedback_eligible` records
+candidate-path eligibility. Component-specific thresholds independently gate drift, memory
 credit, candidate generation, and replay. The foreground `Episode.usage` covers
 the user-facing solve path. The separate
 budget ledger covers provider calls made by solve, critic, and replay when the
@@ -133,13 +142,15 @@ The fast loop runs at episode granularity:
 
 1. retrieve active memories;
 2. answer and score;
-3. assess feedback provenance and quarantine low-trust adaptation signals;
+3. assess observable source/context consistency and quarantine low-trust signals;
 4. update the success/failure posterior of memories credited by the solver;
 5. on an eligible outcome, attribute the failure and aggregate candidate evidence;
 6. when scheduled, stage and verify the candidate against current-regime and
    protected replay;
-7. activate or reject the candidate;
-8. retire an active memory whose posterior utility remains too low after enough
+7. reject it or deploy it in probation;
+8. on later relevant uses, confirm, roll back, or keep the probation pending;
+9. supersede explicitly conflicting predecessors only after confirmation;
+10. retire an active memory whose posterior utility remains too low after enough
    uses.
 
 The slow loop is gated by detected distribution shift:
@@ -161,11 +172,18 @@ stateDiagram-v2
     [*] --> Proposed: critic emits typed candidate
     Proposed --> Rejected: confidence below write threshold
     Proposed --> Shadow: stage and deduplicate
-    Shadow --> Active: replay gates pass
+    Shadow --> Probation: replay gates pass and future audit enabled
+    Shadow --> Active: replay gates pass and future audit disabled
     Shadow --> Rejected: any replay gate fails
+    Probation --> Active: future evidence confirms utility
+    Probation --> Rejected: future evidence shows harm
+    Probation --> Rejected: stream ends before decision, expired
+    Active --> Superseded: confirmed successor names this memory
+    Superseded --> Active: successor later rolls back
     Active --> Retired: posterior utility below threshold after min uses
     Active --> Retired: newer version becomes active
     Rejected --> [*]
+    Superseded --> [*]
     Retired --> [*]
 ```
 
@@ -176,7 +194,17 @@ reuse the existing ID and increment its version. Activating a new version
 retires older active versions of the same memory.
 
 `SHADOW` is a crucial safety boundary: the candidate can be forced into a
-challenger replay without appearing in normal champion retrieval.
+challenger replay without appearing in normal champion retrieval. `PROBATION`
+is intentionally retrievable: later real use creates the memory-on arm, while a
+paired solve that excludes only that memory creates the control arm. Explicit
+supersession is delayed until this future audit confirms the successor.
+
+Only one future audit may be pending for a logical `memory_id`. A second
+replay-passing version is rejected/deferred until the older audit completes,
+and audit completion reloads the exact `(memory_id, version)` rather than the
+latest row. Probationary utility counts may update, but posterior-threshold
+retirement is reserved for confirmed `ACTIVE` memory so it cannot preempt the
+future-audit lifecycle.
 
 ## Policy state machine
 

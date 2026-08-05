@@ -76,7 +76,9 @@ class ExperienceCritic:
             {
                 "id": item.memory_id,
                 "trigger": item.trigger,
+                "scope": item.scope,
                 "directive": item.directive,
+                "tags": item.tags,
             }
             for item in active_memories[:8]
         ]
@@ -102,7 +104,10 @@ class ExperienceCritic:
             '{"failure_type":"...","signature":"...","evidence":"...",'
             '"confidence":0.0,"memory":{"kind":"procedural","trigger":"...",'
             '"scope":"...","directive":"...","anti_pattern":"...",'
-            '"evidence":"...","tags":["..."]}}.'
+            '"evidence":"...","tags":["..."],'
+            '"supersedes_memory_ids":["active-memory-id"]}}. '
+            "List a superseded ID only when the new rule explicitly replaces or fully "
+            "subsumes that active rule; otherwise return an empty list."
         )
         response = await self.client.generate(
             GenerationRequest(
@@ -121,7 +126,7 @@ class ExperienceCritic:
             )
         )
         try:
-            return self._parse(response.text, episode)
+            return self._parse(response.text, episode, active_memories)
         except (ValueError, TypeError, KeyError):
             return self._fallback(episode)
 
@@ -138,7 +143,12 @@ class ExperienceCritic:
             ensure_ascii=False,
         )
 
-    def _parse(self, text: str, episode: Episode) -> FailureRecord:
+    def _parse(
+        self,
+        text: str,
+        episode: Episode,
+        active_memories: List[MemoryItem],
+    ) -> FailureRecord:
         data = extract_json_object(text)
         memory_data = data["memory"]
         confidence = float(data.get("confidence", memory_data.get("confidence", 0.5)))
@@ -162,6 +172,14 @@ class ExperienceCritic:
             tags=[str(tag)[:80] for tag in memory_data.get("tags", [])[:20]],
             source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
+            supersedes_memory_ids=[
+                str(memory_id)
+                for memory_id in memory_data.get("supersedes_memory_ids", [])[:20]
+                if str(memory_id) in {item.memory_id for item in active_memories}
+                and str(memory_id) != str(memory_data.get("memory_id", ""))
+            ],
+            valid_from_episode_id=episode.episode_id,
+            valid_from_index=episode.index,
             confidence=max(0.0, min(1.0, confidence)),
         )
         return FailureRecord(
@@ -186,6 +204,8 @@ class ExperienceCritic:
             evidence="Fallback because the critic response was not valid structured JSON.",
             source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
+            valid_from_episode_id=episode.episode_id,
+            valid_from_index=episode.index,
             confidence=0.2,
         )
         return FailureRecord(

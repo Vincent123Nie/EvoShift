@@ -81,6 +81,7 @@ class MemoryAgent:
         sample: BenchmarkSample,
         policy: PolicyGenome,
         extra_memories: Optional[Sequence[MemoryItem]] = None,
+        exclude_memory_ids: Optional[Sequence[str]] = None,
         use_memory: bool = True,
         self_refine: bool = False,
     ) -> AgentPrediction:
@@ -93,8 +94,15 @@ class MemoryAgent:
                 domain=sample.domain,
             )
         forced_ids = {item.memory_id for item in extra_memories or []}
-        retrieved = [item for item in retrieved if item.item.memory_id not in forced_ids]
+        excluded_ids = set(exclude_memory_ids or [])
+        retrieved = [
+            item
+            for item in retrieved
+            if item.item.memory_id not in forced_ids and item.item.memory_id not in excluded_ids
+        ]
         for item in reversed(list(extra_memories or [])):
+            if item.memory_id in excluded_ids:
+                continue
             retrieved.insert(
                 0,
                 RetrievedMemory(

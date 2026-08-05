@@ -143,7 +143,12 @@ async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
     assert matrix["runs"][0]["parameters"] == {"policy.top_k": 2}
     assert matrix["runs"][0]["variant"] == "default"
     assert "mean_recovery_steps" in matrix["runs"][0]
+    assert matrix["runs"][0]["promotion_precision_basis"] == "not_applicable"
+    assert matrix["runs"][0]["replay_estimated_promotion_precision"] is None
+    assert matrix["runs"][0]["realized_promotion_precision"] is None
     assert "run_id,algorithm,variant,seed" in (destination / "matrix.csv").read_text(
         encoding="utf-8"
     )
-    assert "Only same-model" in (destination / "report.md").read_text(encoding="utf-8")
+    report = (destination / "report.md").read_text(encoding="utf-8")
+    assert "Realized precision" in report
+    assert "Only same-model" in report

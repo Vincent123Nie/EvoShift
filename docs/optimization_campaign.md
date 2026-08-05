@@ -123,3 +123,47 @@ this result.
 Adoption decision: keep the one-observation verified schedule, regime-aware
 replay, trust gate, and fast-loop suppression. UCB versus Thompson sampling
 remains deferred until several competing active memories exist.
+
+## Iteration 3: dynamic same-source trust and conflict-aware future audit
+
+- Branch: `codex/dynamic-trust-conflict-memory`
+- Experiment record:
+  [experiment_dynamic_trust_conflict_memory.md](experiment_dynamic_trust_conflict_memory.md)
+- Status: adopted from deterministic mechanism evidence; public-model
+  validation remains open.
+- Quality evidence: 109 tests, 84.77% branch-aware coverage, Ruff, strict mypy
+  over 49 source files, package build, and validation of 27 YAML files plus 408
+  expanded sweep assignments.
+
+This iteration removes the source-separation shortcut. Clean, noisy, and burst
+poison feedback can share one observable source. A per-source Beta posterior
+and per-context committed/pending label state quarantine isolated conflicts
+while allowing repeated contradictions to become a confirmed rule change.
+Hidden oracle truth and benchmark attack annotations are excluded from every
+online decision.
+
+Replay-passing memories now enter `PROBATION`. Later relevant interactions run
+a paired control with that memory excluded. Learner-visible future utility
+confirms or rolls back the card; hidden oracle deltas are recorded only after
+the decision. Confirmed conflicting cards explicitly supersede older rules,
+and a successor's later posterior rollback reactivates its predecessor.
+
+The final 60-run baseline sweep completely suppresses the constructed
+two-observation-per-context burst for full EvoShift: premature update and
+poison persistence
+are both `0.0`, versus `0.75` and `1.0` for Reflexion. Under 10% noise plus the
+burst, full EvoShift scores `0.9194` with `0.5857` changed-case success and
+`1.0` invariant retention at 133.8 requests and 40,849 tokens per seed.
+
+The preregistered asymmetric audit rule is adopted. With dynamic trust disabled
+under burst-only corruption, early harm stopping improves score from `0.8750`
+to `0.9306`, halves poison persistence from `0.75` to `0.375`, reduces rollback
+evidence from three observations to 1.5, and lowers mean requests from 195 to
+188. Under ordinary noise it raises false rollback, which is the explicit cost
+of the more aggressive rule.
+
+Negative result: dynamic trust is too conservative. Clean changed-case success
+falls from `0.8571` with static trust to `0.7143` with the full method, and to
+`0.5857` under noise plus burst. The next P1 target is lower-latency change
+confirmation using sequentially valid evidence, without sacrificing the new
+safety slices. UCB versus Thompson sampling remains P2.

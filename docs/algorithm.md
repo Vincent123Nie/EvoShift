@@ -46,7 +46,11 @@ for sample in stream:
     prediction = solve(sample, memories)
     oracle_score = hidden_evaluator(sample.reference, prediction.answer)
     feedback_score = observable_evaluator(sample.feedback, prediction.answer)
-    trust = assess_observable_provenance(sample.feedback_source)
+    trust = assess_observable_feedback(
+        sample.feedback_source,
+        sample.feedback_context,
+        sample.feedback_reference,
+    )
 
     if trust >= memory_update_threshold:
         update_memory_posteriors(prediction.applied_memory_ids, feedback_score)
@@ -59,7 +63,15 @@ for sample in stream:
         if candidate_pool.ready(evidence):
             candidate = stage(evidence.candidate)
             decision = paired_replay(candidate, current_regime, protected_history)
-            activate(candidate) if decision.promote else reject(candidate)
+            if decision.promote and future_audit_enabled:
+                deploy_as_probation(candidate)
+            else:
+                activate(candidate) if decision.promote else reject(candidate)
+
+    for probationary_card used on a trusted later relevant interaction:
+        control = solve_with_only_that_card_excluded(sample)
+        decision = update_future_audit(feedback_score, control.feedback_score)
+        confirm(candidate) if decision.promote else rollback_or_keep_pending(candidate)
 
     if shift.detected and recent_failures and not memory_promoted_this_episode:
         patch = deterministic_bounded_mutation(champion_policy, recent_failures)
@@ -166,21 +178,40 @@ silently reporting zero novelty.
 
 ## Observable feedback trust
 
-`FeedbackTrustModel` reads only `metadata.feedback_source`. A configured source
-receives its declared trust prior; an unknown source receives
-`feedback_default_trust`. Hidden fields such as `feedback_kind`,
-`feedback_corrupted`, the benchmark reference, and the phase identifier are not
-inputs to the online decision.
+In static mode, `FeedbackTrustModel` reads only `metadata.feedback_source`. A
+configured source receives its declared trust prior; an unknown source receives
+`feedback_default_trust`. Dynamic mode additionally reads an application-owned
+observable context key and the learner-visible `feedback_reference`. Hidden
+fields such as `feedback_kind`, `feedback_corrupted`, the oracle reference, the
+phase identifier, and attack annotations are never inputs to the online
+decision.
+
+For source `s`, the initial Beta state is derived from configured prior `p_s`
+and prior strength `k`:
+
+```text
+alpha_s = 1 + p_s * k
+beta_s  = 1 + (1 - p_s) * k
+trust_s = alpha_s / (alpha_s + beta_s)
+```
+
+Each `(source, context)` keeps a committed visible label and a pending
+contradictory label. Repeated agreement initializes or reinforces the committed
+label and increments `alpha_s`. A single contradiction receives
+`dynamic_feedback_conflict_trust` and is quarantined. If the same contradictory
+label reaches `dynamic_feedback_min_consistent_observations`, it becomes the new
+committed label and is treated as a confirmed context change. If the old label
+returns first, the pending burst is treated as transient and contributes to
+`beta_s`.
 
 Four independent thresholds gate drift, memory posterior updates, candidate
 generation, and replay. This prevents an observation that is acceptable for a
 low-risk statistic from automatically becoming a long-lived memory label.
 
-This is provenance-aware admission, not a learned trust model. It assumes the
-source identity is meaningful and difficult to forge. Clean and corrupted
-events sharing one source require temporal consistency, cross-evidence
-agreement, and a dynamic reliability posterior, which are not implemented in
-this iteration.
+This is a small online temporal-consistency model, not semantic truth
+verification. It assumes context keys are stable and that a genuine update
+eventually produces repeated consistent observations. A long-run attacker that
+controls the majority label in a context can still become the committed state.
 
 ## Online drift detection
 
@@ -265,8 +296,10 @@ Jaccard similarity exceeds `dedup_similarity_threshold`, it reuses the nearest
 memory ID, increments the version, merges provenance, and retains accumulated
 utility counts. Otherwise it receives a stable SHA-256-derived ID.
 
-Every staged candidate remains `SHADOW`; normal retrieval only sees `ACTIVE`
-items. This keeps model suggestions from becoming behavior before validation.
+Every staged candidate remains `SHADOW`; normal retrieval sees only `ACTIVE`
+and, when enabled, `PROBATION` items. A replay-passing probationary item may
+affect behavior so that future utility can be measured, but it cannot supersede
+an older rule until the future audit confirms it.
 
 Before staging, `CandidateEvidencePool` groups candidates with the same
 normalized typed content signature. The first observation may enter replay;
@@ -351,6 +384,41 @@ Limitations of the current statistical gate:
 Block bootstrap, sequential tests, false-discovery control, and a separate
 promotion/audit split are natural research extensions.
 
+## Probationary future counterfactual audit
+
+Recent replay can approve a locally plausible but temporally wrong rule. With
+future audit enabled, a replay-passing memory is therefore placed in
+`PROBATION`, not final `ACTIVE` state. Its first-evidence index is stored, and
+replay may be restricted to samples from that index onward.
+
+When a later relevant episode actually applies the probationary card, VERA
+already has the normal candidate-on answer. It issues one paired control solve
+with exactly that card excluded. For observation `j`:
+
+```text
+future_delta_j = visible_feedback(candidate_on_j)
+               - visible_feedback(candidate_off_j)
+```
+
+Only trusted learner-visible deltas enter the decision. Oracle-on and oracle-off
+scores are computed in parallel but attached after completion for post-hoc
+realized-utility metrics. Positive confirmation still uses every normal gain,
+confidence, regression, protected-slice, and cost gate.
+
+The stopping rule is asymmetric:
+
+- once the configured early-harm count is reached, a negative cumulative mean
+  future delta causes immediate rollback;
+- a positive result must reach the normal minimum evidence and pass all gates;
+- an inconclusive minimum-evidence result stays pending until the configured
+  maximum rather than being rejected merely for low power;
+- if the stream ends first, the candidate is `expired`, not falsely counted as
+  a rollback.
+
+This reduces harmful exposure but is not anytime-valid inference. Repeated
+looks at a conventional bootstrap interval can inflate error; confidence
+sequences or sequential probability-ratio tests are a next-step replacement.
+
 ## Slow-loop policy mutation
 
 The MVP policy proposer is deterministic, not LLM-generated. It summarizes
@@ -389,8 +457,13 @@ utility <- alpha / (alpha + beta)
 
 After at least `rollback_min_uses`, an item is retired when utility is below
 `rollback_utility_threshold`. Rollback is local to the harmful memory rather
-than reverting the entire run. A newer active version also retires the prior
-version.
+than reverting the entire run.
+
+A confirmed candidate may list `supersedes_memory_ids`. Confirmation changes
+those active predecessors to `SUPERSEDED`, removing them from retrieval without
+deleting provenance. If the successor later crosses posterior rollback, each
+still-superseded predecessor is reactivated. A candidate rejected during future
+probation never supersedes the old rule, so there is nothing to restore.
 
 This mechanism can misattribute success when several cards are retrieved. The
 `applied_memory_ids` contract reduces but does not eliminate the credit
@@ -407,17 +480,25 @@ The canonical report supports:
 - shift indices and recovery steps;
 - post-shift gain against a sample-aligned baseline;
 - backward transfer and forgetting when a performance matrix is supplied;
-- promotion precision;
+- replay-estimated and future-realized promotion precision plus realized
+  coverage;
 - source-trust quarantine and clean-quarantine rates;
+- future-audit confirmation, rollback, expiration, false rollback, exposure,
+  observation, and latency metrics;
+- conflict supersession and reactivation counts;
 - total shift-alarm events and affected domains;
 - separate memory and policy validation/promotion counts;
 - tokens, cost, and p50/p95 latency.
 
-Two caveats matter:
+Three caveats matter:
 
-1. `promotion_precision` without later realized gains uses replay-estimated
-   mean delta and is optimistic; the run summary explicitly labels it as such.
-2. Foreground resource metrics cover task-solving episodes, whereas
+1. `replay_estimated_promotion_precision` uses recent replay mean delta and is
+   optimistic. `realized_promotion_precision` uses only completed evidence
+   audits and must be read with `realized_promotion_coverage`. The legacy
+   `promotion_precision` field is basis-labelled for compatibility.
+2. A future audit within the same online stream is more causal than replay but
+   is not the same as an untouched public held-out test.
+3. Foreground resource metrics cover task-solving episodes, whereas
    `costs.json` from the budget ledger covers adaptation calls as well.
 
 ## Frozen held-out state audit
@@ -480,6 +561,10 @@ To establish where gains come from, compare at least:
 - no protected replay;
 - recorded control versus freshly paired control;
 - different replay windows and promotion thresholds.
+- static versus dynamic same-source trust;
+- replay-only versus probationary future audit;
+- symmetric versus asymmetric future-audit stopping;
+- conflict supersession disabled versus enabled.
 
 Hyperparameters must be selected on a calibration split or earlier stream,
 then frozen before the final test. Tuning on reported test outcomes invalidates

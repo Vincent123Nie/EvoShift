@@ -1,0 +1,25 @@
+base_config: configs/experiments/policy_shift_hard_demo.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_burst_length: [0, 2]
+variants:
+  full: {}
+  symmetric_future_audit:
+    evolution.future_audit_early_harm_observations: 0
+  static_source_trust:
+    evolution.dynamic_feedback_trust_enabled: false
+  static_source_trust_symmetric_audit:
+    evolution.dynamic_feedback_trust_enabled: false
+    evolution.future_audit_early_harm_observations: 0
+  no_future_audit:
+    evolution.future_audit_enabled: false
+  replay_only:
+    evolution.dynamic_feedback_trust_enabled: false
+    evolution.future_audit_enabled: false
+  no_conflict_supersession:
+    evolution.conflict_supersession_enabled: false
+# 7 variants * 5 seeds * 2 noise levels * 2 burst lengths = 140 runs.
+max_runs: 140

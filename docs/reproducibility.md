@@ -106,6 +106,19 @@ Run the named one-factor robustness and scheduling ablations:
 evoshift sweep --spec configs/sweeps/policy_shift_ablations.yaml
 ```
 
+Run the same-source hard benchmark and its final sweeps:
+
+```bash
+evoshift run --config configs/experiments/policy_shift_hard_demo.yaml
+evoshift sweep --spec configs/sweeps/policy_shift_hard_baselines.yaml
+evoshift sweep --spec configs/sweeps/policy_shift_hard_ablations.yaml
+```
+
+The hard benchmark adds a shared observable source, per-context feedback keys,
+isolated noise, and a short future-policy poison burst. Its ablation sweep is
+140 runs: seven named variants, five seeds, two noise levels, and two burst
+lengths.
+
 Sweep rows retain a `variant` name and aggregate total score, changed-case
 success, old-rule leakage, invariant retention, attack following, corruption
 quarantine, recovery, shift events, memory promotions, complete requests, and
@@ -346,10 +359,14 @@ Tunable values include:
 - Page-Hinkley `delta`, threshold, minimum instances, novelty EWMA and cooldown;
 - replay window and protected quota through phase configuration;
 - feedback source priors and component-specific trust thresholds;
+- dynamic feedback context field, prior strength, consistent-observation count,
+  cold-start/conflict trust, and context-state bound;
 - candidate minimum observations, minimum new evidence, and retry cooldown;
 - current-regime versus historical ordinary replay;
 - whether slow policy evolution still runs after same-episode memory promotion;
 - bootstrap samples/confidence;
+- future-audit minimum, maximum, and early-harm observation counts;
+- conflict supersession and replay-since-first-evidence toggles;
 - minimum gain, CI lower bound, regression and cost gates;
 - rollback utility threshold and minimum uses.
 
@@ -390,9 +407,12 @@ result.
   audit is a distinct future stream but operates on the final state as a whole.
 - Remote calls can remain nondeterministic.
 - The LLM cache is shared by kind/model unless isolated explicitly.
-- `promotion_precision` defaults to replay-estimated rather than
-  candidate-level future-realized gain. The implemented audit does not yet
-  assign its whole-state transfer result back to individual promotions.
+- Online future audit now assigns later within-stream counterfactual outcomes
+  to individual replay promotions, but its coverage can be below one and it is
+  not an untouched public held-out dataset. Always report replay-estimated
+  precision, realized precision, and realized coverage separately.
+- The hard PolicyShift results use a deterministic demo provider and therefore
+  validate lifecycle semantics rather than real-model generalization.
 
 These gaps should be disclosed and, for publication-quality work, closed before
 making a strong empirical claim.

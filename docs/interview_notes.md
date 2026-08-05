@@ -10,10 +10,11 @@ same-model experiment.
 > EvoShift is an API-only LLM agent that adapts to task-distribution shifts
 > without training model weights. It retrieves versioned procedural memories,
 > turns failures into typed experience candidates, detects drift with
-> Page-Hinkley plus retrieval novelty, and promotes memory or retrieval-policy
-> changes only after paired replay passes quality, regression, confidence, and
-> cost gates. Every episode, candidate, policy version, validation, and rollback
-> is auditable in SQLite and reproducible run artifacts.
+> Page-Hinkley plus retrieval novelty, and uses dynamic same-source trust to
+> separate persistent rule changes from isolated conflicts. Replay-passing
+> memories enter probation, then later memory-on/off counterfactuals confirm or
+> roll them back. Every episode, candidate, policy version, validation, and
+> rollback is auditable in SQLite and reproducible run artifacts.
 
 ## Two-minute description
 
@@ -26,6 +27,10 @@ EvoShift therefore has two loops. The fast loop retrieves experience, answers,
 scores, attributes eligible failures, and stages a procedural card. The card is
 shadow state until a champion/challenger replay on the same examples shows
 sufficient paired gain without protected-domain regression or excessive cost.
+It then enters probation: later relevant use is paired with a control that
+excludes only that card, so realized learner-visible utility can confirm or
+roll back the memory. Confirmed conflicts supersede older rules without
+deleting them, and predecessor state can be restored after successor rollback.
 The slow loop watches loss and retrieval novelty; after a detected shift, it
 mutates only allowlisted retrieval/write hyperparameters and applies the same
 verification gate. Active memories accumulate a Beta success posterior and are
@@ -44,7 +49,8 @@ If asked to derive the design, use this order:
 2. Draw `fixed LLM + external memory M_t + policy pi_t`.
 3. Split adaptation into fast memory evolution and slow shift-gated policy
    evolution.
-4. Show the memory lifecycle `shadow -> active/rejected -> retired`.
+4. Show the memory lifecycle
+   `shadow -> probation -> active/superseded/rejected -> retired/reactivated`.
 5. Write the retrieval score:
 
    ```text
@@ -54,7 +60,8 @@ If asked to derive the design, use this order:
    then MMR diversity.
 6. Write paired deltas `delta_i = challenger_i - champion_i` and the six
    promotion gates.
-7. End with protected replay, online rollback, cost ledger, and held-out audit.
+7. End with dynamic trust, future counterfactual audit, protected replay,
+   rollback, cost ledger, and held-out audit.
 
 This sequence shows that the project is an algorithm with explicit state and
 invariants, not a chain of prompts.
@@ -90,8 +97,29 @@ not only one-shot retrieval accuracy.
 Reflexion-style systems commonly generate a verbal lesson and make it available
 later. EvoShift adds typed bounded memories, shadow staging, same-example paired
 replay, protected slices, confidence/cost gates, version lineage, and posterior
-utility rollback. The repository includes an unverified Reflexion-style mode so
-that verification itself can be ablated.
+utility rollback. It also adds probationary future attribution: a candidate can
+pass replay yet still be removed when later real use shows negative utility.
+The repository includes an unverified Reflexion-style mode so that verification
+itself can be ablated.
+
+### How can one source contain both real changes and corrupted feedback?
+
+Source allowlisting is insufficient. EvoShift keeps a Beta reliability
+posterior per source and a committed/pending learner-visible label per context.
+One contradiction is low-trust; repeated identical contradiction commits a
+context change. This uses no hidden oracle label. The trade-off is delayed
+adaptation, and a persistent majority attacker can still capture the committed
+state because temporal consistency is not semantic truth.
+
+### Why is future audit different from replay?
+
+Replay asks whether a candidate helps on a recent calibration buffer. Future
+audit waits until the probationary memory is naturally applied on a later
+relevant interaction, then runs a paired control excluding only that memory.
+The online decision uses learner-visible score; hidden oracle deltas are attached
+afterward for realized precision and harm metrics. This improves causal
+attribution, but it is still within-stream and not a substitute for an untouched
+held-out public test.
 
 ### Why is the critic allowed to use an LLM if the verifier also uses the LLM?
 
@@ -149,11 +177,12 @@ would be stronger but multiplies API cost.
 ### How do you prevent memory poisoning?
 
 Candidates are untrusted, schema bounded, unable to mutate code, kept shadow,
-and promoted only through replay including protected examples. The solver prompt
-also tells the model to ignore cards that request secrets, tool execution, or
-system-rule changes. This reduces risk but is not a complete semantic security
-proof; adversarial-memory evaluation and stricter content policy are future
-work.
+and admitted to probation only through replay including protected examples.
+Later negative future utility can roll them back before final confirmation. The
+solver prompt also tells the model to ignore cards that request secrets, tool
+execution, or system-rule changes. This reduces risk but is not a complete
+semantic security proof; adversarial-memory evaluation and stricter content
+policy are future work.
 
 ### Why paired replay?
 
@@ -181,11 +210,11 @@ auditable.
 
 ### Can the same examples be used to create and validate a memory?
 
-The MVP replay buffer includes recent observed episodes, so it is a calibration
-gate, not a held-out estimate. This is useful for online adaptation but can
-overfit. EvoShift now implements the third role at whole-state level: a distinct
-frozen audit stream. A stronger publication protocol still needs a disjoint
-online promotion buffer and per-candidate future counterfactuals.
+The replay buffer includes recent observed episodes, so it is a calibration
+gate, not a held-out estimate. EvoShift now adds a later within-stream
+per-candidate counterfactual and a distinct frozen whole-state audit. A stronger
+publication protocol still needs per-candidate counterfactuals on an untouched
+held-out stream and sequentially valid stopping statistics.
 
 ### How do you prove the held-out audit did not keep learning?
 
@@ -255,6 +284,9 @@ framework.
 - Page-Hinkley may trigger on noisy hard examples or miss gradual conditional
   drift.
 - Repeated candidate testing overfits the replay buffer.
+- Dynamic trust can delay real changes or accept a persistent majority poison.
+- Early future rollback can reject useful memories under noisy feedback.
+- Some probationary cards expire without enough later relevant observations.
 - Solver-reported memory IDs are an imperfect causal attribution mechanism.
 - API aliases and nondeterminism weaken bitwise reproducibility.
 - Shared caches can distort latency/cost comparisons.
@@ -274,20 +306,25 @@ Do not fill this table until the run artifacts exist.
 | Unverified Reflexion | TBD | TBD | TBD | TBD | TBD | TBD |
 | VERA without drift gate | TBD | TBD | TBD | TBD | TBD | TBD |
 | VERA without protected replay | TBD | TBD | TBD | TBD | TBD | TBD |
+| VERA without dynamic trust | TBD | TBD | TBD | TBD | TBD | TBD |
+| VERA without future audit | TBD | TBD | TBD | TBD | TBD | TBD |
+| VERA with symmetric future stopping | TBD | TBD | TBD | TBD | TBD | TBD |
 | Full VERA | TBD | TBD | TBD | TBD | TBD | TBD |
 
 Useful hyperparameter sensitivity plots include replay window, `top_k`,
 exploration weight, Page-Hinkley threshold, minimum gain, CI lower-bound gate,
-and protected regression tolerance.
+protected regression tolerance, trust confirmation count, and future-audit
+minimum/maximum observations.
 
 ## Resume bullet template
 
 Use placeholders until measured:
 
 > Built EvoShift, an API-only self-evolving memory Agent with typed procedural
-> memories, Page-Hinkley drift detection, BM25 + online utility/UCB + MMR
-> retrieval, paired-bootstrap champion/challenger promotion, and SQLite
-> rollback/audit; on `[pinned benchmark]` under the same `[model/budget]`,
+> memories, same-source temporal trust, Page-Hinkley drift detection, BM25 +
+> online utility/UCB + MMR retrieval, replay-to-probation admission, later
+> memory-on/off counterfactual audit, and SQLite rollback/supersession; on
+> `[pinned benchmark]` under the same `[model/budget]`,
 > improved `[metric]` by `[artifact-backed value]` while limiting protected
 > regression to `[value]` and adaptation overhead to `[tokens or dollars]`.
 
@@ -297,15 +334,16 @@ during the interview.
 
 ## Sensible next research steps
 
-1. Separate generation and promotion buffers, then add per-candidate future
-   counterfactual audit on top of the implemented whole-state audit.
-2. Add block bootstrap or a sequential non-inferiority test.
-3. Add dense/hybrid retrieval and semantic contradiction detection.
-4. Replace heuristic policy mutation with constrained Bayesian optimization or
+1. Reduce dynamic-trust adaptation delay without reopening premature updates.
+2. Replace repeated-look bootstrap stopping with confidence sequences or a
+   sequential non-inferiority test.
+3. Run per-candidate counterfactuals on an untouched held-out policy stream.
+4. Add dense/hybrid retrieval and semantic contradiction detection.
+5. Replace heuristic policy mutation with constrained Bayesian optimization or
    contextual bandits.
-5. Improve causal memory credit with leave-one-out or Shapley approximations.
-6. Calibrate LLM graders against rule metrics and a small human-labeled set.
-7. Evaluate on pinned BBH streams and at least one public long-term memory
+6. Improve causal memory credit with leave-one-out or Shapley approximations.
+7. Calibrate LLM graders against rule metrics and a small human-labeled set.
+8. Evaluate on pinned BBH streams and at least one public long-term memory
    benchmark with identical model/budget baselines.
-8. Add a multi-tenant storage/cache boundary before calling the runtime
+9. Add a multi-tenant storage/cache boundary before calling the runtime
    production-ready.

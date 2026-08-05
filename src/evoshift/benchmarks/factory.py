@@ -49,6 +49,9 @@ def create_benchmark(
             phase_size=config.phase_size or 24,
             feedback_noise_rate=config.feedback_noise_rate,
             feedback_attack_rate=config.feedback_attack_rate,
+            feedback_shared_source=config.feedback_shared_source,
+            feedback_shared_source_name=config.feedback_shared_source_name,
+            feedback_attack_burst_length=config.feedback_attack_burst_length,
             shuffle_within_phase=config.shuffle,
             limit=config.limit,
         )
