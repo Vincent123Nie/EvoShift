@@ -149,6 +149,10 @@ evoshift audit \
   --source-run runs/<source-run-id> \
   --config configs/experiments/audit_bbh_heldout.yaml
 
+evoshift audit-memories \
+  --source-run runs/<source-run-id> \
+  --config configs/experiments/audit_bbh_heldout.yaml
+
 evoshift compare runs/<static-heldout-run> runs/<audit-run>
 ```
 
@@ -162,9 +166,11 @@ The audit command:
   promotions, and rollbacks;
 - recomputes the final state hash and fails if any state changed.
 
-This measures whole-state forward transfer. Per-candidate attribution on an
-untouched held-out dataset remains future work; later within-stream candidate
-counterfactual attribution is implemented.
+This measures whole-state forward transfer. `audit-memories` extends it with a
+paired leave-one-memory-out run for every active `(memory_id, version)` card.
+The report contains held-out score deltas, paired bootstrap intervals,
+protected/future-change slices, and full-state retrieval/application coverage.
+It requires a disabled cache and labels zero-coverage cards as not tested.
 
 ## Same-source PolicyShift research diagnostic
 
