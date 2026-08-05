@@ -204,3 +204,76 @@ This iteration is accepted into `main` only if:
 Full EvoShift need not win every capability metric. A safety improvement is
 adoptable only when its capability and resource trade-offs are reported rather
 than hidden.
+
+## Implemented engineering result
+
+Commit `b0f965cb6483f155fcc96b65713b565e390cf13e` implements:
+
+- fail-closed download, size, SHA-256, revision, and semantic validation of the
+  two pinned tau3 retail files;
+- a 7-rule-family, 18-case-template derived stream with transition,
+  future-change, protected, noisy, attacked, revoked, and recurring regimes;
+- learner-visible semantic memory tags without copying hidden oracle tags into
+  the critic;
+- a first-class `replay_only` algorithm mode;
+- four-method live mini and five-seed formal sweep specifications; and
+- seed-then-paired-sample hierarchical bootstrap reports in JSON, CSV, and
+  Markdown.
+
+The generated 144-episode formal stream at seed 11 has 90 `DENY` and 54
+`ALLOW` labels, seven rule families, zero policy-version prompt leaks, and
+dataset fingerprint
+`a124f152e2228ff878c86069912ba8b344ede3ff71549ccc2e3ab36a530b7435`.
+
+## Live four-method mini diagnostic
+
+Artifact: `runs/sweeps/20260805T030609Z`. All four runs used the same remote
+`gpt-5.6` alias, seed 11, 16 uncached foreground episodes, and clean
+`v1 -> v2` stream. This is an engineering diagnostic, not the preregistered
+five-seed result.
+
+| Method | Score | Changed success | Invariant retention | Premature update | Total requests | Total tokens |
+|---|---:|---:|---:|---:|---:|---:|
+| Static | 0.6250 | 0.7500 | 0.7500 | 0.7500 | 16 | 9,447 |
+| Reflexion-style | 0.7500 | 0.7500 | 0.7500 | 0.2500 | 20 | 18,139 |
+| Replay-only | 0.6250 | 0.5000 | 0.7500 | 0.5000 | 78 | 58,568 |
+| Full EvoShift | 0.5625 | 0.5000 | 0.6250 | 0.5000 | 27 | 18,083 |
+
+The mini run rejects any capability claim for the current Full configuration.
+Against Reflexion-style, Full changed mean score by `-0.1875`, with a one-seed
+paired interval `[-0.5000, 0.1250]`. The interval is deliberately reported but
+is not a repeated-seed inference.
+
+## Established failure case
+
+Full EvoShift quarantined 9 of 16 clean observations. Every unseen policy
+context received cold-start trust `0.40`, below the `0.60` learning gates. A
+second matching observation established the initial consensus, but sparse
+invariant contexts appeared only once. At the real `v1 -> v2` change, the first
+new label for each repeated context received conflict trust `0.10`; only the
+second label confirmed the change.
+
+This mechanism prevented immediate reactions to isolated contradictions, but
+in the short public-source stream it also:
+
+- suppressed useful failure extraction on first-seen contexts;
+- delayed both changed-context updates by one observation;
+- reduced invariant retention from `0.75` to `0.625` relative to the other
+  adaptive methods; and
+- produced one replay-passing probationary memory that expired at stream end
+  without future-audit evidence.
+
+Replay-only exposed the opposite cost problem: one memory passed replay, but
+four memory/policy validations drove total usage to 78 requests and 58,568
+tokens without improving score over Static. These two negative results make
+the next priorities concrete: posterior change detection/cold-start handling
+for Full, and replay scheduling/calibration for Replay-only.
+
+## Iteration adoption decision
+
+Adopt the evaluation infrastructure and first-class baseline because source
+integrity, method isolation, real provider execution, resource accounting, and
+paired reporting all passed. Do not adopt a claim that the present Full
+algorithm is superior on the public-source stream. The next algorithm branch
+must improve clean cold-start eligibility and change detection while retaining
+the isolated-noise false-alarm defense.

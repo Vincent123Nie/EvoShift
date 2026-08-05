@@ -141,13 +141,14 @@ feedback condition and cannot be mixed with `reward_only` results.
 
 ## 4. Baselines and fairness
 
-The repository currently exposes four algorithm modes:
+The repository currently exposes five algorithm modes:
 
 | Method | First-pass behavior | Cross-task writes | Promotion verification | Policy evolution |
 |---|---|---:|---:|---:|
 | Static | One solver pass; a fresh isolated run has no learned memories | No | No | No |
 | Self-Refine | Draft followed by one within-task refinement call | No | No | No |
 | Reflexion | One solver pass plus append-style experience after failures | Yes | No | No |
+| Replay-only | Shadow candidates plus paired replay; no dynamic trust or post-promotion audit | Yes | Yes | Yes |
 | VERA/EvoShift | Retrieval, typed experience candidates, paired replay, and rollback | Yes | Yes | Yes |
 
 All primary comparisons must hold constant:
@@ -283,6 +284,28 @@ Protected invariant examples may cross regime boundaries. Report
 `shift_detection_events` separately from `domains_with_detected_shift`; the
 former counts alarms, while the latter counts domains that experienced at least
 one alarm.
+
+### 5.3 Tau3Retail-PolicyDrift
+
+`tau3_retail_policy_shift` is a public-source-derived extension based on the
+MIT-licensed tau3-bench v1.0.1 retail policy and task vocabulary. The adapter
+pins the peeled upstream commit, file sizes, and SHA-256 hashes, then fails
+closed on source or structural mismatch. Authentication, cancellation,
+returns, exchanges, payment constraints, order state, and confirmation rules
+provide multiple decision families.
+
+The upstream source is a static snapshot. EvoShift applies explicit versioned
+overlays to a subset of its rules and records that derivation in every sample.
+This is therefore not an official tau3-bench task and its results must not be
+reported as official tau3-bench or leaderboard scores. As in PolicyShift, the
+active overlay, oracle labels, and valid/stale memory tags remain outside the
+solver prompt.
+
+Repeated-seed sweep reports include a hierarchical paired interval: resample
+seed clusters first, then paired samples inside every selected seed. Cost and
+governance metrics that exist only once per run use the same routine with one
+run-level observation per seed. A one-seed mini diagnostic validates the
+protocol but is not a repeated-seed research result.
 
 ## 6. Metric definitions
 

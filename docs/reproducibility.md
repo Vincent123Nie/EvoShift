@@ -93,6 +93,27 @@ evoshift run --config configs/experiments/static_policy_shift_demo.yaml
 evoshift run --config configs/experiments/policy_shift_demo.yaml
 ```
 
+Pull and verify the pinned tau3-bench retail source, then run the bounded live
+protocol smoke:
+
+```bash
+evoshift data pull tau3-retail-policy \
+  --config configs/experiments/tau3_retail_policy_shift_live.yaml
+evoshift sweep \
+  --spec configs/sweeps/tau3_retail_policy_shift_live_mini.yaml
+```
+
+The full four-method, five-seed matrix is:
+
+```bash
+evoshift sweep \
+  --spec configs/sweeps/tau3_retail_policy_shift_live_baselines.yaml
+```
+
+The full matrix makes paid remote requests. Inject credentials and reverse
+proxy settings only through the documented environment variables. Generated
+source caches and run artifacts remain Git-ignored.
+
 For repeated-seed clean, noise-only, attack-only, and combined corruption
 comparisons:
 

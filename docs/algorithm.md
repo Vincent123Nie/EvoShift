@@ -80,10 +80,12 @@ for sample in stream:
         champion_policy = challenger if decision.promote else champion_policy
 ```
 
-Static, Self-Refine, Reflexion-style, and EvoShift modes share the same runner
-but enable different behaviors. This is preferable to separate scripts because
-the scorer, sample order, artifact format, and provider accounting remain
-comparable.
+Static, Self-Refine, Reflexion-style, Replay-only, and EvoShift modes share the
+same runner but enable different behaviors. Replay-only keeps shadow staging,
+paired replay, protected slices, and policy evolution while disabling dynamic
+feedback trust, probation/future audit, and active causal retirement. This is
+preferable to separate scripts because the scorer, sample order, artifact
+format, and provider accounting remain comparable.
 
 ## Retrieval: provenance scope + BM25 + Beta utility/UCB bonus + MMR
 
