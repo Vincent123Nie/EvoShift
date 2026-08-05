@@ -3,10 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from evoshift.schemas import Algorithm
+from evoshift.schemas import (
+    Algorithm,
+    BenchmarkSample,
+    Episode,
+    ScoreBundle,
+    SolverOutput,
+)
 from evoshift.sweep import (
     SweepSpec,
     aggregate_sweep,
+    compare_sweep_runs,
     expand_sweep,
     load_sweep_spec,
     run_sweep,
@@ -24,6 +31,19 @@ def test_sweep_cartesian_product() -> None:
     assert len(assignments) == 8
     assert {item["algorithm"] for item in assignments} == {"static", "evoshift"}
     assert {item["variant"] for item in assignments} == {"default"}
+
+
+def test_replay_only_is_a_first_class_sweep_algorithm() -> None:
+    spec = SweepSpec(
+        base_config=Path("base.yaml"),
+        algorithms=[Algorithm.REPLAY_ONLY],
+        seeds=[11, 22],
+        grid={},
+    )
+
+    assignments = expand_sweep(spec)
+
+    assert [item["algorithm"] for item in assignments] == ["replay_only", "replay_only"]
 
 
 def test_sweep_expands_named_ablation_variants() -> None:
@@ -114,6 +134,100 @@ def test_sweep_aggregation_reports_seed_variance() -> None:
     assert aggregate["changed_case_success_mean"] == pytest.approx(0.7)
     assert aggregate["old_rule_leakage_mean"] == pytest.approx(0.3)
     assert aggregate["variant"] == "full"
+
+
+def _write_comparison_run(
+    run_dir: Path,
+    *,
+    run_id: str,
+    scores: list[float],
+) -> None:
+    run_dir.mkdir(parents=True)
+    episodes = []
+    for index, score in enumerate(scores):
+        changed = index == 0
+        episodes.append(
+            Episode(
+                episode_id=f"{run_id}-{index}",
+                run_id=run_id,
+                index=index,
+                sample=BenchmarkSample(
+                    sample_id=f"sample-{index}",
+                    prompt="case",
+                    reference="ALLOW",
+                    metadata={
+                        "policy_changed_case": changed,
+                        "protected": not changed,
+                        "future_change_case": False,
+                        "feedback_kind": "clean",
+                    },
+                ),
+                output=SolverOutput(answer="ALLOW" if score else "DENY"),
+                score=ScoreBundle(primary=score, success=bool(score)),
+                feedback_score=ScoreBundle(primary=score, success=bool(score)),
+            )
+        )
+    (run_dir / "predictions.jsonl").write_text(
+        "\n".join(episode.model_dump_json() for episode in episodes) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_compare_sweep_runs_reports_clustered_capability_safety_and_cost(
+    tmp_path: Path,
+) -> None:
+    rows = []
+    for stream_seed in (11, 22):
+        baseline_dir = tmp_path / f"baseline-{stream_seed}"
+        candidate_dir = tmp_path / f"candidate-{stream_seed}"
+        _write_comparison_run(
+            baseline_dir,
+            run_id=f"baseline-{stream_seed}",
+            scores=[0.0, 1.0] if stream_seed == 11 else [0.0, 0.0],
+        )
+        _write_comparison_run(
+            candidate_dir,
+            run_id=f"candidate-{stream_seed}",
+            scores=[1.0, 1.0] if stream_seed == 11 else [0.0, 1.0],
+        )
+        common = {
+            "variant": "default",
+            "seed": stream_seed,
+            "parameters": {"benchmark.feedback_noise_rate": 0.0},
+            "cost_usd": 0.0,
+            "harmful_active_memory_exposure_n": 0,
+            "stale_memory_retention_rate": 0.0,
+            "false_retirement_rate": 0.0,
+        }
+        rows.extend(
+            [
+                {
+                    **common,
+                    "algorithm": "static",
+                    "run_dir": str(baseline_dir),
+                    "total_requests": 2,
+                    "total_tokens": 20,
+                },
+                {
+                    **common,
+                    "algorithm": "evoshift",
+                    "run_dir": str(candidate_dir),
+                    "total_requests": 3,
+                    "total_tokens": 30,
+                },
+            ]
+        )
+
+    comparisons = compare_sweep_runs(rows, samples=1000, bootstrap_seed=7)
+
+    assert len(comparisons) == 1
+    comparison = comparisons[0]
+    assert comparison["n_seeds"] == 2
+    assert comparison["bootstrap_unit"] == "seed_then_paired_sample"
+    assert comparison["metrics"]["score"]["delta_mean"] == pytest.approx(0.5)
+    assert comparison["metrics"]["score"]["n_pairs"] == 4
+    assert comparison["metrics"]["total_requests"]["delta_mean"] == 1.0
+    assert comparison["metrics"]["total_tokens"]["delta_mean"] == 10.0
 
 
 @pytest.mark.asyncio

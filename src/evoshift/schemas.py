@@ -46,6 +46,7 @@ class Algorithm(str, Enum):
     STATIC = "static"
     SELF_REFINE = "self_refine"
     REFLEXION = "reflexion"
+    REPLAY_ONLY = "replay_only"
     EVOSHIFT = "evoshift"
 
 

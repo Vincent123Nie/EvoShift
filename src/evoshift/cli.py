@@ -142,6 +142,11 @@ def benchmark_list() -> None:
     rows = [
         ("synthetic_shift", "Deterministic CI and shift/rollback validation", "no"),
         ("policy_shift", "Policy updates with noisy/adversarial feedback", "no"),
+        (
+            "tau3_retail_policy_shift",
+            "Pinned tau3 retail policy with explicit derived version overlays",
+            "first pull",
+        ),
         ("jsonl", "User or exported public dataset in normalized JSONL", "no"),
         ("bbh", "Pinned BIG-Bench Hard task-family shift stream", "first pull"),
         ("huggingface", "Generic Hugging Face dataset field mapper", "first pull"),
@@ -153,16 +158,26 @@ def benchmark_list() -> None:
 
 @data_app.command("pull")
 def data_pull(
-    dataset: str = typer.Argument("bbh", help="Dataset kind, currently bbh."),
+    dataset: str = typer.Argument(
+        "bbh", help="Dataset kind: bbh or tau3-retail-policy."
+    ),
     config: Optional[Path] = typer.Option(None, help="Configuration YAML."),
     set_value: List[str] = typer.Option([], "--set", help="Override dotted key=value."),
 ) -> None:
     """Download and integrity-check a configured public benchmark."""
 
     try:
-        if dataset.lower() != "bbh":
-            raise ValueError("data pull currently supports 'bbh'; HF downloads occur on run")
-        resolved = _config(config, ["benchmark.kind=bbh", *set_value])
+        normalized = dataset.lower().replace("_", "-")
+        if normalized == "bbh":
+            benchmark_kind = "bbh"
+        elif normalized in {"tau3-retail-policy", "tau3-retail-policy-shift"}:
+            benchmark_kind = "tau3_retail_policy_shift"
+        else:
+            raise ValueError(
+                "data pull currently supports 'bbh' and 'tau3-retail-policy'; "
+                "HF downloads occur on run"
+            )
+        resolved = _config(config, [f"benchmark.kind={benchmark_kind}", *set_value])
         from evoshift.benchmarks import create_benchmark
 
         adapter = create_benchmark(
@@ -172,7 +187,8 @@ def data_pull(
         if download is None:
             raise ValueError("configured benchmark has no explicit download operation")
         files = download()
-        console.print(f"[green]Verified {len(files)} BBH files.[/green]")
+        label = "BBH files" if benchmark_kind == "bbh" else "source files"
+        console.print(f"[green]Verified {len(files)} {label}.[/green]")
         console.print(str(getattr(adapter, "manifest_path", "")))
     except Exception as exc:
         _fail(exc)

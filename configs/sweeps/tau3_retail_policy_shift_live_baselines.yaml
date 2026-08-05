@@ -1,0 +1,12 @@
+base_config: configs/experiments/tau3_retail_policy_shift_live.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - static
+  - reflexion
+  - replay_only
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_burst_length: [0, 2]
+# 4 methods * 5 seeds * 2 noise levels * 2 burst lengths = 80 live runs.
+max_runs: 80

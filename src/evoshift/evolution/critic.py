@@ -160,6 +160,12 @@ class ExperienceCritic:
             kind = MemoryKind(str(memory_data.get("kind", "procedural")))
         except ValueError:
             kind = MemoryKind.PROCEDURAL
+        tags = [str(tag)[:80] for tag in memory_data.get("tags", [])[:20]]
+        learner_visible_tag = str(
+            episode.sample.metadata.get("learner_visible_memory_tag", "")
+        ).strip()
+        if learner_visible_tag:
+            tags.append(learner_visible_tag[:80])
         memory = MemoryItem(
             memory_id="",
             kind=kind,
@@ -169,7 +175,7 @@ class ExperienceCritic:
             directive=str(memory_data["directive"]).strip(),
             anti_pattern=str(memory_data.get("anti_pattern", "")).strip(),
             evidence=str(memory_data.get("evidence", data.get("evidence", ""))).strip(),
-            tags=[str(tag)[:80] for tag in memory_data.get("tags", [])[:20]],
+            tags=list(dict.fromkeys(tags))[:20],
             source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
             supersedes_memory_ids=[

@@ -8,6 +8,7 @@ from evoshift.benchmarks.huggingface import HuggingFaceBenchmarkAdapter
 from evoshift.benchmarks.jsonl import JSONLBenchmarkAdapter
 from evoshift.benchmarks.policy_shift import PolicyShiftBenchmark
 from evoshift.benchmarks.synthetic import SyntheticShiftBenchmark
+from evoshift.benchmarks.tau_retail_policy_shift import TauRetailPolicyShiftBenchmark
 from evoshift.config import BenchmarkConfig
 from evoshift.errors import DatasetError
 from evoshift.schemas import BenchmarkSample
@@ -45,6 +46,28 @@ def create_benchmark(
         )
     if kind in {"policy_shift", "enterprise_policy_shift"}:
         return PolicyShiftBenchmark(
+            seed=seed,
+            phase_size=config.phase_size or 24,
+            feedback_noise_rate=config.feedback_noise_rate,
+            feedback_attack_rate=config.feedback_attack_rate,
+            feedback_shared_source=config.feedback_shared_source,
+            feedback_shared_source_name=config.feedback_shared_source_name,
+            feedback_attack_burst_length=config.feedback_attack_burst_length,
+            policy_schedule=config.policy_schedule or None,
+            shuffle_within_phase=config.shuffle,
+            limit=config.limit,
+        )
+    if kind in {
+        "tau3_retail_policy_shift",
+        "tau_retail_policy_shift",
+        "public_retail_policy_shift",
+    }:
+        configured_cache = cache_dir or Path(
+            config.path or "data/benchmarks/tau3_retail_policy_shift"
+        )
+        resolved_cache = _resolve_path(configured_cache, project_root)
+        return TauRetailPolicyShiftBenchmark(
+            resolved_cache,
             seed=seed,
             phase_size=config.phase_size or 24,
             feedback_noise_rate=config.feedback_noise_rate,

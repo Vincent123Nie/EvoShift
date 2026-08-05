@@ -1,0 +1,14 @@
+base_config: configs/experiments/tau3_retail_policy_shift_live.yaml
+seeds: [11]
+algorithms:
+  - static
+  - reflexion
+  - replay_only
+  - evoshift
+grid:
+  benchmark.phase_size: [8]
+  benchmark.policy_schedule: [[v1, v2]]
+  benchmark.feedback_noise_rate: [0.0]
+  benchmark.feedback_attack_burst_length: [0]
+# Engineering-only live protocol smoke: 4 methods * 1 seed = 4 runs.
+max_runs: 4

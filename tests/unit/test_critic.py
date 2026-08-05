@@ -71,3 +71,29 @@ async def test_critic_uses_observable_feedback_instead_of_oracle_score() -> None
     content = request.messages[-1]["content"]
     assert '"reward": 1.0' in content
     assert '"feedback": "success"' in content
+
+
+@pytest.mark.asyncio
+async def test_critic_persists_only_explicit_learner_visible_policy_tag() -> None:
+    client = StubClient()
+    critic = ExperienceCritic(client, ProviderConfig(model="fake"), EvolutionConfig())
+    episode = _episode().model_copy(
+        update={
+            "sample": _episode().sample.model_copy(
+                update={
+                    "metadata": {
+                        "learner_visible_memory_tag": (
+                            "tau3_policy:cancel_reason_duplicate_order:allow"
+                        ),
+                        "valid_memory_tags": ["hidden-oracle-tag-not-allowed"],
+                    }
+                }
+            )
+        }
+    )
+
+    result = await critic.analyze(episode, [])
+
+    assert result.proposed_memory is not None
+    assert "tau3_policy:cancel_reason_duplicate_order:allow" in result.proposed_memory.tags
+    assert "hidden-oracle-tag-not-allowed" not in result.proposed_memory.tags

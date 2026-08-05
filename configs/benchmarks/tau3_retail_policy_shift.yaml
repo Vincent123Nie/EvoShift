@@ -1,0 +1,13 @@
+benchmark:
+  kind: tau3_retail_policy_shift
+  name: tau3_retail_policy_shift_public_source_derived
+  path: data/benchmarks/tau3_retail_policy_shift
+  revision: v1.0.1
+  phase_size: 24
+  policy_schedule: [v1, v2, v3, v2, v1, v2]
+  shuffle: false
+  feedback_noise_rate: 0.10
+  feedback_attack_rate: 0.0
+  feedback_shared_source: true
+  feedback_shared_source_name: customer_support_portal
+  feedback_attack_burst_length: 2

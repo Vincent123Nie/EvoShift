@@ -7,14 +7,16 @@ import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 
 import yaml
 
 from evoshift.benchmarks import create_benchmark
 from evoshift.config import load_config
+from evoshift.evaluation import paired_cluster_bootstrap_ci
 from evoshift.runner import EvoShiftRunner
-from evoshift.schemas import Algorithm
+from evoshift.runtime.artifacts import load_episodes
+from evoshift.schemas import Algorithm, Episode
 
 _AGGREGATE_FIELDS = {
     "mean_score": "score",
@@ -283,13 +285,221 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
             }
         )
     aggregates = aggregate_sweep(rows)
+    analysis_config = load_config(spec.base_config)
+    comparisons = compare_sweep_runs(
+        rows,
+        samples=analysis_config.evaluation.bootstrap_samples,
+        confidence=analysis_config.evaluation.confidence_level,
+    )
     (destination / "matrix.json").write_text(
-        json.dumps({"runs": rows, "aggregates": aggregates}, indent=2, sort_keys=True),
+        json.dumps(
+            {"runs": rows, "aggregates": aggregates, "comparisons": comparisons},
+            indent=2,
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
     _write_csv(destination / "matrix.csv", rows)
-    _write_sweep_markdown(destination / "report.md", aggregates)
+    _write_comparison_csv(destination / "comparisons.csv", comparisons)
+    _write_sweep_markdown(destination / "report.md", aggregates, comparisons)
     return destination
+
+
+def compare_sweep_runs(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    candidate_algorithm: str = "evoshift",
+    samples: int = 2000,
+    confidence: float = 0.95,
+    bootstrap_seed: int = 42,
+) -> list[dict[str, Any]]:
+    """Build paired repeated-seed capability, safety, and cost intervals."""
+
+    grouped: Dict[str, List[Mapping[str, Any]]] = {}
+    for row in rows:
+        identity = json.dumps(
+            {
+                "variant": row.get("variant", "default"),
+                "parameters": row.get("parameters", {}),
+            },
+            sort_keys=True,
+        )
+        grouped.setdefault(identity, []).append(row)
+
+    output: list[dict[str, Any]] = []
+    for identity, group in grouped.items():
+        condition = json.loads(identity)
+        by_algorithm: dict[str, dict[int, Mapping[str, Any]]] = {}
+        for row in group:
+            algorithm = str(row["algorithm"])
+            stream_seed = int(row["seed"])
+            algorithm_rows = by_algorithm.setdefault(algorithm, {})
+            if stream_seed in algorithm_rows:
+                raise ValueError(
+                    f"duplicate sweep row for algorithm={algorithm} seed={stream_seed}"
+                )
+            algorithm_rows[stream_seed] = row
+        candidate_rows = by_algorithm.get(candidate_algorithm)
+        if candidate_rows is None:
+            continue
+        for baseline_algorithm, baseline_rows in sorted(by_algorithm.items()):
+            if baseline_algorithm == candidate_algorithm:
+                continue
+            if set(candidate_rows) != set(baseline_rows):
+                raise ValueError(
+                    "paired repeated-seed comparison requires identical seed sets for "
+                    f"{candidate_algorithm} and {baseline_algorithm}"
+                )
+            seeds = sorted(candidate_rows)
+            episode_pairs: dict[int, tuple[list[Episode], list[Episode]]] = {}
+            for stream_seed in seeds:
+                baseline_episodes = load_episodes(
+                    Path(str(baseline_rows[stream_seed]["run_dir"])) / "predictions.jsonl"
+                )
+                candidate_episodes = load_episodes(
+                    Path(str(candidate_rows[stream_seed]["run_dir"])) / "predictions.jsonl"
+                )
+                episode_pairs[stream_seed] = _align_episode_pair(
+                    baseline_episodes,
+                    candidate_episodes,
+                )
+
+            metrics: dict[str, dict[str, Any]] = {}
+            episode_specs: dict[
+                str,
+                tuple[Callable[[Episode], bool], Callable[[Episode], float]],
+            ] = {
+                "score": (lambda _episode: True, lambda episode: episode.score.primary),
+                "changed_case_success": (
+                    lambda episode: bool(
+                        episode.sample.metadata.get("policy_changed_case")
+                    ),
+                    lambda episode: float(episode.score.success),
+                ),
+                "old_rule_leakage": (
+                    lambda episode: bool(
+                        episode.sample.metadata.get("policy_changed_case")
+                    ),
+                    lambda episode: float(not episode.score.success),
+                ),
+                "invariant_retention": (
+                    lambda episode: bool(episode.sample.metadata.get("protected")),
+                    lambda episode: float(episode.score.success),
+                ),
+                "premature_update": (
+                    lambda episode: bool(
+                        episode.sample.metadata.get("future_change_case")
+                    ),
+                    lambda episode: float(not episode.score.success),
+                ),
+                "attack_feedback_follow": (
+                    lambda episode: episode.sample.metadata.get("feedback_kind") == "attack",
+                    lambda episode: float(episode.adaptation_score.success),
+                ),
+            }
+            for metric_name, (predicate, value) in episode_specs.items():
+                deltas_by_seed: dict[int, list[float]] = {}
+                for stream_seed, (baseline_episodes, candidate_episodes) in episode_pairs.items():
+                    deltas = [
+                        value(candidate) - value(baseline)
+                        for baseline, candidate in zip(baseline_episodes, candidate_episodes)
+                        if predicate(candidate)
+                    ]
+                    if deltas:
+                        deltas_by_seed[stream_seed] = deltas
+                if len(deltas_by_seed) == len(seeds):
+                    metrics[metric_name] = _cluster_interval_payload(
+                        deltas_by_seed,
+                        samples=samples,
+                        confidence=confidence,
+                        bootstrap_seed=bootstrap_seed,
+                    )
+
+            for source, metric_name in (
+                ("total_requests", "total_requests"),
+                ("total_tokens", "total_tokens"),
+                ("cost_usd", "cost_usd"),
+                ("harmful_active_memory_exposure_n", "harmful_active_memory_exposure"),
+                ("stale_memory_retention_rate", "stale_memory_retention"),
+                ("false_retirement_rate", "false_retirement"),
+            ):
+                run_deltas: dict[int, list[float]] = {}
+                for stream_seed in seeds:
+                    baseline_value = baseline_rows[stream_seed].get(source)
+                    candidate_value = candidate_rows[stream_seed].get(source)
+                    if not isinstance(baseline_value, (int, float)) or not isinstance(
+                        candidate_value, (int, float)
+                    ):
+                        break
+                    run_deltas[stream_seed] = [float(candidate_value) - float(baseline_value)]
+                if len(run_deltas) == len(seeds):
+                    metrics[metric_name] = _cluster_interval_payload(
+                        run_deltas,
+                        samples=samples,
+                        confidence=confidence,
+                        bootstrap_seed=bootstrap_seed,
+                    )
+
+            output.append(
+                {
+                    **condition,
+                    "candidate_algorithm": candidate_algorithm,
+                    "baseline_algorithm": baseline_algorithm,
+                    "n_seeds": len(seeds),
+                    "seed_list": seeds,
+                    "confidence": confidence,
+                    "bootstrap_samples": samples,
+                    "bootstrap_unit": "seed_then_paired_sample",
+                    "metrics": metrics,
+                }
+            )
+    return sorted(
+        output,
+        key=lambda item: (
+            json.dumps(item["parameters"], sort_keys=True),
+            item["variant"],
+            item["baseline_algorithm"],
+        ),
+    )
+
+
+def _align_episode_pair(
+    baseline: Sequence[Episode],
+    candidate: Sequence[Episode],
+) -> tuple[list[Episode], list[Episode]]:
+    baseline_by_id = {episode.sample.sample_id: episode for episode in baseline}
+    candidate_by_id = {episode.sample.sample_id: episode for episode in candidate}
+    if len(baseline_by_id) != len(baseline) or len(candidate_by_id) != len(candidate):
+        raise ValueError("paired sweep runs contain duplicate sample ids")
+    if set(baseline_by_id) != set(candidate_by_id):
+        raise ValueError("paired sweep runs do not contain identical sample ids")
+    ordered_ids = [episode.sample.sample_id for episode in candidate]
+    return (
+        [baseline_by_id[sample_id] for sample_id in ordered_ids],
+        [candidate_by_id[sample_id] for sample_id in ordered_ids],
+    )
+
+
+def _cluster_interval_payload(
+    deltas_by_seed: Mapping[int, Sequence[float]],
+    *,
+    samples: int,
+    confidence: float,
+    bootstrap_seed: int,
+) -> dict[str, Any]:
+    mean_delta, ci_low, ci_high = paired_cluster_bootstrap_ci(
+        deltas_by_seed,
+        samples=samples,
+        confidence=confidence,
+        seed=bootstrap_seed,
+    )
+    return {
+        "delta_mean": mean_delta,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "n_seeds": len(deltas_by_seed),
+        "n_pairs": sum(len(values) for values in deltas_by_seed.values()),
+    }
 
 
 def aggregate_sweep(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
@@ -397,7 +607,61 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
             writer.writerow(encoded)
 
 
-def _write_sweep_markdown(path: Path, aggregates: Iterable[Mapping[str, Any]]) -> None:
+def _write_comparison_csv(
+    path: Path,
+    comparisons: Sequence[Mapping[str, Any]],
+) -> None:
+    fields = [
+        "candidate_algorithm",
+        "baseline_algorithm",
+        "variant",
+        "parameters",
+        "metric",
+        "delta_mean",
+        "ci_low",
+        "ci_high",
+        "n_seeds",
+        "n_pairs",
+        "confidence",
+        "bootstrap_samples",
+        "bootstrap_unit",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for comparison in comparisons:
+            metrics = comparison.get("metrics", {})
+            if not isinstance(metrics, Mapping):
+                continue
+            for metric_name, interval in sorted(metrics.items()):
+                if not isinstance(interval, Mapping):
+                    continue
+                writer.writerow(
+                    {
+                        "candidate_algorithm": comparison["candidate_algorithm"],
+                        "baseline_algorithm": comparison["baseline_algorithm"],
+                        "variant": comparison["variant"],
+                        "parameters": json.dumps(
+                            comparison["parameters"], sort_keys=True
+                        ),
+                        "metric": metric_name,
+                        "delta_mean": interval.get("delta_mean"),
+                        "ci_low": interval.get("ci_low"),
+                        "ci_high": interval.get("ci_high"),
+                        "n_seeds": interval.get("n_seeds"),
+                        "n_pairs": interval.get("n_pairs"),
+                        "confidence": comparison["confidence"],
+                        "bootstrap_samples": comparison["bootstrap_samples"],
+                        "bootstrap_unit": comparison["bootstrap_unit"],
+                    }
+                )
+
+
+def _write_sweep_markdown(
+    path: Path,
+    aggregates: Iterable[Mapping[str, Any]],
+    comparisons: Sequence[Mapping[str, Any]] = (),
+) -> None:
     lines = [
         "# EvoShift sweep report",
         "",
@@ -449,6 +713,46 @@ def _write_sweep_markdown(path: Path, aggregates: Iterable[Mapping[str, Any]]) -
             )
             + " |"
         )
+    if comparisons:
+        lines.extend(
+            [
+                "",
+                "## Paired repeated-seed comparisons",
+                "",
+                (
+                    "Intervals resample seed clusters first and paired samples within "
+                    "each selected seed. Deltas are candidate minus baseline."
+                ),
+                "",
+                (
+                    "| Candidate | Baseline | Variant | Parameters | Seeds | Score delta | "
+                    "Changed delta | Invariant delta | Old leakage delta | Requests delta | "
+                    "Tokens delta |"
+                ),
+                "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for item in comparisons:
+            metrics = item.get("metrics", {})
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(item["candidate_algorithm"]),
+                        str(item["baseline_algorithm"]),
+                        str(item["variant"]),
+                        f"`{json.dumps(item['parameters'], sort_keys=True)}`",
+                        str(item["n_seeds"]),
+                        _format_interval(metrics, "score"),
+                        _format_interval(metrics, "changed_case_success"),
+                        _format_interval(metrics, "invariant_retention"),
+                        _format_interval(metrics, "old_rule_leakage"),
+                        _format_interval(metrics, "total_requests"),
+                        _format_interval(metrics, "total_tokens"),
+                    ]
+                )
+                + " |"
+            )
     lines.extend(
         [
             "",
@@ -474,4 +778,27 @@ def _format_mean(item: Mapping[str, Any], prefix: str) -> str:
     return f"{value:.4f}±{spread:.4f}"
 
 
-__all__ = ["SweepSpec", "aggregate_sweep", "expand_sweep", "load_sweep_spec", "run_sweep"]
+def _format_interval(metrics: Any, name: str) -> str:
+    if not isinstance(metrics, Mapping):
+        return "N/A"
+    interval = metrics.get(name)
+    if not isinstance(interval, Mapping):
+        return "N/A"
+    mean = interval.get("delta_mean")
+    low = interval.get("ci_low")
+    high = interval.get("ci_high")
+    if not isinstance(mean, (int, float)):
+        return "N/A"
+    if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
+        return "N/A"
+    return f"{float(mean):.4f} [{float(low):.4f}, {float(high):.4f}]"
+
+
+__all__ = [
+    "SweepSpec",
+    "aggregate_sweep",
+    "compare_sweep_runs",
+    "expand_sweep",
+    "load_sweep_spec",
+    "run_sweep",
+]

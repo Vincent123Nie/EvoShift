@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 import statistics
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from evoshift.config import EvolutionConfig
 from evoshift.schemas import PromotionDecision, ValidationResult
@@ -65,6 +65,52 @@ def paired_bootstrap_ci(
     ]
     tail = (1.0 - confidence) / 2.0
     return _percentile(bootstrap_means, tail), _percentile(bootstrap_means, 1.0 - tail)
+
+
+def paired_cluster_bootstrap_ci(
+    deltas_by_seed: Mapping[int, Sequence[float]],
+    samples: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float, float]:
+    """Return a paired hierarchical interval over repeated stream seeds.
+
+    Each replicate samples seed clusters with replacement, then paired
+    observations within every selected seed. The point estimate gives each
+    stream seed equal weight.
+    """
+
+    if samples < 1:
+        raise ValueError("bootstrap samples must be positive")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be between zero and one")
+    normalized: dict[int, list[float]] = {}
+    for stream_seed, deltas in deltas_by_seed.items():
+        values = _finite(deltas, f"seed {stream_seed} deltas")
+        if not values:
+            raise ValueError(f"seed {stream_seed} has no paired deltas")
+        normalized[int(stream_seed)] = values
+    if not normalized:
+        raise ValueError("deltas_by_seed must not be empty")
+
+    ordered_seeds = sorted(normalized)
+    point = statistics.fmean(statistics.fmean(normalized[item]) for item in ordered_seeds)
+    generator = random.Random(seed)
+    bootstrap_means: list[float] = []
+    for _ in range(samples):
+        selected_seeds = [generator.choice(ordered_seeds) for _ in ordered_seeds]
+        cluster_means: list[float] = []
+        for selected_seed in selected_seeds:
+            cluster = normalized[selected_seed]
+            resampled = [generator.choice(cluster) for _ in cluster]
+            cluster_means.append(statistics.fmean(resampled))
+        bootstrap_means.append(statistics.fmean(cluster_means))
+    tail = (1.0 - confidence) / 2.0
+    return (
+        point,
+        _percentile(bootstrap_means, tail),
+        _percentile(bootstrap_means, 1.0 - tail),
+    )
 
 
 def _cost_delta_ratio(control_costs: Sequence[float], candidate_costs: Sequence[float]) -> float:
@@ -191,4 +237,4 @@ class PromotionGate:
         )
 
 
-__all__ = ["PromotionGate", "paired_bootstrap_ci"]
+__all__ = ["PromotionGate", "paired_bootstrap_ci", "paired_cluster_bootstrap_ci"]

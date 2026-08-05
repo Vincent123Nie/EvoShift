@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from evoshift.config import EvolutionConfig
-from evoshift.evaluation import PromotionGate, paired_bootstrap_ci
+from evoshift.evaluation import (
+    PromotionGate,
+    paired_bootstrap_ci,
+    paired_cluster_bootstrap_ci,
+)
 
 
 def _gate(**overrides: object) -> PromotionGate:
@@ -37,6 +41,31 @@ def test_paired_bootstrap_rejects_invalid_inputs() -> None:
         paired_bootstrap_ci([0.1], samples=0)
     with pytest.raises(ValueError, match="confidence"):
         paired_bootstrap_ci([0.1], confidence=1.0)
+
+
+def test_paired_cluster_bootstrap_is_reproducible_and_seed_balanced() -> None:
+    deltas = {
+        11: [1.0, 1.0],
+        22: [-1.0, -1.0, -1.0, -1.0],
+    }
+
+    first = paired_cluster_bootstrap_ci(deltas, samples=1000, confidence=0.95, seed=7)
+    second = paired_cluster_bootstrap_ci(deltas, samples=1000, confidence=0.95, seed=7)
+
+    assert first == second
+    assert first[0] == pytest.approx(0.0)
+    assert first[1] <= first[0] <= first[2]
+
+
+def test_paired_cluster_bootstrap_rejects_bad_clusters() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        paired_cluster_bootstrap_ci({})
+    with pytest.raises(ValueError, match="has no paired deltas"):
+        paired_cluster_bootstrap_ci({1: []})
+    with pytest.raises(ValueError, match="finite"):
+        paired_cluster_bootstrap_ci({1: [float("nan")]})
+    with pytest.raises(ValueError, match="positive"):
+        paired_cluster_bootstrap_ci({1: [0.0]}, samples=0)
 
 
 def test_promotion_gate_promotes_verified_gain() -> None:

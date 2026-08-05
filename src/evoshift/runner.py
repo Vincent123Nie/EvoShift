@@ -158,9 +158,16 @@ class EvoShiftRunner:
             for item in self.initial_memories:
                 store.save_memory(item)
             memory = MemoryManager(store)
+            behavior = behavior_for(self.config.algorithm)
             agent = MemoryAgent(client, self.config.provider, memory)
             critic = ExperienceCritic(client, self.config.provider, self.config.evolution)
-            trust_model = FeedbackTrustModel(self.config.evolution)
+            trust_model = FeedbackTrustModel(
+                self.config.evolution,
+                dynamic_enabled=(
+                    self.config.evolution.dynamic_feedback_trust_enabled
+                    and behavior.dynamic_feedback_trust
+                ),
+            )
             detectors: Dict[str, PageHinkleyShiftDetector] = {}
             regime_starts: Dict[str, int] = {}
             verifier = ReplayVerifier(
@@ -174,10 +181,11 @@ class EvoShiftRunner:
                 cooldown_episodes=self.config.evolution.candidate_cooldown_episodes,
             )
             candidate_pool.seed_accepted(memory.active())
-            behavior = behavior_for(self.config.algorithm)
             future_auditor = (
                 FutureCounterfactualAuditor(self.config.evolution)
-                if self.config.evolution.future_audit_enabled and behavior.verify_before_promotion
+                if self.config.evolution.future_audit_enabled
+                and behavior.verify_before_promotion
+                and behavior.future_audit
                 else None
             )
             active_auditor = (
@@ -185,6 +193,7 @@ class EvoShiftRunner:
                 if self.config.evolution.active_audit_enabled
                 and behavior.verify_before_promotion
                 and behavior.use_memory
+                and behavior.active_audit
                 else None
             )
             episodes: List[Episode] = []

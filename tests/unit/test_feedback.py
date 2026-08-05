@@ -126,3 +126,29 @@ def test_dynamic_feedback_trust_bounds_context_state() -> None:
         )
 
     assert model.snapshot()["tracked_contexts"] == 2
+
+
+def test_dynamic_feedback_trust_can_be_disabled_by_algorithm_control() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.8,
+            dynamic_feedback_trust_enabled=True,
+        ),
+        dynamic_enabled=False,
+    )
+    sample = BenchmarkSample(
+        sample_id="sample",
+        prompt="task",
+        reference="hidden",
+        metadata={
+            "feedback_source": "source",
+            "feedback_context": "context",
+            "feedback_reference": "ALLOW",
+        },
+    )
+
+    assessment = model.assess(sample)
+
+    assert assessment.trust == 0.8
+    assert assessment.reason == "default_source:source"
+    assert model.snapshot()["dynamic_enabled"] is False

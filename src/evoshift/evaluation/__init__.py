@@ -41,7 +41,11 @@ from evoshift.evaluation.scorers import (
     token_f1,
     token_f1_score,
 )
-from evoshift.evaluation.statistics import PromotionGate, paired_bootstrap_ci
+from evoshift.evaluation.statistics import (
+    PromotionGate,
+    paired_bootstrap_ci,
+    paired_cluster_bootstrap_ci,
+)
 
 __all__ = [
     "PromotionGate",
@@ -64,6 +68,7 @@ __all__ = [
     "normalized_exact_match_score",
     "numeric_score",
     "paired_bootstrap_ci",
+    "paired_cluster_bootstrap_ci",
     "phase_metrics",
     "policy_shift_metrics",
     "post_shift_gain",

@@ -24,6 +24,15 @@ from evoshift.benchmarks.synthetic import (
     SyntheticShiftBenchmark,
     SyntheticShiftBenchmarkAdapter,
 )
+from evoshift.benchmarks.tau_retail_policy_shift import (
+    DEFAULT_TAU_POLICY_SCHEDULE,
+    TAU3_RETAIL_COMMIT,
+    TAU3_RETAIL_REPOSITORY,
+    TAU3_RETAIL_REVISION,
+    TAU3_RETAIL_SOURCE_MANIFEST,
+    Tau3RetailPolicyShiftBenchmarkAdapter,
+    TauRetailPolicyShiftBenchmark,
+)
 
 __all__ = [
     "BBH_CANARY",
@@ -31,8 +40,13 @@ __all__ = [
     "BBH_REPOSITORY",
     "DEFAULT_BBH_REVISION",
     "DEFAULT_BBH_SUBSETS",
+    "DEFAULT_TAU_POLICY_SCHEDULE",
     "POLICY_PHASES",
     "SYNTHETIC_PHASES",
+    "TAU3_RETAIL_COMMIT",
+    "TAU3_RETAIL_REPOSITORY",
+    "TAU3_RETAIL_REVISION",
+    "TAU3_RETAIL_SOURCE_MANIFEST",
     "BBHBenchmarkAdapter",
     "BenchmarkAdapter",
     "BigBenchHardBenchmarkAdapter",
@@ -43,6 +57,8 @@ __all__ = [
     "PolicyShiftBenchmarkAdapter",
     "SyntheticShiftBenchmark",
     "SyntheticShiftBenchmarkAdapter",
+    "Tau3RetailPolicyShiftBenchmarkAdapter",
+    "TauRetailPolicyShiftBenchmark",
     "create_benchmark",
     "load_benchmark",
     "sample_fingerprint",

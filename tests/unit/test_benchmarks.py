@@ -16,6 +16,7 @@ from evoshift.benchmarks import (
     JSONLBenchmarkAdapter,
     PolicyShiftBenchmark,
     SyntheticShiftBenchmark,
+    TauRetailPolicyShiftBenchmark,
     create_benchmark,
 )
 from evoshift.benchmarks.huggingface import HuggingFaceBenchmarkAdapter
@@ -242,6 +243,120 @@ def test_policy_shift_shared_source_burst_creates_observable_contexts() -> None:
     )
     assert all(sample.metadata["future_change_case"] for sample in early_attacks)
     assert all(sample.metadata["feedback_context"] for sample in samples)
+
+
+def _fake_tau_sources() -> tuple[bytes, bytes, dict[str, dict[str, Any]]]:
+    policy = b"pinned retail policy clauses for test"
+    tasks = json.dumps(
+        [
+            {
+                "evaluation_criteria": {
+                    "actions": [
+                        {"name": "cancel_pending_order"},
+                        {"name": "return_delivered_order_items"},
+                    ]
+                }
+            }
+        ],
+        separators=(",", ":"),
+    ).encode()
+    manifest = {
+        "policy": {
+            "path": "policy.md",
+            "upstream_path": "policy.md",
+            "sha256": hashlib.sha256(policy).hexdigest(),
+            "bytes": len(policy),
+        },
+        "tasks": {
+            "path": "tasks.json",
+            "upstream_path": "tasks.json",
+            "sha256": hashlib.sha256(tasks).hexdigest(),
+            "bytes": len(tasks),
+        },
+    }
+    return policy, tasks, manifest
+
+
+def test_tau_retail_policy_shift_is_pinned_multi_rule_and_hidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy, tasks, manifest = _fake_tau_sources()
+    adapter = TauRetailPolicyShiftBenchmark(
+        tmp_path,
+        seed=7,
+        phase_size=18,
+        policy_schedule=["v1", "v2", "v3", "v2", "v1", "v2"],
+        feedback_noise_rate=0.0,
+        feedback_attack_burst_length=0,
+        expected_manifest=manifest,
+        expected_task_count=1,
+        required_policy_snippets=(),
+        required_task_actions=("cancel_pending_order", "return_delivered_order_items"),
+    )
+
+    def fake_download(url: str) -> bytes:
+        return policy if url.endswith("policy.md") else tasks
+
+    monkeypatch.setattr(adapter, "_download_bytes", fake_download)
+    samples = adapter.load()
+
+    assert len(samples) == 108
+    assert len({sample.metadata["rule_family"] for sample in samples}) >= 6
+    assert {sample.metadata["policy_version"] for sample in samples} == {"v1", "v2", "v3"}
+    assert any(sample.metadata["transition_case"] for sample in samples)
+    assert any(sample.metadata["future_change_case"] for sample in samples)
+    assert any(sample.metadata["protected"] for sample in samples)
+    assert all(sample.metadata["derived"] for sample in samples)
+    assert all(sample.metadata["official_tau3_benchmark"] is False for sample in samples)
+    assert all(
+        sample.metadata["policy_version"] not in sample.prompt
+        and "source_rule" not in sample.prompt
+        and "feedback_reference" not in sample.prompt
+        for sample in samples
+    )
+    assert all(len(sample.metadata["valid_memory_tags"]) == 1 for sample in samples)
+    assert all(len(sample.metadata["stale_memory_tags"]) == 1 for sample in samples)
+    assert adapter.verify_cache()["official_tau3_benchmark"] is False
+
+
+def test_tau_retail_policy_shift_rejects_tampered_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy, tasks, manifest = _fake_tau_sources()
+    adapter = TauRetailPolicyShiftBenchmark(
+        tmp_path,
+        phase_size=8,
+        expected_manifest=manifest,
+        expected_task_count=1,
+        required_policy_snippets=(),
+        required_task_actions=(),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_download_bytes",
+        lambda url: policy if url.endswith("policy.md") else tasks,
+    )
+    adapter.load()
+    (adapter.dataset_dir / "policy.md").write_bytes(policy + b"tampered")
+
+    with pytest.raises(DatasetError, match="SHA-256 mismatch"):
+        adapter.load()
+
+
+def test_tau_retail_policy_shift_factory_contract(tmp_path: Path) -> None:
+    config = BenchmarkConfig(
+        kind="tau3_retail_policy_shift",
+        path="data/tau3",
+        phase_size=12,
+        policy_schedule=["v1", "v2"],
+    )
+
+    adapter = create_benchmark(config, root=tmp_path, seed=9)
+
+    assert isinstance(adapter, TauRetailPolicyShiftBenchmark)
+    assert adapter.dataset_dir == tmp_path / "data/tau3/v1.0.1"
+    assert adapter.phase_size == 12
+    assert adapter.policy_schedule == ("v1", "v2")
 
 
 def _fake_bbh_payload() -> bytes:
