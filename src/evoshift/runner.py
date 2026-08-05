@@ -85,6 +85,10 @@ class EvoShiftRunner:
         source_run_id: str = "",
         source_state_hash: str = "",
         source_dataset_hash: str = "",
+        expected_state_hash: str = "",
+        audit_variant: str = "",
+        excluded_memory_id: str = "",
+        excluded_memory_version: Optional[int] = None,
     ):
         self.config = config
         self.adapter = adapter
@@ -96,6 +100,10 @@ class EvoShiftRunner:
         self.source_run_id = source_run_id
         self.source_state_hash = source_state_hash
         self.source_dataset_hash = source_dataset_hash
+        self.expected_state_hash = expected_state_hash
+        self.audit_variant = audit_variant
+        self.excluded_memory_id = excluded_memory_id
+        self.excluded_memory_version = excluded_memory_version
         if self.frozen_audit and not self.source_run_id:
             raise ValueError("frozen audit requires source_run_id provenance")
         if any(item.status != MemoryStatus.ACTIVE for item in self.initial_memories):
@@ -128,6 +136,9 @@ class EvoShiftRunner:
             source_run_id=self.source_run_id,
             source_state_hash=self.source_state_hash,
             source_dataset_hash=self.source_dataset_hash,
+            audit_variant=self.audit_variant,
+            excluded_memory_id=self.excluded_memory_id,
+            excluded_memory_version=self.excluded_memory_version,
             seed=self.config.evaluation.seed,
             python_version=platform.python_version(),
             platform=platform.platform(),
@@ -166,6 +177,7 @@ class EvoShiftRunner:
                 dynamic_enabled=(
                     self.config.evolution.dynamic_feedback_trust_enabled
                     and behavior.dynamic_feedback_trust
+                    and not self.frozen_audit
                 ),
             )
             detectors: Dict[str, PageHinkleyShiftDetector] = {}
@@ -1052,10 +1064,11 @@ class EvoShiftRunner:
 
             final_memories = tuple(memory.active())
             final_state_hash = state_fingerprint(policy, final_memories)
+            expected_state_hash = self.expected_state_hash or self.source_state_hash
             if (
                 self.frozen_audit
-                and self.source_state_hash
-                and final_state_hash != self.source_state_hash
+                and expected_state_hash
+                and final_state_hash != expected_state_hash
             ):
                 raise RuntimeError("frozen audit state changed during evaluation")
 
@@ -1416,12 +1429,16 @@ class EvoShiftRunner:
                         "source_run_id": self.source_run_id,
                         "source_state_hash": self.source_state_hash,
                         "source_dataset_hash": self.source_dataset_hash,
+                        "expected_state_hash": expected_state_hash,
+                        "audit_variant": self.audit_variant,
+                        "excluded_memory_id": self.excluded_memory_id,
+                        "excluded_memory_version": self.excluded_memory_version,
                         "initial_active_memories": len(self.initial_memories),
                         "final_state_hash": final_state_hash,
                         "state_unchanged": (
                             not self.frozen_audit
-                            or not self.source_state_hash
-                            or final_state_hash == self.source_state_hash
+                            or not expected_state_hash
+                            or final_state_hash == expected_state_hash
                         ),
                     },
                 }

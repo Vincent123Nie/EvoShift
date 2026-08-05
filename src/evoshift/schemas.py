@@ -304,6 +304,9 @@ class RunManifest(StrictModel):
     source_run_id: str = ""
     source_state_hash: str = ""
     source_dataset_hash: str = ""
+    audit_variant: str = ""
+    excluded_memory_id: str = ""
+    excluded_memory_version: Optional[int] = Field(default=None, ge=1)
     seed: int
     python_version: str
     platform: str

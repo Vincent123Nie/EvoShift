@@ -277,6 +277,60 @@ def audit_experiment(
         _fail(exc)
 
 
+@app.command("audit-memories")
+def audit_memories_experiment(
+    source_run: Path = typer.Option(
+        ...,
+        "--source-run",
+        exists=True,
+        file_okay=False,
+        help="Completed prequential run whose evolved state will be frozen.",
+    ),
+    config: Path = typer.Option(
+        Path("configs/experiments/audit_bbh_heldout.yaml"),
+        help="Held-out benchmark configuration YAML.",
+    ),
+    set_value: List[str] = typer.Option([], "--set", help="Override dotted key=value."),
+) -> None:
+    """Audit the held-out contribution of every active memory card."""
+
+    async def execute() -> None:
+        from evoshift.ablation import run_memory_ablation_audit
+        from evoshift.audit import load_evolved_state, require_same_model
+        from evoshift.benchmarks import create_benchmark
+
+        state = load_evolved_state(source_run)
+        resolved = _config(config, set_value)
+        require_same_model(state, resolved.provider.resolved_model())
+        adapter = create_benchmark(
+            resolved.benchmark,
+            root=Path.cwd(),
+            seed=resolved.evaluation.seed,
+        )
+        audit = await run_memory_ablation_audit(
+            resolved,
+            adapter,
+            state,
+            workdir=Path.cwd(),
+        )
+        summary = audit.report["summary"]
+        console.print(
+            f"[green]Memory ablation complete:[/green] {audit.report['full_state_run_id']}"
+        )
+        console.print(str(audit.markdown_path))
+        console.print(
+            f"cards={audit.report['n_cards_tested']} "
+            f"useful={summary['useful_cards']} "
+            f"harmful={summary['harmful_cards']} "
+            f"inconclusive={summary['inconclusive_cards']}"
+        )
+
+    try:
+        asyncio.run(execute())
+    except Exception as exc:
+        _fail(exc)
+
+
 @app.command("sweep")
 def run_experiment_sweep(
     spec: Path = typer.Option(

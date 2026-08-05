@@ -79,11 +79,15 @@ state mutation, and verifies the same state SHA-256 after evaluation. Use
 `configs/experiments/audit_bbh_heldout.yaml` for the evolved state and
 `static_bbh_heldout.yaml` for the paired no-memory control.
 
-This command measures whole-state forward transfer. The online runner now maps
-replay-passing memories to later within-stream counterfactual outcomes, but it
-does not yet run a separate untouched-BBH counterfactual for every promoted
-card. Report **held-out** candidate-level precision as `N/A`, not zero, until
-that stricter analysis is added.
+This command measures whole-state forward transfer. For candidate-level
+attribution, `evoshift audit-memories` runs the full evolved state once and then
+one frozen leave-one-memory-out audit per active `(memory_id, version)` card.
+All runs replay the exact same held-out sample IDs with caching disabled. The
+report contains per-card score deltas and paired bootstrap CIs,
+protected/future-change slices, and retrieval/application coverage. A card is
+only called useful when it is actually applied, its paired CI is positive, and
+removing it does not improve the protected slice. Zero-coverage cards are
+reported as not tested rather than as failures.
 
 ### 2.3 Seeds
 
