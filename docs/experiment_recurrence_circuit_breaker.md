@@ -63,3 +63,49 @@ PolicyShift assignments. Report direct score, transition slices, canary
 registrations/interventions/confirmations/cancellations/expirations, causal
 control cost, protected retention, false retirement, and poison persistence.
 
+## Results
+
+Final standalone artifact: `runs/sweeps/20260805T101205Z` (40 deterministic
+runs). The sweep report now computes named-variant hierarchical comparisons
+directly, rather than requiring an offline manual join.
+
+| Condition | Current score | Circuit score | Current changed | Circuit changed |
+|---|---:|---:|---:|---:|
+| clean | 0.9306 | **0.9444** | 0.6875 | **0.7500** |
+| clean + burst | 0.9306 | **0.9444** | 0.6875 | **0.7500** |
+| noise | 0.9194 | **0.9278** | 0.6375 | **0.6875** |
+| noise + burst | 0.9167 | **0.9250** | 0.6250 | **0.6750** |
+
+Paired hierarchical 95% intervals versus `current_full`:
+
+| Condition | Score delta | Changed-success delta |
+|---|---:|---:|
+| clean / clean+burst | `+0.0139 [+0.0056, +0.0222]` | `+0.0625 [+0.0250, +0.1000]` |
+| noise / noise+burst | `+0.0083 [-0.0028, +0.0208]` | `+0.0500 [-0.0002, +0.1000]` |
+
+Mechanism and safety checks:
+
+- clean streams registered and correctly confirmed exactly two canaries per
+  seed, removing the second error in the v3→v2 and v2→v1 recurrent shifts;
+- noisy streams averaged 3.8 registrations, 1.6 confirmations, 1.4
+  cancellations, and 0.8 expirations per seed;
+- every confirmed circuit retirement was oracle-correct post hoc
+  (`confirmation_precision=1.0`);
+- unconfirmed persistent transitions, false retirements, and poison persistence
+  were all zero;
+- invariant/protected retention remained exactly 1.0.
+
+## Decision
+
+Do not adopt as a standalone mechanism. Every condition has a positive score
+point estimate and clean evidence is decisive, but the noisy score interval
+crosses zero. Episode-level failure analysis shows the unavoidable exploration
+trade-off: an isolated flipped label can create a canary that temporarily
+excludes a still-correct card on its next matching context. The provisional
+causal ledger is then exactly reverted, so safety state is preserved, but that
+single foreground error remains in the capability metric.
+
+The next pre-registered experiment will combine this circuit with a symmetric,
+cooldown-gated revival path for previously verified retired memories. It targets
+the remaining second error when policy v2 returns after v1, while the retirement
+cooldown prevents immediate noisy resurrection in the just-retired regime.

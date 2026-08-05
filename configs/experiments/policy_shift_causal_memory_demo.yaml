@@ -86,6 +86,10 @@ evolution:
   active_audit_early_retire_delta: -0.75
   active_audit_cooldown_episodes: 0
   active_audit_restore_predecessors: true
+  active_audit_circuit_breaker_enabled: false
+  active_audit_circuit_breaker_min_trust: 0.10
+  active_audit_circuit_breaker_delta: -0.75
+  active_audit_circuit_breaker_max_age: 8
   conflict_supersession_enabled: true
 
 evaluation:

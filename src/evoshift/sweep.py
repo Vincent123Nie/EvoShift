@@ -84,6 +84,16 @@ _AGGREGATE_FIELDS = {
     "early_causal_retirements": "early_causal_retirements",
     "early_causal_retirement_precision": "early_causal_retirement_precision",
     "early_causal_false_retirement_rate": "early_causal_false_retirement_rate",
+    "circuit_registrations": "circuit_registrations",
+    "circuit_interventions": "circuit_interventions",
+    "circuit_confirmations": "circuit_confirmations",
+    "circuit_cancellations": "circuit_cancellations",
+    "circuit_expirations": "circuit_expirations",
+    "circuit_confirmation_precision": "circuit_confirmation_precision",
+    "circuit_false_confirmation_rate": "circuit_false_confirmation_rate",
+    "circuit_unconfirmed_persistent_transitions": ("circuit_unconfirmed_persistent_transitions"),
+    "circuit_mean_oracle_intervention_delta": "circuit_mean_oracle_intervention_delta",
+    "circuit_control_requests": "circuit_control_requests",
     "confirmed_context_changes": "confirmed_context_changes",
     "total_requests": "total_requests",
     "total_tokens": "total_tokens",
@@ -199,6 +209,7 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         evolution = result.metrics.get("evolution", {})
         future_audit = result.metrics.get("future_audit", {})
         active_governance = result.metrics.get("active_memory_governance", {})
+        circuit = active_governance.get("circuit_breaker", {})
         trust_model = result.metrics.get("feedback_trust_model", {})
         recovery_steps = result.metrics.get("recovery_steps", {})
         recovered = [
@@ -323,6 +334,20 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "early_causal_false_retirement_rate": active_governance.get(
                     "early_causal_false_retirement_rate"
                 ),
+                "circuit_registrations": circuit.get("registrations"),
+                "circuit_interventions": circuit.get("interventions"),
+                "circuit_confirmations": circuit.get("confirmations"),
+                "circuit_cancellations": circuit.get("cancellations"),
+                "circuit_expirations": circuit.get("expirations"),
+                "circuit_confirmation_precision": circuit.get("confirmation_precision"),
+                "circuit_false_confirmation_rate": circuit.get("false_confirmation_rate"),
+                "circuit_unconfirmed_persistent_transitions": circuit.get(
+                    "unconfirmed_persistent_transitions"
+                ),
+                "circuit_mean_oracle_intervention_delta": circuit.get(
+                    "mean_post_hoc_oracle_intervention_delta"
+                ),
+                "circuit_control_requests": circuit.get("control_requests"),
                 "confirmed_context_changes": trust_model.get("confirmed_context_changes"),
             }
         )
@@ -332,6 +357,14 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         rows,
         samples=analysis_config.evaluation.bootstrap_samples,
         confidence=analysis_config.evaluation.confidence_level,
+    )
+    comparisons.extend(
+        compare_sweep_variants(
+            rows,
+            variant_parameters=spec.variants,
+            samples=analysis_config.evaluation.bootstrap_samples,
+            confidence=analysis_config.evaluation.confidence_level,
+        )
     )
     (destination / "matrix.json").write_text(
         json.dumps(
@@ -499,6 +532,99 @@ def compare_sweep_runs(
     )
 
 
+def compare_sweep_variants(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    variant_parameters: Mapping[str, Mapping[str, Any]],
+    baseline_variant: str | None = None,
+    samples: int = 2000,
+    confidence: float = 0.95,
+    bootstrap_seed: int = 42,
+) -> list[dict[str, Any]]:
+    """Compare named variants while holding the sweep grid and algorithm fixed."""
+
+    if len(variant_parameters) < 2:
+        return []
+    variant_names = list(variant_parameters)
+    if baseline_variant is None:
+        baseline_variant = next(
+            (name for name in ("current_full", "full", "default") if name in variant_parameters),
+            variant_names[0],
+        )
+    if baseline_variant not in variant_parameters:
+        raise ValueError(f"unknown baseline sweep variant: {baseline_variant}")
+    variant_override_keys = set().union(
+        *(parameters.keys() for parameters in variant_parameters.values())
+    )
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        parameters = row.get("parameters", {})
+        if not isinstance(parameters, Mapping):
+            raise ValueError("sweep row parameters must be a mapping")
+        grid_parameters = {
+            str(key): value for key, value in parameters.items() if key not in variant_override_keys
+        }
+        identity = json.dumps(
+            {
+                "algorithm": row["algorithm"],
+                "parameters": grid_parameters,
+            },
+            sort_keys=True,
+        )
+        grouped.setdefault(identity, []).append(row)
+
+    comparisons: list[dict[str, Any]] = []
+    for identity, group in grouped.items():
+        condition = json.loads(identity)
+        baseline_rows = [row for row in group if row.get("variant") == baseline_variant]
+        if not baseline_rows:
+            continue
+        for candidate_variant in variant_names:
+            if candidate_variant == baseline_variant:
+                continue
+            candidate_rows = [row for row in group if row.get("variant") == candidate_variant]
+            if not candidate_rows:
+                continue
+            pseudo_rows: list[dict[str, Any]] = []
+            for algorithm, selected in (
+                ("__baseline_variant__", baseline_rows),
+                ("__candidate_variant__", candidate_rows),
+            ):
+                for row in selected:
+                    pseudo_rows.append(
+                        {
+                            **row,
+                            "algorithm": algorithm,
+                            "variant": f"{candidate_variant}_vs_{baseline_variant}",
+                            "parameters": condition["parameters"],
+                        }
+                    )
+            paired = compare_sweep_runs(
+                pseudo_rows,
+                candidate_algorithm="__candidate_variant__",
+                samples=samples,
+                confidence=confidence,
+                bootstrap_seed=bootstrap_seed,
+            )
+            if len(paired) != 1:
+                raise ValueError("named sweep variant comparison did not produce one pair")
+            comparison = paired[0]
+            comparison.update(
+                {
+                    "candidate_algorithm": (f"{condition['algorithm']}:{candidate_variant}"),
+                    "baseline_algorithm": (f"{condition['algorithm']}:{baseline_variant}"),
+                }
+            )
+            comparisons.append(comparison)
+    return sorted(
+        comparisons,
+        key=lambda item: (
+            str(item["candidate_algorithm"]),
+            json.dumps(item["parameters"], sort_keys=True),
+        ),
+    )
+
+
 def _align_episode_pair(
     baseline: Sequence[Episode],
     candidate: Sequence[Episode],
@@ -648,6 +774,16 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "early_causal_retirements",
         "early_causal_retirement_precision",
         "early_causal_false_retirement_rate",
+        "circuit_registrations",
+        "circuit_interventions",
+        "circuit_confirmations",
+        "circuit_cancellations",
+        "circuit_expirations",
+        "circuit_confirmation_precision",
+        "circuit_false_confirmation_rate",
+        "circuit_unconfirmed_persistent_transitions",
+        "circuit_mean_oracle_intervention_delta",
+        "circuit_control_requests",
         "confirmed_context_changes",
         "run_dir",
     ]
@@ -852,6 +988,7 @@ __all__ = [
     "SweepSpec",
     "aggregate_sweep",
     "compare_sweep_runs",
+    "compare_sweep_variants",
     "expand_sweep",
     "load_sweep_spec",
     "run_sweep",

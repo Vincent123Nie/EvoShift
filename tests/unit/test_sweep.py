@@ -14,6 +14,7 @@ from evoshift.sweep import (
     SweepSpec,
     aggregate_sweep,
     compare_sweep_runs,
+    compare_sweep_variants,
     expand_sweep,
     load_sweep_spec,
     run_sweep,
@@ -228,6 +229,76 @@ def test_compare_sweep_runs_reports_clustered_capability_safety_and_cost(
     assert comparison["metrics"]["score"]["n_pairs"] == 4
     assert comparison["metrics"]["total_requests"]["delta_mean"] == 1.0
     assert comparison["metrics"]["total_tokens"]["delta_mean"] == 10.0
+
+
+def test_compare_sweep_variants_holds_grid_and_algorithm_fixed(tmp_path: Path) -> None:
+    rows = []
+    for stream_seed in (11, 22):
+        baseline_dir = tmp_path / f"full-{stream_seed}"
+        candidate_dir = tmp_path / f"circuit-{stream_seed}"
+        _write_comparison_run(
+            baseline_dir,
+            run_id=f"full-{stream_seed}",
+            scores=[0.0, 1.0],
+        )
+        _write_comparison_run(
+            candidate_dir,
+            run_id=f"circuit-{stream_seed}",
+            scores=[1.0, 1.0],
+        )
+        common = {
+            "algorithm": "evoshift",
+            "seed": stream_seed,
+            "cost_usd": 0.0,
+            "harmful_active_memory_exposure_n": 0,
+            "stale_memory_retention_rate": 0.0,
+            "false_retirement_rate": 0.0,
+            "total_requests": 2,
+            "total_tokens": 20,
+        }
+        rows.extend(
+            [
+                {
+                    **common,
+                    "variant": "current_full",
+                    "parameters": {
+                        "benchmark.feedback_noise_rate": 0.1,
+                        "evolution.active_audit_circuit_breaker_enabled": False,
+                    },
+                    "run_dir": str(baseline_dir),
+                },
+                {
+                    **common,
+                    "variant": "recurrence_circuit_breaker",
+                    "parameters": {
+                        "benchmark.feedback_noise_rate": 0.1,
+                        "evolution.active_audit_circuit_breaker_enabled": True,
+                    },
+                    "run_dir": str(candidate_dir),
+                },
+            ]
+        )
+
+    comparisons = compare_sweep_variants(
+        rows,
+        variant_parameters={
+            "current_full": {
+                "evolution.active_audit_circuit_breaker_enabled": False,
+            },
+            "recurrence_circuit_breaker": {
+                "evolution.active_audit_circuit_breaker_enabled": True,
+            },
+        },
+        samples=1000,
+        bootstrap_seed=7,
+    )
+
+    assert len(comparisons) == 1
+    comparison = comparisons[0]
+    assert comparison["candidate_algorithm"] == "evoshift:recurrence_circuit_breaker"
+    assert comparison["baseline_algorithm"] == "evoshift:current_full"
+    assert comparison["parameters"] == {"benchmark.feedback_noise_rate": 0.1}
+    assert comparison["metrics"]["score"]["delta_mean"] == pytest.approx(0.5)
 
 
 @pytest.mark.asyncio

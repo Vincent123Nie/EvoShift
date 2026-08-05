@@ -131,6 +131,27 @@ def test_dynamic_feedback_trust_bounds_context_state() -> None:
     assert model.snapshot()["tracked_contexts"] == 2
 
 
+def test_observable_key_is_normalized_and_does_not_consume_feedback() -> None:
+    model = FeedbackTrustModel(EvolutionConfig(dynamic_feedback_trust_enabled=True))
+    sample = BenchmarkSample(
+        sample_id="sample",
+        prompt="  Refund   Prompt ",
+        reference="hidden",
+        metadata={
+            "feedback_source": " portal ",
+            "feedback_context": " Refund:Premium:Days_15_30 ",
+            "feedback_reference": "APPROVE",
+        },
+    )
+
+    before = model.snapshot()
+    key = model.observable_key(sample)
+    after = model.snapshot()
+
+    assert key == ("portal", "refund:premium:days_15_30")
+    assert before == after
+
+
 def test_dynamic_feedback_trust_can_be_disabled_by_algorithm_control() -> None:
     model = FeedbackTrustModel(
         EvolutionConfig(

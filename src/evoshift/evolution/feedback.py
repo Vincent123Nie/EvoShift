@@ -80,7 +80,7 @@ class FeedbackTrustModel:
         self.low_trust_observations = 0
 
     def assess(self, sample: BenchmarkSample) -> FeedbackAssessment:
-        source = str(sample.metadata.get("feedback_source", "")).strip() or "unspecified"
+        source, observable_context = self.observable_key(sample)
         prior = self.source_trust.get(source, self.default_trust)
         if not self.dynamic_enabled or "feedback_reference" not in sample.metadata:
             reason_prefix = "configured_source" if source in self.source_trust else "default_source"
@@ -95,7 +95,7 @@ class FeedbackTrustModel:
                 pending_observations=0,
             )
 
-        context = self._context(sample)
+        context = observable_context
         signal = self._canonical_signal(sample.metadata["feedback_reference"])
         source_state = self._sources.setdefault(source, self._new_source_state(prior))
         context_state = self._get_context_state(source, context)
@@ -112,6 +112,12 @@ class FeedbackTrustModel:
             context_observations=context_state.total_observations,
             pending_observations=context_state.pending_observations,
         )
+
+    def observable_key(self, sample: BenchmarkSample) -> tuple[str, str]:
+        """Return the learner-visible provenance/context key without mutating trust state."""
+
+        source = str(sample.metadata.get("feedback_source", "")).strip() or "unspecified"
+        return source, self._context(sample)
 
     def snapshot(self) -> dict[str, Any]:
         return {

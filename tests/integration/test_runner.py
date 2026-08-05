@@ -254,6 +254,78 @@ async def test_causal_memory_governance_forgets_stale_and_reacquires_recurring_r
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_recurrence_circuit_breaker_improves_score_and_cancels_noise_safely(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 11}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.0, "feedback_attack_burst_length": 0}
+            ),
+        }
+    )
+    current_config = config.model_copy(
+        update={
+            "evolution": config.evolution.model_copy(
+                update={"active_audit_circuit_breaker_enabled": False}
+            )
+        }
+    )
+    circuit_config = config.model_copy(
+        update={
+            "evolution": config.evolution.model_copy(
+                update={"active_audit_circuit_breaker_enabled": True}
+            )
+        }
+    )
+    current = await EvoShiftRunner(
+        current_config,
+        create_benchmark(current_config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+    circuit = await EvoShiftRunner(
+        circuit_config,
+        create_benchmark(circuit_config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+
+    governance = circuit.metrics["active_memory_governance"]
+    circuit_metrics = governance["circuit_breaker"]
+    assert circuit.metrics["overall"]["mean_score"] > current.metrics["overall"]["mean_score"]
+    assert (
+        circuit.metrics["policy_shift"]["changed_case_success_rate"]
+        > current.metrics["policy_shift"]["changed_case_success_rate"]
+    )
+    assert circuit_metrics["confirmations"] >= 2
+    assert circuit_metrics["confirmation_precision"] == 1.0
+    assert circuit_metrics["unconfirmed_persistent_transitions"] == 0
+    assert governance["false_retirement_rate"] == 0.0
+
+    noisy_config = circuit_config.model_copy(
+        update={
+            "benchmark": circuit_config.benchmark.model_copy(update={"feedback_noise_rate": 0.10})
+        }
+    )
+    noisy = await EvoShiftRunner(
+        noisy_config,
+        create_benchmark(noisy_config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+    noisy_governance = noisy.metrics["active_memory_governance"]
+    noisy_circuit = noisy_governance["circuit_breaker"]
+    assert noisy_circuit["cancellations"] >= 1
+    assert noisy_circuit["unconfirmed_persistent_transitions"] == 0
+    assert noisy_governance["false_retirement_rate"] == 0.0
+    assert noisy.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_quarantined_feedback_can_only_reach_memory_through_verified_shadow_lane(
     tmp_path: Path,
 ) -> None:

@@ -119,6 +119,10 @@ class EvolutionConfig(ConfigModel):
     active_audit_cooldown_episodes: int = Field(default=0, ge=0, le=10000)
     active_audit_restore_predecessors: bool = False
     min_feedback_trust_for_active_audit: float = Field(default=0.60, ge=0.0, le=1.0)
+    active_audit_circuit_breaker_enabled: bool = False
+    active_audit_circuit_breaker_min_trust: float = Field(default=0.10, ge=0.0, le=1.0)
+    active_audit_circuit_breaker_delta: float = Field(default=-0.75, ge=-1.0, le=0.0)
+    active_audit_circuit_breaker_max_age: int = Field(default=8, ge=1, le=10000)
     conflict_supersession_enabled: bool = True
 
     @model_validator(mode="after")
@@ -178,6 +182,19 @@ class EvolutionConfig(ConfigModel):
             raise ValueError(
                 "active_audit_min_negative_observations must not exceed "
                 "active_audit_min_observations"
+            )
+        if self.active_audit_circuit_breaker_enabled and not self.active_audit_enabled:
+            raise ValueError("active audit circuit breaker requires active audit")
+        if self.active_audit_circuit_breaker_enabled and not self.dynamic_feedback_trust_enabled:
+            raise ValueError("active audit circuit breaker requires dynamic feedback trust")
+        if (
+            self.active_audit_circuit_breaker_enabled
+            and self.active_audit_circuit_breaker_min_trust
+            >= self.min_feedback_trust_for_active_audit
+        ):
+            raise ValueError(
+                "active audit circuit breaker trust floor must be below the ordinary "
+                "active audit threshold"
             )
         return self
 

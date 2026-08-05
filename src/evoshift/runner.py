@@ -21,13 +21,16 @@ from evoshift.evaluation import (
     score_sample,
 )
 from evoshift.evolution import (
+    ActiveAuditDecision,
     ActiveMemoryAuditor,
     CandidateEvidencePool,
+    CausalCircuitBreaker,
     ExperienceCritic,
     FeedbackTrustModel,
     FutureAuditOutcome,
     FutureCounterfactualAuditor,
     PageHinkleyShiftDetector,
+    PendingCausalCanary,
 )
 from evoshift.evolution.candidates import CandidateEvidence
 from evoshift.evolution.replay import ReplayVerifier
@@ -217,6 +220,13 @@ class EvoShiftRunner:
                 and behavior.active_audit
                 else None
             )
+            circuit_breaker = (
+                CausalCircuitBreaker(self.config.evolution)
+                if active_auditor is not None
+                and self.config.evolution.active_audit_circuit_breaker_enabled
+                and not self.frozen_audit
+                else None
+            )
             episodes: List[Episode] = []
             failures: List[FailureRecord] = []
             decisions: List[PromotionDecision] = []
@@ -271,6 +281,13 @@ class EvoShiftRunner:
             active_audit_correct_reactivations = 0
             memory_reacquisitions = 0
             correct_memory_reacquisitions = 0
+            circuit_control_requests = 0
+            circuit_control_input_tokens = 0
+            circuit_control_output_tokens = 0
+            circuit_correct_confirmations = 0
+            circuit_false_confirmations = 0
+            circuit_unconfirmed_persistent_transitions = 0
+            circuit_oracle_intervention_deltas: List[float] = []
 
             def note_reacquisition(candidate: MemoryItem, activation_index: int) -> None:
                 nonlocal memory_reacquisitions
@@ -387,10 +404,221 @@ class EvoShiftRunner:
                     },
                 )
 
+            def record_extra_audit_request(
+                prediction: Any,
+                *,
+                circuit_request: bool,
+            ) -> None:
+                nonlocal active_audit_control_requests
+                nonlocal active_audit_control_input_tokens
+                nonlocal active_audit_control_output_tokens
+                nonlocal circuit_control_requests
+                nonlocal circuit_control_input_tokens
+                nonlocal circuit_control_output_tokens
+                active_audit_control_requests += 1
+                active_audit_control_input_tokens += prediction.usage.input_tokens
+                active_audit_control_output_tokens += prediction.usage.output_tokens
+                if circuit_request:
+                    circuit_control_requests += 1
+                    circuit_control_input_tokens += prediction.usage.input_tokens
+                    circuit_control_output_tokens += prediction.usage.output_tokens
+
+            def record_causal_audit(
+                decision: ActiveAuditDecision,
+                *,
+                episode_index: int,
+                phase_index: int,
+                stale_tags: set[str],
+                valid_tags: set[str],
+                oracle_control: float,
+                oracle_candidate: float,
+                additional_prediction: Any,
+                mechanism: str,
+                persist_non_retirement: bool = True,
+                circuit_request: bool = False,
+            ) -> bool:
+                nonlocal rollbacks
+                nonlocal memory_reactivations
+                nonlocal active_audit_observations
+                nonlocal active_audit_retirements
+                nonlocal active_audit_correct_retirements
+                nonlocal active_audit_false_retirements
+                nonlocal active_audit_early_retirements
+                nonlocal active_audit_early_correct_retirements
+                nonlocal active_audit_early_false_retirements
+                nonlocal active_audit_reactivations
+                nonlocal active_audit_correct_reactivations
+
+                audit_outcome = None
+                if decision.retire or persist_non_retirement:
+                    audit_outcome = memory.apply_active_audit(
+                        decision.memory_after,
+                        retire=decision.retire,
+                        restore_predecessors=(
+                            self.config.evolution.active_audit_restore_predecessors
+                        ),
+                    )
+                active_audit_observations += 1
+                record_extra_audit_request(
+                    additional_prediction,
+                    circuit_request=circuit_request,
+                )
+                oracle_delta = float(oracle_candidate) - float(oracle_control)
+                active_audit_oracle_deltas.append(oracle_delta)
+                is_oracle_stale = bool(stale_tags.intersection(decision.memory_before.tags))
+                actually_retired = bool(audit_outcome and audit_outcome.rolled_back)
+                store.record_event(
+                    run_id,
+                    "active_memory_causal_audit",
+                    decision.candidate_id,
+                    {
+                        "episode_index": episode_index,
+                        "feedback_control": decision.feedback_control,
+                        "feedback_candidate": decision.feedback_candidate,
+                        "learner_visible_delta": decision.delta,
+                        "causal_audit_count": decision.memory_after.causal_audit_count,
+                        "causal_mean_delta": decision.memory_after.causal_mean_delta,
+                        "retirement_decision": decision.retire,
+                        "early_retirement": decision.reason.startswith("early retire:"),
+                        "retirement_applied": actually_retired,
+                        "persist_non_retirement": persist_non_retirement,
+                        "mechanism": mechanism,
+                        "reason": decision.reason,
+                        "online_decision_uses": "learner_visible_feedback_only",
+                        "oracle_metrics_are_post_hoc_only": True,
+                        "oracle_delta": oracle_delta,
+                        "oracle_stale_for_sample": is_oracle_stale,
+                    },
+                )
+                if actually_retired and audit_outcome is not None:
+                    retired = audit_outcome.rolled_back[0]
+                    rollbacks += 1
+                    active_audit_retirements += 1
+                    early_retirement = decision.reason.startswith("early retire:")
+                    active_audit_early_retirements += int(early_retirement)
+                    candidate_pool.mark_memory_retired(retired)
+                    for predecessor_id in retired.supersedes_memory_ids:
+                        predecessor = store.get_memory(predecessor_id)
+                        if predecessor is not None:
+                            candidate_pool.mark_memory_retired(predecessor)
+                    pair = (retired.memory_id, phase_index)
+                    if is_oracle_stale:
+                        active_audit_correct_retirements += 1
+                        stale_pair_active_at_last_opportunity[pair] = False
+                    else:
+                        active_audit_false_retirements += 1
+                    if early_retirement:
+                        if is_oracle_stale:
+                            active_audit_early_correct_retirements += 1
+                        else:
+                            active_audit_early_false_retirements += 1
+                    first_stale = stale_pair_first_active_index.get(pair)
+                    if first_stale is not None:
+                        active_audit_retirement_latencies.append(episode_index - first_stale + 1)
+                    store.record_event(
+                        run_id,
+                        "memory_rollback",
+                        decision.candidate_id,
+                        {"reason": decision.reason, "mechanism": mechanism},
+                    )
+                if audit_outcome is not None:
+                    for reactivated in audit_outcome.reactivated:
+                        memory_reactivations += 1
+                        active_audit_reactivations += 1
+                        correct_reactivation = bool(
+                            valid_tags.intersection(reactivated.tags)
+                        ) and not bool(stale_tags.intersection(reactivated.tags))
+                        if stale_tags.intersection(reactivated.tags):
+                            stale_pair_active_at_last_opportunity[
+                                (reactivated.memory_id, phase_index)
+                            ] = True
+                        active_audit_correct_reactivations += int(correct_reactivation)
+                        store.record_event(
+                            run_id,
+                            "memory_reactivated",
+                            reactivated.memory_id,
+                            {
+                                "reason": "causally retired successor",
+                                "mechanism": mechanism,
+                                "oracle_correct_for_current_policy": correct_reactivation,
+                                "oracle_metrics_are_post_hoc_only": True,
+                            },
+                        )
+                return actually_retired
+
+            def revert_provisional_canary(
+                pending: PendingCausalCanary,
+                *,
+                episode_index: int,
+                reason: str,
+            ) -> bool:
+                if active_auditor is None:
+                    return False
+                memory_id, version = pending.memory_key
+                current = store.get_memory(memory_id, version=version)
+                reverted = False
+                if current is not None and current.status == MemoryStatus.ACTIVE:
+                    restored = active_auditor.revert_observation(current, pending.observation)
+                    memory.apply_active_audit(restored, retire=False)
+                    reverted = True
+                store.record_event(
+                    run_id,
+                    "causal_circuit_breaker_reverted",
+                    f"{memory_id}@v{version}",
+                    {
+                        "episode_index": episode_index,
+                        "registered_index": pending.registered_index,
+                        "source": pending.source,
+                        "context": pending.context,
+                        "reason": reason,
+                        "provisional_ledger_reverted": reverted,
+                        "online_decision_uses": "learner_visible_feedback_only",
+                    },
+                )
+                return reverted
+
             for index, sample in enumerate(samples):
                 memory_promoted_this_episode = False
                 memory_retired_this_episode = False
+                if circuit_breaker is not None:
+                    for expired_canary in circuit_breaker.expire(index):
+                        revert_provisional_canary(
+                            expired_canary,
+                            episode_index=index,
+                            reason="ttl_expired",
+                        )
                 active_before = memory.active()
+                observable_source, observable_context = trust_model.observable_key(sample)
+                circuit_intervention = (
+                    circuit_breaker.match(
+                        source=observable_source,
+                        context=observable_context,
+                        episode_index=index,
+                        active_memory_versions={
+                            (item.memory_id, item.version) for item in active_before
+                        },
+                    )
+                    if circuit_breaker is not None
+                    else None
+                )
+                suppress_failure_extraction_this_episode = circuit_intervention is not None
+                if circuit_intervention is not None:
+                    store.record_event(
+                        run_id,
+                        "causal_circuit_breaker_intervention",
+                        (
+                            f"{circuit_intervention.memory_key[0]}"
+                            f"@v{circuit_intervention.memory_key[1]}"
+                        ),
+                        {
+                            "episode_index": index,
+                            "registered_index": circuit_intervention.registered_index,
+                            "source": circuit_intervention.source,
+                            "context": circuit_intervention.context,
+                            "action": "temporarily_exclude_exact_memory_version",
+                            "online_decision_uses": "learner_visible_feedback_only",
+                        },
+                    )
                 known_before = store.list_memories()
                 stale_tags = {str(tag) for tag in sample.metadata.get("stale_memory_tags", [])}
                 valid_tags = {str(tag) for tag in sample.metadata.get("valid_memory_tags", [])}
@@ -412,6 +640,11 @@ class EvoShiftRunner:
                 prediction = await agent.solve(
                     sample,
                     policy,
+                    exclude_memory_versions=(
+                        [circuit_intervention.memory_key]
+                        if circuit_intervention is not None
+                        else None
+                    ),
                     use_memory=behavior.use_memory,
                     self_refine=behavior.self_refine,
                 )
@@ -524,137 +757,264 @@ class EvoShiftRunner:
                         if future_result is not None:
                             complete_future_audit(future_result)
 
-                if (
-                    active_auditor is not None
-                    and not self.frozen_audit
-                    and not feedback_score.success
-                    and assessment.trust
-                    >= self.config.evolution.min_feedback_trust_for_active_audit
-                ):
-                    eligible_active = active_auditor.eligible(
-                        applied_active,
-                        prediction.output.applied_memory_ids,
-                        episode_index=index,
-                    )
-                    active_audit_eligible += len(eligible_active)
-                    for audited_memory in eligible_active[
-                        : self.config.evolution.active_audit_max_per_episode
-                    ]:
-                        control_prediction = await agent.solve(
-                            sample,
-                            policy,
-                            exclude_memory_versions=[
-                                (audited_memory.memory_id, audited_memory.version)
-                            ],
-                            use_memory=behavior.use_memory,
-                        )
-                        control_score = score_sample(sample, control_prediction.output.answer)
-                        control_feedback = score_feedback_sample(
-                            sample,
-                            control_prediction.output.answer,
-                        )
-                        audit_decision = active_auditor.observe(
-                            audited_memory,
-                            episode_index=index,
-                            feedback_control=control_feedback.primary,
-                            feedback_candidate=feedback_score.primary,
-                            shift_detected=shift.detected,
-                        )
-                        audit_outcome = memory.apply_active_audit(
-                            audit_decision.memory_after,
-                            retire=audit_decision.retire,
-                            restore_predecessors=(
-                                self.config.evolution.active_audit_restore_predecessors
-                            ),
-                        )
-                        active_audit_observations += 1
-                        active_audit_control_requests += 1
-                        active_audit_control_input_tokens += control_prediction.usage.input_tokens
-                        active_audit_control_output_tokens += control_prediction.usage.output_tokens
-                        oracle_delta = score.primary - control_score.primary
-                        active_audit_oracle_deltas.append(oracle_delta)
-                        is_oracle_stale = bool(stale_tags.intersection(audited_memory.tags))
-                        actually_retired = bool(audit_outcome.rolled_back)
-                        store.record_event(
-                            run_id,
-                            "active_memory_causal_audit",
-                            audit_decision.candidate_id,
-                            {
-                                "episode_index": index,
-                                "feedback_control": audit_decision.feedback_control,
-                                "feedback_candidate": audit_decision.feedback_candidate,
-                                "learner_visible_delta": audit_decision.delta,
-                                "causal_audit_count": (
-                                    audit_decision.memory_after.causal_audit_count
-                                ),
-                                "causal_mean_delta": (
-                                    audit_decision.memory_after.causal_mean_delta
-                                ),
-                                "retirement_decision": audit_decision.retire,
-                                "early_retirement": audit_decision.reason.startswith(
-                                    "early retire:"
-                                ),
-                                "retirement_applied": actually_retired,
-                                "reason": audit_decision.reason,
-                                "online_decision_uses": "learner_visible_feedback_only",
-                                "oracle_metrics_are_post_hoc_only": True,
-                                "oracle_delta": oracle_delta,
-                                "oracle_stale_for_sample": is_oracle_stale,
-                            },
-                        )
-                        if actually_retired:
-                            retired = audit_outcome.rolled_back[0]
-                            memory_retired_this_episode = True
-                            rollbacks += 1
-                            active_audit_retirements += 1
-                            early_retirement = audit_decision.reason.startswith("early retire:")
-                            active_audit_early_retirements += int(early_retirement)
-                            candidate_pool.mark_memory_retired(retired)
-                            for predecessor_id in retired.supersedes_memory_ids:
-                                predecessor = store.get_memory(predecessor_id)
-                                if predecessor is not None:
-                                    candidate_pool.mark_memory_retired(predecessor)
-                            pair = (retired.memory_id, phase_index)
-                            if is_oracle_stale:
-                                active_audit_correct_retirements += 1
-                                stale_pair_active_at_last_opportunity[pair] = False
-                            else:
-                                active_audit_false_retirements += 1
-                            if early_retirement:
-                                if is_oracle_stale:
-                                    active_audit_early_correct_retirements += 1
-                                else:
-                                    active_audit_early_false_retirements += 1
-                            first_stale = stale_pair_first_active_index.get(pair)
-                            if first_stale is not None:
-                                active_audit_retirement_latencies.append(index - first_stale + 1)
-                            store.record_event(
-                                run_id,
-                                "memory_rollback",
-                                audit_decision.candidate_id,
-                                {"reason": audit_decision.reason, "mechanism": "active_causal"},
+                if active_auditor is not None and not self.frozen_audit:
+                    if circuit_intervention is not None:
+                        assert circuit_breaker is not None
+                        active_audit_eligible += 1
+                        memory_id, memory_version = circuit_intervention.memory_key
+                        audited_memory = store.get_memory(memory_id, version=memory_version)
+                        if (
+                            audited_memory is not None
+                            and audited_memory.status == MemoryStatus.ACTIVE
+                        ):
+                            forced_on_prediction = await agent.solve(
+                                sample,
+                                policy,
+                                extra_memories=[audited_memory],
+                                use_memory=behavior.use_memory,
                             )
-                        for reactivated in audit_outcome.reactivated:
-                            memory_reactivations += 1
-                            active_audit_reactivations += 1
-                            correct_reactivation = bool(
-                                valid_tags.intersection(reactivated.tags)
-                            ) and not bool(stale_tags.intersection(reactivated.tags))
-                            if stale_tags.intersection(reactivated.tags):
-                                stale_pair_active_at_last_opportunity[
-                                    (reactivated.memory_id, phase_index)
-                                ] = True
-                            active_audit_correct_reactivations += int(correct_reactivation)
+                            forced_on_score = score_sample(
+                                sample,
+                                forced_on_prediction.output.answer,
+                            )
+                            forced_on_feedback = score_feedback_sample(
+                                sample,
+                                forced_on_prediction.output.answer,
+                            )
+                            circuit_oracle_intervention_deltas.append(
+                                score.primary - forced_on_score.primary
+                            )
+                            treatment_applied = (
+                                memory_id in forced_on_prediction.output.applied_memory_ids
+                            )
+                            confirmation_eligible = (
+                                treatment_applied
+                                and assessment.trust
+                                >= self.config.evolution.min_feedback_trust_for_active_audit
+                            )
+                            confirmed = False
+                            resolution_reason = ""
+                            if confirmation_eligible:
+                                confirmation_decision = active_auditor.observe(
+                                    audited_memory,
+                                    episode_index=index,
+                                    feedback_control=feedback_score.primary,
+                                    feedback_candidate=forced_on_feedback.primary,
+                                    shift_detected=shift.detected,
+                                )
+                                confirmed = record_causal_audit(
+                                    confirmation_decision,
+                                    episode_index=index,
+                                    phase_index=phase_index,
+                                    stale_tags=stale_tags,
+                                    valid_tags=valid_tags,
+                                    oracle_control=score.primary,
+                                    oracle_candidate=forced_on_score.primary,
+                                    additional_prediction=forced_on_prediction,
+                                    mechanism="recurrence_circuit_confirmation",
+                                    persist_non_retirement=False,
+                                    circuit_request=True,
+                                )
+                                resolution_reason = confirmation_decision.reason
+                            else:
+                                record_extra_audit_request(
+                                    forced_on_prediction,
+                                    circuit_request=True,
+                                )
+                                resolution_reason = (
+                                    "cancel: forced memory was not explicitly applied"
+                                    if not treatment_applied
+                                    else "cancel: feedback trust remained below audit threshold"
+                                )
+                            if confirmed:
+                                memory_retired_this_episode = True
+                                circuit_breaker.resolve(
+                                    circuit_intervention,
+                                    confirmed=True,
+                                )
+                                is_oracle_stale = bool(stale_tags.intersection(audited_memory.tags))
+                                circuit_correct_confirmations += int(is_oracle_stale)
+                                circuit_false_confirmations += int(not is_oracle_stale)
+                            else:
+                                revert_provisional_canary(
+                                    circuit_intervention,
+                                    episode_index=index,
+                                    reason=resolution_reason,
+                                )
+                                circuit_breaker.resolve(
+                                    circuit_intervention,
+                                    confirmed=False,
+                                )
                             store.record_event(
                                 run_id,
-                                "memory_reactivated",
-                                reactivated.memory_id,
+                                "causal_circuit_breaker_resolved",
+                                f"{memory_id}@v{memory_version}",
                                 {
-                                    "reason": "causally retired successor",
-                                    "oracle_correct_for_current_policy": correct_reactivation,
+                                    "episode_index": index,
+                                    "registered_index": (circuit_intervention.registered_index),
+                                    "source": circuit_intervention.source,
+                                    "context": circuit_intervention.context,
+                                    "feedback_memory_off": feedback_score.primary,
+                                    "feedback_forced_memory_on": (forced_on_feedback.primary),
+                                    "forced_memory_applied": treatment_applied,
+                                    "feedback_trust": assessment.trust,
+                                    "confirmed": confirmed,
+                                    "reason": resolution_reason,
+                                    "online_decision_uses": ("learner_visible_feedback_only"),
                                     "oracle_metrics_are_post_hoc_only": True,
+                                    "oracle_intervention_delta": (
+                                        score.primary - forced_on_score.primary
+                                    ),
                                 },
                             )
+                        else:
+                            circuit_breaker.resolve(circuit_intervention, confirmed=False)
+                    elif not feedback_score.success:
+                        ordinary_audit_eligible = (
+                            assessment.trust
+                            >= self.config.evolution.min_feedback_trust_for_active_audit
+                        )
+                        circuit_probe_eligible = (
+                            circuit_breaker is not None
+                            and circuit_breaker.trust_is_probe_eligible(assessment.trust)
+                        )
+                        eligible_active = (
+                            active_auditor.eligible(
+                                applied_active,
+                                prediction.output.applied_memory_ids,
+                                episode_index=index,
+                            )
+                            if ordinary_audit_eligible or circuit_probe_eligible
+                            else []
+                        )
+                        active_audit_eligible += len(eligible_active)
+                        selected_active = eligible_active[
+                            : self.config.evolution.active_audit_max_per_episode
+                        ]
+                        if ordinary_audit_eligible:
+                            for audited_memory in selected_active:
+                                control_prediction = await agent.solve(
+                                    sample,
+                                    policy,
+                                    exclude_memory_versions=[
+                                        (audited_memory.memory_id, audited_memory.version)
+                                    ],
+                                    use_memory=behavior.use_memory,
+                                )
+                                control_score = score_sample(
+                                    sample,
+                                    control_prediction.output.answer,
+                                )
+                                control_feedback = score_feedback_sample(
+                                    sample,
+                                    control_prediction.output.answer,
+                                )
+                                audit_decision = active_auditor.observe(
+                                    audited_memory,
+                                    episode_index=index,
+                                    feedback_control=control_feedback.primary,
+                                    feedback_candidate=feedback_score.primary,
+                                    shift_detected=shift.detected,
+                                )
+                                memory_retired_this_episode = (
+                                    record_causal_audit(
+                                        audit_decision,
+                                        episode_index=index,
+                                        phase_index=phase_index,
+                                        stale_tags=stale_tags,
+                                        valid_tags=valid_tags,
+                                        oracle_control=control_score.primary,
+                                        oracle_candidate=score.primary,
+                                        additional_prediction=control_prediction,
+                                        mechanism="active_causal",
+                                    )
+                                    or memory_retired_this_episode
+                                )
+                        elif circuit_probe_eligible and circuit_breaker is not None:
+                            for audited_memory in selected_active:
+                                control_prediction = await agent.solve(
+                                    sample,
+                                    policy,
+                                    exclude_memory_versions=[
+                                        (audited_memory.memory_id, audited_memory.version)
+                                    ],
+                                    use_memory=behavior.use_memory,
+                                )
+                                control_score = score_sample(
+                                    sample,
+                                    control_prediction.output.answer,
+                                )
+                                control_feedback = score_feedback_sample(
+                                    sample,
+                                    control_prediction.output.answer,
+                                )
+                                circuit_breaker.note_probe()
+                                provisional_decision = active_auditor.observe(
+                                    audited_memory,
+                                    episode_index=index,
+                                    feedback_control=control_feedback.primary,
+                                    feedback_candidate=feedback_score.primary,
+                                    shift_detected=shift.detected,
+                                    retirement_enabled=False,
+                                )
+                                pending = circuit_breaker.register(
+                                    source=assessment.source,
+                                    context=assessment.context,
+                                    observation=provisional_decision,
+                                )
+                                if pending is not None:
+                                    unexpected_transition = record_causal_audit(
+                                        provisional_decision,
+                                        episode_index=index,
+                                        phase_index=phase_index,
+                                        stale_tags=stale_tags,
+                                        valid_tags=valid_tags,
+                                        oracle_control=control_score.primary,
+                                        oracle_candidate=score.primary,
+                                        additional_prediction=control_prediction,
+                                        mechanism="recurrence_circuit_registration",
+                                        circuit_request=True,
+                                    )
+                                    circuit_unconfirmed_persistent_transitions += int(
+                                        unexpected_transition
+                                    )
+                                    store.record_event(
+                                        run_id,
+                                        "causal_circuit_breaker_registered",
+                                        provisional_decision.candidate_id,
+                                        {
+                                            "episode_index": index,
+                                            "expires_after_index": (pending.expires_after_index),
+                                            "source": pending.source,
+                                            "context": pending.context,
+                                            "learner_visible_delta": (provisional_decision.delta),
+                                            "retirement_disabled": True,
+                                            "online_decision_uses": (
+                                                "learner_visible_feedback_only"
+                                            ),
+                                        },
+                                    )
+                                else:
+                                    record_extra_audit_request(
+                                        control_prediction,
+                                        circuit_request=True,
+                                    )
+                                    store.record_event(
+                                        run_id,
+                                        "causal_circuit_breaker_probe",
+                                        provisional_decision.candidate_id,
+                                        {
+                                            "episode_index": index,
+                                            "source": assessment.source,
+                                            "context": assessment.context,
+                                            "learner_visible_delta": (provisional_decision.delta),
+                                            "registered": False,
+                                            "reason": "causal delta above circuit threshold",
+                                            "online_decision_uses": (
+                                                "learner_visible_feedback_only"
+                                            ),
+                                        },
+                                    )
 
                 if (
                     not self.frozen_audit
@@ -712,6 +1072,7 @@ class EvoShiftRunner:
                         )
                     )
                     and not memory_retired_this_episode
+                    and not suppress_failure_extraction_this_episode
                 )
                 if (
                     self.config.evolution.enabled
@@ -1071,6 +1432,14 @@ class EvoShiftRunner:
                         store.save_policy(
                             challenger, status="rejected", parent_version=policy.version
                         )
+
+            if circuit_breaker is not None:
+                for expired_canary in circuit_breaker.expire_all():
+                    revert_provisional_canary(
+                        expired_canary,
+                        episode_index=len(samples),
+                        reason="stream_end",
+                    )
 
             if future_auditor is not None:
                 for outcome in future_auditor.finalize():
@@ -1448,6 +1817,48 @@ class EvoShiftRunner:
                         "control_requests": active_audit_control_requests,
                         "control_input_tokens": active_audit_control_input_tokens,
                         "control_output_tokens": active_audit_control_output_tokens,
+                        "circuit_breaker": {
+                            **(
+                                circuit_breaker.snapshot()
+                                if circuit_breaker is not None
+                                else {
+                                    "enabled": False,
+                                    "probes": 0,
+                                    "registrations": 0,
+                                    "interventions": 0,
+                                    "confirmations": 0,
+                                    "cancellations": 0,
+                                    "expirations": 0,
+                                    "invalidations": 0,
+                                    "pending": 0,
+                                }
+                            ),
+                            "correct_confirmations": circuit_correct_confirmations,
+                            "false_confirmations": circuit_false_confirmations,
+                            "confirmation_precision": (
+                                circuit_correct_confirmations
+                                / (circuit_correct_confirmations + circuit_false_confirmations)
+                                if circuit_correct_confirmations + circuit_false_confirmations
+                                else None
+                            ),
+                            "false_confirmation_rate": (
+                                circuit_false_confirmations
+                                / (circuit_correct_confirmations + circuit_false_confirmations)
+                                if circuit_correct_confirmations + circuit_false_confirmations
+                                else 0.0
+                            ),
+                            "unconfirmed_persistent_transitions": (
+                                circuit_unconfirmed_persistent_transitions
+                            ),
+                            "mean_post_hoc_oracle_intervention_delta": (
+                                statistics.fmean(circuit_oracle_intervention_deltas)
+                                if circuit_oracle_intervention_deltas
+                                else None
+                            ),
+                            "control_requests": circuit_control_requests,
+                            "control_input_tokens": circuit_control_input_tokens,
+                            "control_output_tokens": circuit_control_output_tokens,
+                        },
                     },
                     "audit": {
                         "frozen": self.frozen_audit,
