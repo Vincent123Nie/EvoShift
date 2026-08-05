@@ -16,21 +16,11 @@ class AlgorithmBehavior:
 
 
 BEHAVIORS = {
-    Algorithm.STATIC: AlgorithmBehavior(
-        True, False, False, False, False, False, False, False
-    ),
-    Algorithm.SELF_REFINE: AlgorithmBehavior(
-        False, True, False, False, False, False, False, False
-    ),
-    Algorithm.REFLEXION: AlgorithmBehavior(
-        True, False, True, False, False, False, False, False
-    ),
-    Algorithm.REPLAY_ONLY: AlgorithmBehavior(
-        True, False, True, True, True, False, False, False
-    ),
-    Algorithm.EVOSHIFT: AlgorithmBehavior(
-        True, False, True, True, True, True, True, True
-    ),
+    Algorithm.STATIC: AlgorithmBehavior(True, False, False, False, False, False, False, False),
+    Algorithm.SELF_REFINE: AlgorithmBehavior(False, True, False, False, False, False, False, False),
+    Algorithm.REFLEXION: AlgorithmBehavior(True, False, True, False, False, False, False, False),
+    Algorithm.REPLAY_ONLY: AlgorithmBehavior(True, False, True, True, True, False, False, False),
+    Algorithm.EVOSHIFT: AlgorithmBehavior(True, False, True, True, True, True, True, True),
 }
 
 

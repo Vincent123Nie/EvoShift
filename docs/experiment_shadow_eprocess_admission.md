@@ -210,7 +210,8 @@ e-process across related candidate formulations. Exact signatures fragment
 equivalent live hypotheses, but any clustering rule must be fixed before
 evaluation and must not merge conflicting directives.
 
-Final quality evidence: 149 tests passed with 84.43% branch-aware coverage;
+Final quality evidence on the clean `main` integration tree: 139 tests passed
+with 84.20% branch-aware coverage;
 Ruff lint and formatting, strict mypy over 51 source files, sdist/wheel builds,
-and schema/loading validation for 43 YAML files with 908 expanded sweep
+and schema/loading validation for 40 YAML files with 846 expanded sweep
 assignments all passed.

@@ -579,11 +579,7 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
         ordered = indexed[rotation:] + indexed[:rotation]
         if len(ordered) < self.phase_size:
             repetitions = (self.phase_size + len(_CASES) - 1) // len(_CASES)
-            ordered = [
-                (case, repetition)
-                for repetition in range(repetitions)
-                for case in _CASES
-            ]
+            ordered = [(case, repetition) for repetition in range(repetitions) for case in _CASES]
             ordered = ordered[rotation:] + ordered[:rotation]
         return ordered[: self.phase_size]
 
@@ -872,8 +868,7 @@ class TauRetailPolicyShiftBenchmark(BenchmarkAdapter):
             raise DatasetError("tau3 retail policy is missing required pinned clauses")
         if not isinstance(tasks, list) or len(tasks) != self.expected_task_count:
             raise DatasetError(
-                "tau3 retail tasks must contain the pinned "
-                f"{self.expected_task_count}-task list"
+                f"tau3 retail tasks must contain the pinned {self.expected_task_count}-task list"
             )
         actions = {
             str(action.get("name"))

@@ -207,12 +207,12 @@ python scripts/verify_bbh_manifest.py
 
 Verified locally on 2026-08-05:
 
-- 149 tests passed;
-- branch-aware coverage: 84.43% (`fail_under = 80`);
+- 139 tests passed;
+- branch-aware coverage: 84.20% (`fail_under = 80`);
 - Ruff and strict mypy passed over 51 source files;
 - source and wheel distributions built successfully;
-- all 43 experiment, benchmark fragment, provider fragment, and sweep YAML
-  files passed schema/loading validation, including 908 expanded sweep
+- all 40 experiment, benchmark fragment, provider fragment, and sweep YAML
+  files passed schema/loading validation, including 846 expanded sweep
   assignments;
 - the OpenAI-compatible provider contract suite passed, and an opt-in live
   smoke against a private compatible gateway returned exactly `OK`;
