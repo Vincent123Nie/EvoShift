@@ -130,6 +130,38 @@ def test_confirmed_successor_supersedes_and_rollback_restores_prior_rule(
     store.close()
 
 
+def test_direct_predecessor_control_uses_latest_superseded_exact_version(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    prior = _memory("prior", "refund policy", "Use the 14 day rule.").model_copy(
+        update={"scope": "refund"}
+    )
+    successor = _memory(
+        "successor",
+        "refund policy",
+        "Use the premium 30 day rule.",
+    ).model_copy(update={"scope": "refund", "supersedes_memory_ids": ["prior"]})
+    store.save_memory(prior)
+    manager.activate(successor, 0.2, 0.1, 0.0)
+    store.save_memory(
+        prior.model_copy(
+            update={
+                "version": 2,
+                "status": MemoryStatus.REJECTED,
+                "directive": "Unverified later draft.",
+            }
+        )
+    )
+
+    controls = manager.direct_superseded_predecessors(successor)
+
+    assert [(item.memory_id, item.version) for item in controls] == [("prior", 1)]
+    assert controls[0].status == MemoryStatus.SUPERSEDED
+    store.close()
+
+
 def test_active_causal_retirement_persists_ledger_and_restores_prior_rule(
     tmp_path: Path,
 ) -> None:

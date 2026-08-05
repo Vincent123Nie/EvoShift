@@ -123,6 +123,7 @@ class EvolutionConfig(ConfigModel):
     active_audit_circuit_breaker_min_trust: float = Field(default=0.10, ge=0.0, le=1.0)
     active_audit_circuit_breaker_delta: float = Field(default=-0.75, ge=-1.0, le=0.0)
     active_audit_circuit_breaker_max_age: int = Field(default=8, ge=1, le=10000)
+    active_audit_lineage_control_enabled: bool = False
     dormant_revival_enabled: bool = False
     dormant_revival_min_trust: float = Field(default=0.10, ge=0.0, le=1.0)
     dormant_revival_delta: float = Field(default=0.75, ge=0.0, le=1.0)
@@ -201,6 +202,11 @@ class EvolutionConfig(ConfigModel):
                 "active audit circuit breaker trust floor must be below the ordinary "
                 "active audit threshold"
             )
+        if (
+            self.active_audit_lineage_control_enabled
+            and not self.active_audit_circuit_breaker_enabled
+        ):
+            raise ValueError("lineage control requires the active audit circuit breaker")
         if self.dormant_revival_enabled and not self.dynamic_feedback_trust_enabled:
             raise ValueError("dormant memory revival requires dynamic feedback trust")
         if (

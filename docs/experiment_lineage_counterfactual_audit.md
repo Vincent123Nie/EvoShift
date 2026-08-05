@@ -79,3 +79,27 @@ change the candidate after confirmation begins.
 
 If any held-out score gate fails, retain the result as a negative experiment and
 do not merge the mechanism into `main`.
+
+## Development result and freeze
+
+The diagnostic matrix completed at `runs/sweeps/20260805T112429Z` on the five
+already inspected development seeds. The implementation, thresholds, variants,
+metrics, and held-out seed list are frozen after this result.
+
+| Condition | Current | Bidirectional-15 | Lineage control | Lineage delta vs current |
+|---|---:|---:|---:|---:|
+| clean | 0.9306 | 0.9514 | 0.9514 | `+0.0208 [+0.0111, +0.0319]` |
+| attack burst | 0.9306 | 0.9514 | 0.9514 | `+0.0208 [+0.0111, +0.0319]` |
+| 10% noise | 0.9167 | 0.9250 | 0.9278 | `+0.0111 [+0.0014, +0.0222]` |
+| 10% noise + attack burst | 0.9056 | 0.9153 | 0.9181 | `+0.0125 [+0.0042, +0.0236]` |
+
+The mechanism preserved clean capability and removed the two diagnosed
+foreground losses in noisy seed 111. Across the diagnostic matrix, invariant
+retention and selective-forgetting precision remained unchanged, false
+retirement stayed zero, and the lineage variant strictly improved both noisy
+point estimates over the prior candidate.
+
+Pre-confirmation quality evidence: 162 tests passed with 85.09% branch-aware
+coverage; Ruff, formatting, strict mypy over 54 source files, and package build
+passed. These development results are encouraging but are not adoption
+evidence.

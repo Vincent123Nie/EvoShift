@@ -66,6 +66,21 @@ class MemoryManager:
     ) -> List[RetrievedMemory]:
         return self.retriever.retrieve(query, memories, policy, domain=domain)
 
+    def direct_superseded_predecessors(self, successor: MemoryItem) -> List[MemoryItem]:
+        """Return exact, verified direct predecessors eligible as causal controls."""
+
+        predecessor_ids = set(successor.supersedes_memory_ids)
+        if not predecessor_ids:
+            return []
+        return sorted(
+            (
+                item
+                for item in self.store.list_memories([MemoryStatus.SUPERSEDED])
+                if item.memory_id in predecessor_ids and item.scope == successor.scope
+            ),
+            key=lambda item: (item.memory_id, -item.version),
+        )
+
     def stage(self, candidate: MemoryItem, policy: PolicyGenome) -> MemoryItem:
         if candidate.confidence < policy.write_confidence_threshold:
             candidate = candidate.model_copy(update={"status": MemoryStatus.REJECTED})

@@ -634,6 +634,7 @@ class EvoShiftRunner:
                         )
                 active_before = memory.active()
                 known_before = store.list_memories()
+                superseded_before = store.list_memories([MemoryStatus.SUPERSEDED])
                 occupied_memory_scopes = {item.scope for item in active_before}
                 latest_retired_by_scope: Dict[str, MemoryItem] = {}
                 for known_memory in known_before:
@@ -662,10 +663,42 @@ class EvoShiftRunner:
                         active_memory_versions={
                             (item.memory_id, item.version) for item in active_before
                         },
+                        lineage_control_versions={
+                            (item.memory_id, item.version) for item in superseded_before
+                        },
                     )
                     if circuit_breaker is not None
                     else None
                 )
+                if circuit_breaker is not None:
+                    for (
+                        invalidated_canary,
+                        invalidation_reason,
+                    ) in circuit_breaker.drain_invalidated():
+                        reverted = revert_provisional_canary(
+                            invalidated_canary,
+                            episode_index=index,
+                            reason=invalidation_reason,
+                        )
+                        store.record_event(
+                            run_id,
+                            "causal_circuit_breaker_invalidated",
+                            (
+                                f"{invalidated_canary.memory_key[0]}"
+                                f"@v{invalidated_canary.memory_key[1]}"
+                            ),
+                            {
+                                "episode_index": index,
+                                "registered_index": invalidated_canary.registered_index,
+                                "source": invalidated_canary.source,
+                                "context": invalidated_canary.context,
+                                "control_memory_key": (invalidated_canary.control_memory_key),
+                                "reason": invalidation_reason,
+                                "provisional_ledger_reverted": reverted,
+                                "persistent_state_changed": False,
+                                "online_decision_uses": "learner_visible_feedback_only",
+                            },
+                        )
                 revival_intervention = (
                     dormant_revival.match(
                         source=observable_source,
@@ -698,7 +731,12 @@ class EvoShiftRunner:
                             "registered_index": circuit_intervention.registered_index,
                             "source": circuit_intervention.source,
                             "context": circuit_intervention.context,
-                            "action": "temporarily_exclude_exact_memory_version",
+                            "action": (
+                                "temporarily_replace_with_exact_direct_predecessor"
+                                if circuit_intervention.control_memory is not None
+                                else "temporarily_exclude_exact_memory_version"
+                            ),
+                            "control_memory_key": (circuit_intervention.control_memory_key),
                             "online_decision_uses": "learner_visible_feedback_only",
                         },
                     )
@@ -745,7 +783,14 @@ class EvoShiftRunner:
                         else None
                     ),
                     extra_memories=(
-                        [revival_intervention.memory] if revival_intervention is not None else None
+                        [circuit_intervention.control_memory]
+                        if circuit_intervention is not None
+                        and circuit_intervention.control_memory is not None
+                        else (
+                            [revival_intervention.memory]
+                            if revival_intervention is not None
+                            else None
+                        )
                     ),
                     use_memory=behavior.use_memory,
                     self_refine=behavior.self_refine,
@@ -1060,7 +1105,13 @@ class EvoShiftRunner:
                                     "registered_index": (circuit_intervention.registered_index),
                                     "source": circuit_intervention.source,
                                     "context": circuit_intervention.context,
-                                    "feedback_memory_off": feedback_score.primary,
+                                    "control_kind": (
+                                        "direct_predecessor"
+                                        if circuit_intervention.control_memory is not None
+                                        else "memory_off"
+                                    ),
+                                    "control_memory_key": (circuit_intervention.control_memory_key),
+                                    "feedback_control": feedback_score.primary,
                                     "feedback_forced_memory_on": (forced_on_feedback.primary),
                                     "forced_memory_applied": treatment_applied,
                                     "feedback_trust": assessment.trust,
@@ -1138,12 +1189,25 @@ class EvoShiftRunner:
                                 )
                         elif circuit_probe_eligible and circuit_breaker is not None:
                             for audited_memory in selected_active:
+                                lineage_control = None
+                                if self.config.evolution.active_audit_lineage_control_enabled:
+                                    ranked_predecessors = memory.rank_memories(
+                                        sample.prompt,
+                                        memory.direct_superseded_predecessors(audited_memory),
+                                        policy,
+                                        domain=sample.domain,
+                                    )
+                                    if ranked_predecessors:
+                                        lineage_control = ranked_predecessors[0].item
                                 control_prediction = await agent.solve(
                                     sample,
                                     policy,
                                     exclude_memory_versions=[
                                         (audited_memory.memory_id, audited_memory.version)
                                     ],
+                                    extra_memories=(
+                                        [lineage_control] if lineage_control is not None else None
+                                    ),
                                     use_memory=behavior.use_memory,
                                 )
                                 control_score = score_sample(
@@ -1154,7 +1218,9 @@ class EvoShiftRunner:
                                     sample,
                                     control_prediction.output.answer,
                                 )
-                                circuit_breaker.note_probe()
+                                circuit_breaker.note_probe(
+                                    used_lineage_control=lineage_control is not None
+                                )
                                 provisional_decision = active_auditor.observe(
                                     audited_memory,
                                     episode_index=index,
@@ -1167,6 +1233,7 @@ class EvoShiftRunner:
                                     source=assessment.source,
                                     context=assessment.context,
                                     observation=provisional_decision,
+                                    control_memory=lineage_control,
                                 )
                                 if pending is not None:
                                     unexpected_transition = record_causal_audit(
@@ -1193,6 +1260,12 @@ class EvoShiftRunner:
                                             "expires_after_index": (pending.expires_after_index),
                                             "source": pending.source,
                                             "context": pending.context,
+                                            "control_kind": (
+                                                "direct_predecessor"
+                                                if pending.control_memory is not None
+                                                else "memory_off"
+                                            ),
+                                            "control_memory_key": pending.control_memory_key,
                                             "learner_visible_delta": (provisional_decision.delta),
                                             "retirement_disabled": True,
                                             "online_decision_uses": (
@@ -1213,6 +1286,19 @@ class EvoShiftRunner:
                                             "episode_index": index,
                                             "source": assessment.source,
                                             "context": assessment.context,
+                                            "control_kind": (
+                                                "direct_predecessor"
+                                                if lineage_control is not None
+                                                else "memory_off"
+                                            ),
+                                            "control_memory_key": (
+                                                (
+                                                    lineage_control.memory_id,
+                                                    lineage_control.version,
+                                                )
+                                                if lineage_control is not None
+                                                else None
+                                            ),
                                             "learner_visible_delta": (provisional_decision.delta),
                                             "registered": False,
                                             "reason": "causal delta above circuit threshold",
@@ -2147,13 +2233,18 @@ class EvoShiftRunner:
                                 if circuit_breaker is not None
                                 else {
                                     "enabled": False,
+                                    "lineage_control_enabled": False,
                                     "probes": 0,
+                                    "lineage_probes": 0,
                                     "registrations": 0,
+                                    "lineage_registrations": 0,
                                     "interventions": 0,
+                                    "lineage_interventions": 0,
                                     "confirmations": 0,
                                     "cancellations": 0,
                                     "expirations": 0,
                                     "invalidations": 0,
+                                    "invalidated_awaiting_revert": 0,
                                     "pending": 0,
                                 }
                             ),

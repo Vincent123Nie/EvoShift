@@ -79,6 +79,7 @@ evolution:
   active_audit_circuit_breaker_min_trust: 0.10
   active_audit_circuit_breaker_delta: -0.75
   active_audit_circuit_breaker_max_age: 8
+  active_audit_lineage_control_enabled: false
   dormant_revival_enabled: false
   dormant_revival_min_trust: 0.10
   dormant_revival_delta: 0.75

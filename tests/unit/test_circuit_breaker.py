@@ -121,3 +121,72 @@ def test_circuit_probe_uses_pre_registered_trust_and_delta_gates() -> None:
     assert not breaker.trust_is_probe_eligible(0.60)
     assert breaker.qualifies(-0.75)
     assert not breaker.qualifies(-0.5)
+
+
+def test_lineage_control_is_exact_and_invalidated_before_intervention() -> None:
+    config = _config(active_audit_lineage_control_enabled=True)
+    breaker = CausalCircuitBreaker(config)
+    predecessor = MemoryItem(
+        memory_id="predecessor",
+        version=2,
+        status=MemoryStatus.SUPERSEDED,
+        trigger="refund context",
+        directive="Apply the preceding refund rule.",
+    )
+    breaker.note_probe(used_lineage_control=True)
+    pending = breaker.register(
+        source="portal",
+        context="refund:any:days_8_14",
+        observation=_provisional(config),
+        control_memory=predecessor,
+    )
+
+    assert pending is not None
+    assert pending.control_memory_key == ("predecessor", 2)
+    assert (
+        breaker.match(
+            source="portal",
+            context="refund:any:days_8_14",
+            episode_index=11,
+            active_memory_versions=[("suspect", 3)],
+            lineage_control_versions=[("predecessor", 1)],
+        )
+        is None
+    )
+    invalidated = breaker.drain_invalidated()
+    assert invalidated == ((pending, "lineage control version is no longer superseded"),)
+    snapshot = breaker.snapshot()
+    assert snapshot["lineage_probes"] == 1
+    assert snapshot["lineage_registrations"] == 1
+    assert snapshot["lineage_interventions"] == 0
+    assert snapshot["invalidations"] == 1
+
+
+def test_lineage_control_counts_successful_exact_intervention() -> None:
+    config = _config(active_audit_lineage_control_enabled=True)
+    breaker = CausalCircuitBreaker(config)
+    predecessor = MemoryItem(
+        memory_id="predecessor",
+        version=2,
+        status=MemoryStatus.SUPERSEDED,
+        trigger="refund context",
+        directive="Apply the preceding refund rule.",
+    )
+    pending = breaker.register(
+        source="portal",
+        context="refund:any:days_8_14",
+        observation=_provisional(config),
+        control_memory=predecessor,
+    )
+
+    assert pending is not None
+    matched = breaker.match(
+        source="portal",
+        context="refund:any:days_8_14",
+        episode_index=11,
+        active_memory_versions=[("suspect", 3)],
+        lineage_control_versions=[("predecessor", 2)],
+    )
+
+    assert matched == pending
+    assert breaker.snapshot()["lineage_interventions"] == 1

@@ -401,6 +401,81 @@ async def test_cooldown_dormant_revival_adds_recurrent_gain_without_false_reviva
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_lineage_counterfactual_control_removes_coarse_memory_off_loss(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 111}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.10, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "active_audit_circuit_breaker_enabled": True,
+                    "dormant_revival_enabled": True,
+                    "dormant_revival_min_retired_age": 15,
+                }
+            ),
+        }
+    )
+    lineage_config = config.model_copy(
+        update={
+            "evolution": config.evolution.model_copy(
+                update={"active_audit_lineage_control_enabled": True}
+            )
+        }
+    )
+
+    memory_off = await EvoShiftRunner(
+        config,
+        create_benchmark(config.benchmark, root=Path.cwd(), seed=111),
+        workdir=Path.cwd(),
+    ).run()
+    lineage = await EvoShiftRunner(
+        lineage_config,
+        create_benchmark(lineage_config.benchmark, root=Path.cwd(), seed=111),
+        workdir=Path.cwd(),
+    ).run()
+
+    circuit = lineage.metrics["active_memory_governance"]["circuit_breaker"]
+    assert lineage.metrics["overall"]["mean_score"] > memory_off.metrics["overall"]["mean_score"]
+    assert circuit["lineage_probes"] >= 1
+    assert circuit["lineage_registrations"] >= 1
+    assert circuit["lineage_interventions"] >= 1
+    assert circuit["confirmation_precision"] in {None, 1.0}
+    assert circuit["unconfirmed_persistent_transitions"] == 0
+    assert lineage.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+    connection = sqlite3.connect(lineage.run_dir / "state.sqlite3")
+    try:
+        intervention_payloads = [
+            json.loads(row[0])
+            for row in connection.execute(
+                "SELECT payload_json FROM evolution_events "
+                "WHERE event_type='causal_circuit_breaker_intervention'"
+            )
+        ]
+    finally:
+        connection.close()
+    lineage_interventions = [
+        payload
+        for payload in intervention_payloads
+        if payload.get("control_memory_key") is not None
+    ]
+    assert lineage_interventions
+    assert all(
+        payload["action"] == "temporarily_replace_with_exact_direct_predecessor"
+        for payload in lineage_interventions
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_quarantined_feedback_can_only_reach_memory_through_verified_shadow_lane(
     tmp_path: Path,
 ) -> None:

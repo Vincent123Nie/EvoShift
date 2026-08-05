@@ -182,6 +182,8 @@ def test_circuit_breaker_configuration_requires_dynamic_trust_and_lower_floor() 
             active_audit_circuit_breaker_min_trust=0.60,
             min_feedback_trust_for_active_audit=0.60,
         )
+    with pytest.raises(ValueError, match="lineage control requires"):
+        EvolutionConfig(active_audit_lineage_control_enabled=True)
 
 
 def test_dormant_revival_configuration_requires_dynamic_trust_and_lower_floor() -> None:
