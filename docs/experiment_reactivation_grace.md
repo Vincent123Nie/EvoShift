@@ -84,3 +84,37 @@ same four conditions, for 120 confirmation runs.
 
 Failure of any held-out gate rejects the candidate and forbids merging it into
 `main`.
+
+## Result: rejected
+
+Implementation was frozen in `0c06c6d`. The 200-run development artifact is
+`runs/sweeps/20260805T121836Z`; the 120-run confirmation artifact is
+`runs/sweeps/20260805T122017Z` with the pre-registered unseen seeds.
+
+| Condition | Current full | Lineage revival 15 | Guarded recurrence | Guarded delta vs current (95% CI) |
+|---|---:|---:|---:|---:|
+| clean | 0.9306 | 0.9514 | 0.9514 | `+0.0208 [+0.0139, +0.0285]` |
+| noise | 0.9271 | 0.9340 | 0.9361 | `+0.0090 [-0.0042, +0.0208]` |
+| clean + burst | 0.9306 | 0.9514 | 0.9514 | `+0.0208 [+0.0139, +0.0285]` |
+| noise + burst | 0.9208 | 0.9285 | 0.9306 | `+0.0097 [-0.0021, +0.0208]` |
+
+The candidate improved every score point estimate and reduced requests, but it
+failed adoption:
+
+- both noisy score intervals still crossed zero;
+- noisy invariant retention was `0.9965`, below the current control's `1.0`;
+- false retirement, circuit false confirmation, and false revival remained
+  non-zero on held-out seeds;
+- future-case success decreased slightly.
+
+Held-out seeds 233 and 255 exposed the remaining tail failures. Two consistent
+noisy causal observations can retire a correct memory that was initially
+promoted rather than recently reactivated, so a reactivation-only grace is too
+narrow. Seed 233 also showed that choosing only the most recently retired card
+per scope can hide a more query-relevant older rule: the semantic retriever
+ranked the correct v2 card above v3, but the scope-recency pre-filter removed it
+before ranking.
+
+The next candidate must make every irreversible retirement transactional and
+must rank all exact retired candidates semantically before applying a recency
+tiebreak. This branch is not eligible for merge into `main`.
