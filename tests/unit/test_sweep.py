@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Optional, Set
 
 import pytest
 
@@ -136,16 +137,48 @@ def test_sweep_aggregation_reports_seed_variance() -> None:
     assert aggregate["variant"] == "full"
 
 
+def test_sweep_aggregation_excludes_seed_without_slice_examples() -> None:
+    rows = [
+        {
+            "run_id": "eligible",
+            "algorithm": "evoshift",
+            "variant": "full",
+            "parameters": {},
+            "mean_score": 0.5,
+            "changed_case_success_rate": 1.0,
+            "changed_case_n": 2,
+            "total_tokens": 10,
+        },
+        {
+            "run_id": "empty-slice",
+            "algorithm": "evoshift",
+            "variant": "full",
+            "parameters": {},
+            "mean_score": 0.5,
+            "changed_case_success_rate": 0.0,
+            "changed_case_n": 0,
+            "total_tokens": 10,
+        },
+    ]
+
+    aggregate = aggregate_sweep(rows)[0]
+
+    assert aggregate["changed_case_success_mean"] == 1.0
+    assert aggregate["changed_case_success_n_seeds"] == 1
+
+
 def _write_comparison_run(
     run_dir: Path,
     *,
     run_id: str,
     scores: list[float],
+    changed_indices: Optional[Set[int]] = None,
 ) -> None:
     run_dir.mkdir(parents=True)
     episodes = []
+    selected_changed = {0} if changed_indices is None else changed_indices
     for index, score in enumerate(scores):
-        changed = index == 0
+        changed = index in selected_changed
         episodes.append(
             Episode(
                 episode_id=f"{run_id}-{index}",
@@ -230,6 +263,48 @@ def test_compare_sweep_runs_reports_clustered_capability_safety_and_cost(
     assert comparison["metrics"]["total_tokens"]["delta_mean"] == 10.0
 
 
+def test_compare_sweep_runs_reports_slice_ci_over_eligible_seed_clusters(
+    tmp_path: Path,
+) -> None:
+    rows = []
+    for stream_seed, changed_indices in ((11, {0}), (22, set())):
+        baseline_dir = tmp_path / f"baseline-slice-{stream_seed}"
+        candidate_dir = tmp_path / f"candidate-slice-{stream_seed}"
+        _write_comparison_run(
+            baseline_dir,
+            run_id=f"baseline-slice-{stream_seed}",
+            scores=[0.0, 1.0],
+            changed_indices=changed_indices,
+        )
+        _write_comparison_run(
+            candidate_dir,
+            run_id=f"candidate-slice-{stream_seed}",
+            scores=[1.0, 1.0],
+            changed_indices=changed_indices,
+        )
+        common = {
+            "variant": "default",
+            "seed": stream_seed,
+            "parameters": {},
+            "total_requests": 2,
+            "total_tokens": 20,
+        }
+        rows.extend(
+            [
+                {**common, "algorithm": "static", "run_dir": str(baseline_dir)},
+                {**common, "algorithm": "evoshift", "run_dir": str(candidate_dir)},
+            ]
+        )
+
+    comparison = compare_sweep_runs(rows, samples=1000, bootstrap_seed=7)[0]
+    changed = comparison["metrics"]["changed_case_success"]
+
+    assert changed["delta_mean"] == 1.0
+    assert changed["n_seeds"] == 1
+    assert changed["seed_list"] == [11]
+    assert changed["n_pairs"] == 1
+
+
 @pytest.mark.asyncio
 async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
@@ -253,6 +328,9 @@ async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
     destination = await run_sweep(spec, tmp_path)
 
     matrix = json.loads((destination / "matrix.json").read_text(encoding="utf-8"))
+    assert matrix["complete"] is True
+    assert matrix["completed_runs"] == 1
+    assert matrix["expected_runs"] == 1
     assert len(matrix["runs"]) == 1
     assert matrix["runs"][0]["parameters"] == {"policy.top_k": 2}
     assert matrix["runs"][0]["variant"] == "default"

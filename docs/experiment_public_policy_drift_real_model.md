@@ -277,3 +277,51 @@ paired reporting all passed. Do not adopt a claim that the present Full
 algorithm is superior on the public-source stream. The next algorithm branch
 must improve clean cold-start eligibility and change detection while retaining
 the isolated-noise false-alarm defense.
+
+## Five-seed same-model mini protocol
+
+Artifact: `runs/sweeps/20260805T060325Z`. The combined report contains exactly
+20 completed remote-model runs: Static, Reflexion-style, Replay-only, and Full
+EvoShift over paired seeds `[11, 22, 33, 44, 55]`. Every run used the same
+`gpt-5.6` alias, public-source-derived 16-episode clean `v1 -> v2` stream,
+disabled cache, prompt family, and budget. An incomplete Replay-only artifact
+from a terminal gateway `502` was excluded; seeds 44 and 55 were rerun under
+the same configuration. Sweep-level per-run checkpoints were then added.
+
+| Method | Score | Changed success | Invariant | Premature update | Requests | Tokens |
+|---|---:|---:|---:|---:|---:|---:|
+| Static | 0.5875±0.1439 | 0.5625±0.4270 (4 seeds) | 0.6402±0.1227 | 0.8333±0.2887 (3 seeds) | 16.0 | 9,576.8 |
+| Reflexion-style | 0.7000±0.1027 | 0.8750±0.2500 (4 seeds) | 0.6962±0.0852 | 0.4167±0.2205 (3 seeds) | 20.8 | 19,805.4 |
+| Replay-only | 0.6375±0.1618 | 0.5000±0.4564 (4 seeds) | 0.6965±0.1423 | 0.6944±0.0481 (3 seeds) | 69.4 | 51,395.2 |
+| Full EvoShift | 0.5875±0.1439 | 0.5000±0.4082 (4 seeds) | 0.6412±0.1464 | 0.6944±0.0481 (3 seeds) | 20.4 | 13,566.6 |
+
+Slice means exclude seeds with zero eligible examples. Seed 55 contained no
+changed cases; only seeds 11, 22, 33, and 44 contribute to changed-case
+intervals. Only seeds 11, 33, and 55 contained future-change cases and
+contribute to premature-update intervals. The comparison artifact records the
+exact `seed_list`, `n_seeds`, and `n_pairs` per metric.
+
+Full versus Static produced score delta `0.0000` with 95% hierarchical
+bootstrap CI `[-0.1000, 0.0875]`. Changed success delta was `-0.0625`
+`[-0.2500, 0.0000]`; invariant delta was `0.0010`
+`[-0.0533, 0.0571]`; premature-update delta was `-0.1389`
+`[-0.5556, 0.2500]`. Full required 4.4 additional requests
+`[2.0, 7.8]` and 3,989.8 additional tokens `[2,154.6, 6,360.6]`.
+
+Full versus Reflexion-style produced score delta `-0.1125`
+`[-0.2875, 0.0250]` and premature-update delta `0.2778`
+`[0.0000, 0.6389]`, while using 6,238.8 fewer tokens
+`[-8,962.0, -3,283.4]`. Replay-only used 49.0 more requests and 37,828.6 more
+tokens than Full without a statistically resolved score advantage.
+
+This five-seed result does not support a Full-EvoShift superiority claim.
+Reflexion-style has the best mean score and the clearest premature-update
+reduction on this short clean stream, although its score interval versus
+Static remains wide. Full's present admission and trust stack buys no measured
+first-pass gain over Static at a definite resource premium.
+
+All 20 runs share the same recorded Git commit but were executed from the
+preregistered experimental branch with a dirty worktree. They are valid
+engineering evidence and an auditable interview result, but the matrix must be
+rerun from a clean tagged commit before a paper, leaderboard, or formal SOTA
+claim.

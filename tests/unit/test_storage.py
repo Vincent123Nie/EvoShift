@@ -1,5 +1,7 @@
+import json
 from pathlib import Path
 
+from evoshift.runtime.artifacts import RunArtifacts
 from evoshift.schemas import (
     Algorithm,
     BenchmarkSample,
@@ -66,3 +68,29 @@ def test_store_keeps_memory_versions(tmp_path: Path) -> None:
     assert store.get_memory("m1").directive == "new"  # type: ignore[union-attr]
     assert store.list_memories([MemoryStatus.ACTIVE]) == [second]
     store.close()
+
+
+def test_episode_and_trace_persist_change_point_diagnostics(tmp_path: Path) -> None:
+    artifacts = RunArtifacts(tmp_path, "change-point-run")
+    episode = Episode(
+        episode_id="e-change",
+        run_id="change-point-run",
+        index=3,
+        sample=BenchmarkSample(sample_id="s-change", prompt="case", reference="ALLOW"),
+        output=SolverOutput(answer="ALLOW"),
+        score=ScoreBundle(primary=1.0, success=True),
+        feedback_change_probability=0.84,
+        feedback_source_regime=2,
+        feedback_grace_observations=5,
+    )
+
+    artifacts.append_episode(episode)
+
+    prediction = json.loads((artifacts.run_dir / "predictions.jsonl").read_text(encoding="utf-8"))
+    trace = json.loads((artifacts.run_dir / "traces.jsonl").read_text(encoding="utf-8"))
+    assert prediction["feedback_change_probability"] == 0.84
+    assert prediction["feedback_source_regime"] == 2
+    assert prediction["feedback_grace_observations"] == 5
+    assert trace["feedback_change_probability"] == 0.84
+    assert trace["feedback_source_regime"] == 2
+    assert trace["feedback_grace_observations"] == 5

@@ -250,6 +250,9 @@ class Episode(StrictModel):
     feedback_trust: float = Field(default=1.0, ge=0.0, le=1.0)
     feedback_eligible: bool = True
     feedback_trust_reason: str = "default_trust"
+    feedback_change_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    feedback_source_regime: int = Field(default=0, ge=0)
+    feedback_grace_observations: int = Field(default=0, ge=0)
     selected_memory_ids: List[str] = Field(default_factory=list)
     policy_version: int = Field(default=1, ge=1)
     usage: LLMUsage = Field(default_factory=LLMUsage)

@@ -1,0 +1,22 @@
+base_config: configs/experiments/tau3_retail_policy_shift_live.yaml
+seeds: [11]
+algorithms:
+  - evoshift
+grid:
+  benchmark.phase_size: [8]
+  benchmark.policy_schedule: [[v1, v2]]
+  benchmark.feedback_noise_rate: [0.0]
+  benchmark.feedback_attack_burst_length: [0]
+variants:
+  consistency:
+    evolution.dynamic_feedback_trust_mode: consistency
+  change_point:
+    evolution.dynamic_feedback_trust_mode: change_point
+    evolution.dynamic_feedback_change_hazard: 0.15
+    evolution.dynamic_feedback_change_threshold: 0.80
+    evolution.dynamic_feedback_change_cold_start_trust: 0.70
+    evolution.dynamic_feedback_change_grace_observations: 8
+    evolution.dynamic_feedback_reliability_floor: 0.55
+    evolution.dynamic_feedback_reliability_ceiling: 0.99
+# Same-model bounded diagnostic: 2 trust modes * 1 seed = 2 paid runs.
+max_runs: 2

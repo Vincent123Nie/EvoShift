@@ -79,12 +79,19 @@ class EvolutionConfig(ConfigModel):
     feedback_default_trust: float = Field(default=1.0, ge=0.0, le=1.0)
     feedback_source_trust: Dict[str, float] = Field(default_factory=dict)
     dynamic_feedback_trust_enabled: bool = False
+    dynamic_feedback_trust_mode: str = "consistency"
     dynamic_feedback_context_field: str = "feedback_context"
     dynamic_feedback_min_consistent_observations: int = Field(default=2, ge=2, le=100)
     dynamic_feedback_cold_start_trust: float = Field(default=0.40, ge=0.0, le=1.0)
     dynamic_feedback_conflict_trust: float = Field(default=0.10, ge=0.0, le=1.0)
     dynamic_feedback_prior_strength: float = Field(default=8.0, ge=0.0, le=1000.0)
     dynamic_feedback_max_contexts: int = Field(default=10000, ge=1, le=1000000)
+    dynamic_feedback_change_hazard: float = Field(default=0.15, gt=0.0, lt=1.0)
+    dynamic_feedback_change_threshold: float = Field(default=0.80, gt=0.5, lt=1.0)
+    dynamic_feedback_change_cold_start_trust: float = Field(default=0.70, ge=0.0, le=1.0)
+    dynamic_feedback_change_grace_observations: int = Field(default=8, ge=0, le=1000)
+    dynamic_feedback_reliability_floor: float = Field(default=0.55, gt=0.5, lt=1.0)
+    dynamic_feedback_reliability_ceiling: float = Field(default=0.99, gt=0.5, lt=1.0)
     min_feedback_trust_for_drift: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_memory_update: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_candidate: float = Field(default=0.60, ge=0.0, le=1.0)
@@ -116,6 +123,10 @@ class EvolutionConfig(ConfigModel):
     def validate_feedback_mode(self) -> "EvolutionConfig":
         if self.feedback_mode not in {"reward_only", "grader_feedback", "reference_upper_bound"}:
             raise ValueError("unsupported feedback_mode")
+        if self.dynamic_feedback_trust_mode not in {"consistency", "change_point"}:
+            raise ValueError("unsupported dynamic_feedback_trust_mode")
+        if self.dynamic_feedback_reliability_floor >= self.dynamic_feedback_reliability_ceiling:
+            raise ValueError("dynamic feedback reliability floor must be below the ceiling")
         invalid_sources = sorted(
             source
             for source, trust in self.feedback_source_trust.items()

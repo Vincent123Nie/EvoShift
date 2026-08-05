@@ -19,12 +19,18 @@ class FeedbackAssessment:
     source_posterior_mean: float
     context_observations: int
     pending_observations: int
+    change_probability: float
+    source_regime: int
+    grace_observations: int
 
 
 @dataclass
 class _SourceState:
     alpha: float
     beta: float
+    change_probability: float = 0.0
+    regime: int = 0
+    grace_observations: int = 0
 
     @property
     def mean(self) -> float:
@@ -66,19 +72,25 @@ class FeedbackTrustModel:
             source.strip(): float(trust) for source, trust in config.feedback_source_trust.items()
         }
         self.dynamic_enabled = (
-            config.dynamic_feedback_trust_enabled
-            if dynamic_enabled is None
-            else dynamic_enabled
+            config.dynamic_feedback_trust_enabled if dynamic_enabled is None else dynamic_enabled
         )
+        self.mode = config.dynamic_feedback_trust_mode
         self.context_field = config.dynamic_feedback_context_field.strip()
         self.min_consistent = config.dynamic_feedback_min_consistent_observations
         self.cold_start_trust = config.dynamic_feedback_cold_start_trust
         self.conflict_trust = config.dynamic_feedback_conflict_trust
         self.prior_strength = config.dynamic_feedback_prior_strength
         self.max_contexts = config.dynamic_feedback_max_contexts
+        self.change_hazard = config.dynamic_feedback_change_hazard
+        self.change_threshold = config.dynamic_feedback_change_threshold
+        self.change_cold_start_trust = config.dynamic_feedback_change_cold_start_trust
+        self.change_grace_observations = config.dynamic_feedback_change_grace_observations
+        self.reliability_floor = config.dynamic_feedback_reliability_floor
+        self.reliability_ceiling = config.dynamic_feedback_reliability_ceiling
         self._sources: dict[str, _SourceState] = {}
         self._contexts: OrderedDict[tuple[str, str], _ContextState] = OrderedDict()
         self.confirmed_changes = 0
+        self.confirmed_source_changes = 0
         self.low_trust_observations = 0
 
     def assess(self, sample: BenchmarkSample) -> FeedbackAssessment:
@@ -95,13 +107,24 @@ class FeedbackTrustModel:
                 source_posterior_mean=prior,
                 context_observations=0,
                 pending_observations=0,
+                change_probability=0.0,
+                source_regime=0,
+                grace_observations=0,
             )
 
         context = self._context(sample)
         signal = self._canonical_signal(sample.metadata["feedback_reference"])
         source_state = self._sources.setdefault(source, self._new_source_state(prior))
         context_state = self._get_context_state(source, context)
-        trust, reason = self._observe(source_state, context_state, signal)
+        if self.mode == "change_point":
+            trust, reason = self._observe_change_point(
+                source,
+                source_state,
+                context_state,
+                signal,
+            )
+        else:
+            trust, reason = self._observe(source_state, context_state, signal)
         if trust < prior:
             self.low_trust_observations += 1
         return FeedbackAssessment(
@@ -113,20 +136,28 @@ class FeedbackTrustModel:
             source_posterior_mean=source_state.mean,
             context_observations=context_state.total_observations,
             pending_observations=context_state.pending_observations,
+            change_probability=source_state.change_probability,
+            source_regime=source_state.regime,
+            grace_observations=source_state.grace_observations,
         )
 
     def snapshot(self) -> dict[str, Any]:
         return {
             "dynamic_enabled": self.dynamic_enabled,
+            "mode": self.mode,
             "tracked_sources": len(self._sources),
             "tracked_contexts": len(self._contexts),
             "confirmed_context_changes": self.confirmed_changes,
+            "confirmed_source_changes": self.confirmed_source_changes,
             "low_trust_observations": self.low_trust_observations,
             "source_posteriors": {
                 source: {
                     "alpha": state.alpha,
                     "beta": state.beta,
                     "mean": state.mean,
+                    "change_probability": state.change_probability,
+                    "regime": state.regime,
+                    "grace_observations": state.grace_observations,
                 }
                 for source, state in sorted(self._sources.items())
             },
@@ -190,6 +221,99 @@ class FeedbackTrustModel:
             self.confirmed_changes += 1
             return source.mean, "dynamic_confirmed_change"
         return min(source.mean, self.conflict_trust), "dynamic_pending_change"
+
+    def _observe_change_point(
+        self,
+        source_name: str,
+        source: _SourceState,
+        context: _ContextState,
+        signal: str,
+    ) -> tuple[float, str]:
+        context.total_observations += 1
+        if not context.committed_signal:
+            context.committed_signal = signal
+            context.committed_observations = 1
+            self._consume_grace(source)
+            return (
+                min(source.mean, self.change_cold_start_trust),
+                "change_point_initial_commit",
+            )
+
+        if signal == context.committed_signal:
+            if context.pending_observations:
+                source.beta += context.pending_observations
+            context.pending_signal = ""
+            context.pending_observations = 0
+            context.committed_observations += 1
+            source.alpha += 1.0
+            self._update_change_probability(source, contradiction=False)
+            self._consume_grace(source)
+            return source.mean, "change_point_consistent"
+
+        self._advance_pending(context, signal)
+        if source.grace_observations > 0:
+            committed = self._commit_pending_context(context)
+            source.alpha += committed
+            self.confirmed_changes += int(committed > 0)
+            self._consume_grace(source)
+            return source.mean, "change_point_regime_transfer"
+
+        probability = self._update_change_probability(source, contradiction=True)
+        if probability >= self.change_threshold:
+            committed_observations, committed_contexts = self._commit_pending_source(source_name)
+            source.alpha += committed_observations
+            source.change_probability = 0.0
+            source.regime += 1
+            source.grace_observations = self.change_grace_observations
+            self.confirmed_changes += committed_contexts
+            self.confirmed_source_changes += 1
+            return source.mean, "change_point_confirmed_source_change"
+        return min(source.mean, self.conflict_trust), "change_point_pending_change"
+
+    def _update_change_probability(
+        self,
+        source: _SourceState,
+        *,
+        contradiction: bool,
+    ) -> float:
+        prior = source.change_probability + (1.0 - source.change_probability) * self.change_hazard
+        reliability = max(
+            self.reliability_floor,
+            min(self.reliability_ceiling, source.mean),
+        )
+        change_likelihood = reliability if contradiction else 1.0 - reliability
+        stable_likelihood = 1.0 - reliability if contradiction else reliability
+        numerator = prior * change_likelihood
+        denominator = numerator + (1.0 - prior) * stable_likelihood
+        source.change_probability = numerator / denominator if denominator else prior
+        return source.change_probability
+
+    def _commit_pending_source(self, source_name: str) -> tuple[int, int]:
+        committed_observations = 0
+        committed_contexts = 0
+        for (item_source, _context_name), context in self._contexts.items():
+            if item_source != source_name:
+                continue
+            count = self._commit_pending_context(context)
+            committed_observations += count
+            committed_contexts += int(count > 0)
+        return committed_observations, committed_contexts
+
+    @staticmethod
+    def _commit_pending_context(context: _ContextState) -> int:
+        count = context.pending_observations
+        if count <= 0 or not context.pending_signal:
+            return 0
+        context.committed_signal = context.pending_signal
+        context.committed_observations = count
+        context.pending_signal = ""
+        context.pending_observations = 0
+        return count
+
+    @staticmethod
+    def _consume_grace(source: _SourceState) -> None:
+        if source.grace_observations > 0:
+            source.grace_observations -= 1
 
     @staticmethod
     def _advance_pending(context: _ContextState, signal: str) -> None:

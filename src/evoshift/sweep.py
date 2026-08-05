@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 import yaml
 
 from evoshift.benchmarks import create_benchmark
-from evoshift.config import load_config
+from evoshift.config import EvoShiftConfig, load_config
 from evoshift.evaluation import paired_cluster_bootstrap_ci
 from evoshift.runner import EvoShiftRunner
 from evoshift.runtime.artifacts import load_episodes
@@ -70,8 +70,23 @@ _AGGREGATE_FIELDS = {
     "active_audit_budget_utilization": "active_audit_budget_utilization",
     "active_audit_mean_retirement_latency": "active_audit_mean_retirement_latency",
     "confirmed_context_changes": "confirmed_context_changes",
+    "confirmed_source_changes": "confirmed_source_changes",
     "total_requests": "total_requests",
     "total_tokens": "total_tokens",
+}
+
+_AGGREGATE_DENOMINATORS = {
+    "changed_case_success_rate": "changed_case_n",
+    "old_rule_leakage_rate": "changed_case_n",
+    "invariant_retention_rate": "invariant_n",
+    "future_change_case_success_rate": "future_change_case_n",
+    "premature_update_rate": "future_change_case_n",
+    "corrupted_feedback_follow_rate": "corrupted_feedback_n",
+    "attack_feedback_follow_rate": "attack_feedback_n",
+    "premature_attack_follow_rate": "premature_attack_n",
+    "poison_persistence_error_rate": "post_attack_clean_future_n",
+    "corrupted_feedback_quarantine_rate": "corrupted_feedback_n",
+    "clean_feedback_quarantine_rate": "clean_feedback_n",
 }
 
 
@@ -167,7 +182,9 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
     destination = root / "runs" / "sweeps" / sweep_id
     destination.mkdir(parents=True, exist_ok=False)
     rows: List[Dict[str, Any]] = []
-    for assignment in expand_sweep(spec):
+    assignments = expand_sweep(spec)
+    analysis_config = load_config(spec.base_config)
+    for assignment in assignments:
         overrides = [
             f"algorithm={assignment['algorithm']}",
             f"evaluation.seed={assignment['seed']}",
@@ -206,22 +223,33 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "total_requests": budget["requests"],
                 "cost_usd": budget["cost_usd"],
                 "changed_case_success_rate": policy_shift.get("changed_case_success_rate"),
+                "changed_case_n": policy_shift.get("changed_case_n"),
                 "old_rule_leakage_rate": policy_shift.get("old_rule_leakage_rate"),
                 "invariant_retention_rate": policy_shift.get("invariant_retention_rate"),
+                "invariant_n": policy_shift.get("invariant_n"),
                 "future_change_case_success_rate": policy_shift.get(
                     "future_change_case_success_rate"
                 ),
+                "future_change_case_n": policy_shift.get("future_change_case_n"),
                 "premature_update_rate": policy_shift.get("premature_update_rate"),
                 "corrupted_feedback_follow_rate": policy_shift.get(
                     "corrupted_feedback_follow_rate"
                 ),
+                "corrupted_feedback_n": policy_shift.get("corrupted_feedback_n"),
                 "attack_feedback_follow_rate": policy_shift.get("attack_feedback_follow_rate"),
+                "attack_feedback_n": feedback.get("attack_episodes"),
                 "premature_attack_follow_rate": policy_shift.get("premature_attack_follow_rate"),
+                "premature_attack_n": policy_shift.get("premature_attack_n"),
                 "poison_persistence_error_rate": policy_shift.get("poison_persistence_error_rate"),
+                "post_attack_clean_future_n": policy_shift.get("post_attack_clean_future_n"),
                 "corrupted_feedback_quarantine_rate": feedback.get(
                     "corrupted_feedback_quarantine_rate"
                 ),
                 "clean_feedback_quarantine_rate": feedback.get("clean_feedback_quarantine_rate"),
+                "clean_feedback_n": (
+                    int(result.metrics.get("n_episodes", 0) or 0)
+                    - int(policy_shift.get("corrupted_feedback_n", 0) or 0)
+                ),
                 "mean_recovery_steps": statistics.fmean(recovered) if recovered else None,
                 "unrecovered_shifts": sum(value is None for value in recovery_steps.values()),
                 "shift_detection_events": evolution.get("shift_detection_events"),
@@ -282,18 +310,51 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                     "mean_retirement_latency"
                 ),
                 "confirmed_context_changes": trust_model.get("confirmed_context_changes"),
+                "confirmed_source_changes": trust_model.get("confirmed_source_changes"),
             }
         )
+        _write_sweep_outputs(
+            destination,
+            rows,
+            analysis_config=analysis_config,
+            expected_runs=len(assignments),
+            complete=False,
+        )
+    _write_sweep_outputs(
+        destination,
+        rows,
+        analysis_config=analysis_config,
+        expected_runs=len(assignments),
+        complete=True,
+    )
+    return destination
+
+
+def _write_sweep_outputs(
+    destination: Path,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    analysis_config: EvoShiftConfig,
+    expected_runs: int,
+    complete: bool,
+) -> None:
     aggregates = aggregate_sweep(rows)
-    analysis_config = load_config(spec.base_config)
     comparisons = compare_sweep_runs(
         rows,
         samples=analysis_config.evaluation.bootstrap_samples,
         confidence=analysis_config.evaluation.confidence_level,
+        require_complete_seed_sets=False,
     )
     (destination / "matrix.json").write_text(
         json.dumps(
-            {"runs": rows, "aggregates": aggregates, "comparisons": comparisons},
+            {
+                "complete": complete,
+                "completed_runs": len(rows),
+                "expected_runs": expected_runs,
+                "runs": rows,
+                "aggregates": aggregates,
+                "comparisons": comparisons,
+            },
             indent=2,
             sort_keys=True,
         ),
@@ -302,7 +363,6 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
     _write_csv(destination / "matrix.csv", rows)
     _write_comparison_csv(destination / "comparisons.csv", comparisons)
     _write_sweep_markdown(destination / "report.md", aggregates, comparisons)
-    return destination
 
 
 def compare_sweep_runs(
@@ -312,6 +372,7 @@ def compare_sweep_runs(
     samples: int = 2000,
     confidence: float = 0.95,
     bootstrap_seed: int = 42,
+    require_complete_seed_sets: bool = True,
 ) -> list[dict[str, Any]]:
     """Build paired repeated-seed capability, safety, and cost intervals."""
 
@@ -346,6 +407,8 @@ def compare_sweep_runs(
             if baseline_algorithm == candidate_algorithm:
                 continue
             if set(candidate_rows) != set(baseline_rows):
+                if not require_complete_seed_sets:
+                    continue
                 raise ValueError(
                     "paired repeated-seed comparison requires identical seed sets for "
                     f"{candidate_algorithm} and {baseline_algorithm}"
@@ -371,15 +434,11 @@ def compare_sweep_runs(
             ] = {
                 "score": (lambda _episode: True, lambda episode: episode.score.primary),
                 "changed_case_success": (
-                    lambda episode: bool(
-                        episode.sample.metadata.get("policy_changed_case")
-                    ),
+                    lambda episode: bool(episode.sample.metadata.get("policy_changed_case")),
                     lambda episode: float(episode.score.success),
                 ),
                 "old_rule_leakage": (
-                    lambda episode: bool(
-                        episode.sample.metadata.get("policy_changed_case")
-                    ),
+                    lambda episode: bool(episode.sample.metadata.get("policy_changed_case")),
                     lambda episode: float(not episode.score.success),
                 ),
                 "invariant_retention": (
@@ -387,9 +446,7 @@ def compare_sweep_runs(
                     lambda episode: float(episode.score.success),
                 ),
                 "premature_update": (
-                    lambda episode: bool(
-                        episode.sample.metadata.get("future_change_case")
-                    ),
+                    lambda episode: bool(episode.sample.metadata.get("future_change_case")),
                     lambda episode: float(not episode.score.success),
                 ),
                 "attack_feedback_follow": (
@@ -407,7 +464,7 @@ def compare_sweep_runs(
                     ]
                     if deltas:
                         deltas_by_seed[stream_seed] = deltas
-                if len(deltas_by_seed) == len(seeds):
+                if deltas_by_seed:
                     metrics[metric_name] = _cluster_interval_payload(
                         deltas_by_seed,
                         samples=samples,
@@ -498,6 +555,7 @@ def _cluster_interval_payload(
         "ci_low": ci_low,
         "ci_high": ci_high,
         "n_seeds": len(deltas_by_seed),
+        "seed_list": sorted(deltas_by_seed),
         "n_pairs": sum(len(values) for values in deltas_by_seed.values()),
     }
 
@@ -523,13 +581,22 @@ def aggregate_sweep(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
             "run_ids": [row["run_id"] for row in group],
         }
         for source, prefix in _AGGREGATE_FIELDS.items():
+            denominator = _AGGREGATE_DENOMINATORS.get(source)
             values = [
-                float(row[source]) for row in group if isinstance(row.get(source), (int, float))
+                float(row[source])
+                for row in group
+                if isinstance(row.get(source), (int, float))
+                and (
+                    denominator is None
+                    or not isinstance(row.get(denominator), (int, float))
+                    or float(row[denominator]) > 0.0
+                )
             ]
             if not values:
                 continue
             aggregate[f"{prefix}_mean"] = statistics.fmean(values)
             aggregate[f"{prefix}_std"] = statistics.stdev(values) if len(values) > 1 else 0.0
+            aggregate[f"{prefix}_n_seeds"] = len(values)
         output.append(aggregate)
     return sorted(output, key=lambda item: (-item["score_mean"], item["algorithm"]))
 
@@ -550,16 +617,24 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "total_requests",
         "cost_usd",
         "changed_case_success_rate",
+        "changed_case_n",
         "old_rule_leakage_rate",
         "invariant_retention_rate",
+        "invariant_n",
         "future_change_case_success_rate",
+        "future_change_case_n",
         "premature_update_rate",
         "corrupted_feedback_follow_rate",
+        "corrupted_feedback_n",
         "attack_feedback_follow_rate",
+        "attack_feedback_n",
         "premature_attack_follow_rate",
+        "premature_attack_n",
         "poison_persistence_error_rate",
+        "post_attack_clean_future_n",
         "corrupted_feedback_quarantine_rate",
         "clean_feedback_quarantine_rate",
+        "clean_feedback_n",
         "mean_recovery_steps",
         "unrecovered_shifts",
         "shift_detection_events",
@@ -596,6 +671,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "active_audit_budget_utilization",
         "active_audit_mean_retirement_latency",
         "confirmed_context_changes",
+        "confirmed_source_changes",
         "run_dir",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -641,9 +717,7 @@ def _write_comparison_csv(
                         "candidate_algorithm": comparison["candidate_algorithm"],
                         "baseline_algorithm": comparison["baseline_algorithm"],
                         "variant": comparison["variant"],
-                        "parameters": json.dumps(
-                            comparison["parameters"], sort_keys=True
-                        ),
+                        "parameters": json.dumps(comparison["parameters"], sort_keys=True),
                         "metric": metric_name,
                         "delta_mean": interval.get("delta_mean"),
                         "ci_low": interval.get("ci_low"),
@@ -726,10 +800,10 @@ def _write_sweep_markdown(
                 "",
                 (
                     "| Candidate | Baseline | Variant | Parameters | Seeds | Score delta | "
-                    "Changed delta | Invariant delta | Old leakage delta | Requests delta | "
-                    "Tokens delta |"
+                    "Changed delta | Invariant delta | Old leakage delta | Premature delta | "
+                    "Requests delta | Tokens delta |"
                 ),
-                "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+                "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for item in comparisons:
@@ -747,12 +821,23 @@ def _write_sweep_markdown(
                         _format_interval(metrics, "changed_case_success"),
                         _format_interval(metrics, "invariant_retention"),
                         _format_interval(metrics, "old_rule_leakage"),
+                        _format_interval(metrics, "premature_update"),
                         _format_interval(metrics, "total_requests"),
                         _format_interval(metrics, "total_tokens"),
                     ]
                 )
                 + " |"
             )
+        lines.extend(
+            [
+                "",
+                (
+                    "Slice-specific intervals use only seed clusters containing at least one "
+                    "eligible example; matrix.json records each metric's seed_list, n_seeds, "
+                    "and n_pairs."
+                ),
+            ]
+        )
     lines.extend(
         [
             "",
@@ -775,7 +860,12 @@ def _format_mean(item: Mapping[str, Any], prefix: str) -> str:
         return "N/A"
     if not isinstance(spread, (int, float)):
         spread = 0.0
-    return f"{value:.4f}±{spread:.4f}"
+    rendered = f"{value:.4f}±{spread:.4f}"
+    eligible = item.get(f"{prefix}_n_seeds")
+    total = item.get("n_seeds")
+    if isinstance(eligible, int) and isinstance(total, int) and eligible < total:
+        return f"{rendered} ({eligible}/{total} seeds)"
+    return rendered
 
 
 def _format_interval(metrics: Any, name: str) -> str:

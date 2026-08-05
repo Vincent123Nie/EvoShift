@@ -76,6 +76,9 @@ class RunArtifacts:
             "feedback_trust": episode.feedback_trust,
             "feedback_eligible": episode.feedback_eligible,
             "feedback_trust_reason": episode.feedback_trust_reason,
+            "feedback_change_probability": episode.feedback_change_probability,
+            "feedback_source_regime": episode.feedback_source_regime,
+            "feedback_grace_observations": episode.feedback_grace_observations,
             "usage": episode.usage.model_dump(mode="json"),
             "shift": episode.shift.model_dump(mode="json") if episode.shift else None,
         }
