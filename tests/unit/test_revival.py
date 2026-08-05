@@ -1,6 +1,11 @@
 from evoshift.config import EvolutionConfig
-from evoshift.evolution import DormantMemoryRevival
-from evoshift.schemas import MemoryItem, MemoryStatus
+from evoshift.evolution import (
+    DormantMemoryRevival,
+    dormant_candidate_keys,
+    order_semantic_dormant_candidates,
+)
+from evoshift.memory import BM25MemoryRetriever
+from evoshift.schemas import MemoryItem, MemoryStatus, PolicyGenome
 
 
 def _config(**updates: object) -> EvolutionConfig:
@@ -97,3 +102,62 @@ def test_dormant_revival_invalidates_changed_version_and_expires() -> None:
     assert expiring.expire(12) == ()
     assert expiring.expire(13) == (expiring_pending,)
     assert expiring.snapshot()["pending"] == 0
+
+
+def test_semantic_dormant_view_does_not_hide_older_applicable_rule_in_same_scope() -> None:
+    applicable = _retired().model_copy(
+        update={
+            "memory_id": "refund-v2",
+            "trigger": "premium refund between fifteen and thirty days",
+            "directive": "Approve premium refunds through day thirty.",
+        }
+    )
+    newer_but_wrong = _retired().model_copy(
+        update={
+            "memory_id": "refund-v3",
+            "trigger": "standard refund after seven days",
+            "directive": "Reject standard refunds after day seven.",
+        }
+    )
+    retired_indices = {
+        (applicable.memory_id, applicable.version): 80,
+        (newer_but_wrong.memory_id, newer_but_wrong.version): 100,
+    }
+
+    legacy = dormant_candidate_keys(
+        [applicable, newer_but_wrong],
+        retired_indices,
+        semantic_indexed=False,
+    )
+    semantic = dormant_candidate_keys(
+        [applicable, newer_but_wrong],
+        retired_indices,
+        semantic_indexed=True,
+    )
+
+    assert legacy == {("refund-v3", 2)}
+    assert semantic == {("refund-v2", 2), ("refund-v3", 2)}
+
+    retriever = BM25MemoryRetriever()
+    policy = PolicyGenome(top_k=3, utility_weight=0.0, exploration_weight=0.0)
+    ranked = retriever.retrieve(
+        "premium refund request on day twenty",
+        [applicable, newer_but_wrong],
+        policy,
+    )
+    ordered = order_semantic_dormant_candidates(ranked, retired_indices)
+    assert ordered[0].item.memory_id == "refund-v2"
+
+
+def test_semantic_dormant_order_uses_recency_only_for_equal_scores() -> None:
+    older = _retired().model_copy(update={"memory_id": "older"})
+    newer = _retired().model_copy(update={"memory_id": "newer"})
+    policy = PolicyGenome(top_k=3, utility_weight=0.0, exploration_weight=0.0)
+    tied = BM25MemoryRetriever().retrieve("refund rule", [older, newer], policy)
+
+    ordered = order_semantic_dormant_candidates(
+        tied,
+        {("older", 2): 10, ("newer", 2): 20},
+    )
+
+    assert [item.item.memory_id for item in ordered] == ["newer", "older"]

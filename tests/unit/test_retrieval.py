@@ -379,6 +379,44 @@ def test_reactivation_grace_updates_utility_without_posterior_retirement(
     store.close()
 
 
+def test_posterior_retirement_can_rollback_only_its_exact_predecessors(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    prior = _memory("prior", "refund policy", "Use the 14 day rule.").model_copy(
+        update={"scope": "refund"}
+    )
+    unrelated = _memory("unrelated", "shipping policy", "Use standard shipping.").model_copy(
+        update={"scope": "shipping"}
+    )
+    successor = _memory(
+        "successor",
+        "refund policy",
+        "Use the premium 30 day rule.",
+    ).model_copy(update={"scope": "refund", "supersedes_memory_ids": ["prior"]})
+    store.save_memory(prior)
+    store.save_memory(unrelated)
+    manager.activate(successor, 0.2, 0.1, 0.0)
+
+    outcome = manager.record_outcome(
+        ["successor"],
+        success=False,
+        policy=PolicyGenome(rollback_min_uses=1, rollback_utility_threshold=0.6),
+    )
+
+    assert [[item.memory_id for item in group] for group in outcome.retirement_predecessors] == [
+        ["prior"]
+    ]
+    restored = manager.rollback_retirement(
+        outcome.rolled_back[0],
+        outcome.retirement_predecessors[0],
+    )
+    assert restored is not None
+    assert restored.status == MemoryStatus.ACTIVE
+    assert store.get_memory("prior").status == MemoryStatus.SUPERSEDED  # type: ignore[union-attr]
+    assert store.get_memory("unrelated").status == MemoryStatus.ACTIVE  # type: ignore[union-attr]
+    store.close()
+
+
 def test_probation_memory_is_retrievable_without_superseding_prior_rule(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
     manager = MemoryManager(store)

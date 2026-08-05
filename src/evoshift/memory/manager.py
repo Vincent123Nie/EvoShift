@@ -33,6 +33,11 @@ class MemoryOutcome:
     rolled_back: tuple[MemoryItem, ...] = ()
     reactivated: tuple[MemoryItem, ...] = ()
     retirement_protected: tuple[MemoryItem, ...] = ()
+    # Keep the predecessor set paired with each posterior retirement.  A flat
+    # ``reactivated`` tuple is convenient for legacy callers, but it is not
+    # sufficient to undo one retirement transaction without touching an
+    # unrelated lineage when several memories are updated in one episode.
+    retirement_predecessors: tuple[tuple[MemoryItem, ...], ...] = ()
 
 
 class MemoryManager:
@@ -214,6 +219,7 @@ class MemoryManager:
         rolled_back: List[MemoryItem] = []
         reactivated: List[MemoryItem] = []
         retirement_protected: List[MemoryItem] = []
+        retirement_predecessors: List[tuple[MemoryItem, ...]] = []
         protected_versions = set(retirement_protected_versions)
         for memory_id in memory_ids:
             current = self._latest_status_memory(
@@ -244,12 +250,15 @@ class MemoryManager:
                 else:
                     updated = updated.model_copy(update={"status": MemoryStatus.RETIRED})
                     rolled_back.append(updated)
-                    reactivated.extend(self._restore_predecessors(updated))
+                    restored = tuple(self._restore_predecessors(updated))
+                    retirement_predecessors.append(restored)
+                    reactivated.extend(restored)
             self.store.save_memory(updated)
         return MemoryOutcome(
             tuple(rolled_back),
             tuple(reactivated),
             tuple(retirement_protected),
+            tuple(retirement_predecessors),
         )
 
     def apply_active_audit(
@@ -282,7 +291,11 @@ class MemoryManager:
         )
         restored = self._restorable_predecessors(retired) if restore_predecessors else []
         self.store.save_memories_atomic([retired, *restored])
-        return MemoryOutcome((retired,), tuple(restored))
+        return MemoryOutcome(
+            rolled_back=(retired,),
+            reactivated=tuple(restored),
+            retirement_predecessors=(tuple(restored),),
+        )
 
     def reactivate_retired(self, item: MemoryItem) -> Optional[MemoryItem]:
         current = self.store.get_memory(item.memory_id, version=item.version)
@@ -312,6 +325,43 @@ class MemoryManager:
         )
         self.store.save_memory(reactivated)
         return reactivated
+
+    def rollback_retirement(
+        self,
+        retired: MemoryItem,
+        restored_predecessors: Sequence[MemoryItem],
+    ) -> Optional[MemoryItem]:
+        """Undo one exact retirement transaction and its predecessor restores."""
+
+        current = self.store.get_memory(retired.memory_id, version=retired.version)
+        if current is None or current.status != MemoryStatus.RETIRED:
+            return None
+        active = current.model_copy(
+            update={
+                "status": MemoryStatus.ACTIVE,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        superseded: list[MemoryItem] = []
+        for predecessor in restored_predecessors:
+            current_predecessor = self.store.get_memory(
+                predecessor.memory_id,
+                version=predecessor.version,
+            )
+            if (
+                current_predecessor is not None
+                and current_predecessor.status == MemoryStatus.ACTIVE
+            ):
+                superseded.append(
+                    current_predecessor.model_copy(
+                        update={
+                            "status": MemoryStatus.SUPERSEDED,
+                            "updated_at": datetime.now(timezone.utc),
+                        }
+                    )
+                )
+        self.store.save_memories_atomic([*superseded, active])
+        return active
 
     def _restore_predecessors(self, successor: MemoryItem) -> list[MemoryItem]:
         restored_items = self._restorable_predecessors(successor)

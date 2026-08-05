@@ -119,6 +119,8 @@ class EvolutionConfig(ConfigModel):
     active_audit_early_retire_delta: float = Field(default=-0.75, ge=-1.0, le=0.0)
     active_audit_cooldown_episodes: int = Field(default=0, ge=0, le=10000)
     active_audit_reactivation_grace_episodes: int = Field(default=0, ge=0, le=10000)
+    active_audit_retirement_probation_enabled: bool = False
+    active_audit_retirement_probation_max_age: int = Field(default=8, ge=1, le=10000)
     active_audit_restore_predecessors: bool = False
     min_feedback_trust_for_active_audit: float = Field(default=0.60, ge=0.0, le=1.0)
     active_audit_circuit_breaker_enabled: bool = False
@@ -132,6 +134,7 @@ class EvolutionConfig(ConfigModel):
     dormant_revival_max_age: int = Field(default=8, ge=1, le=10000)
     dormant_revival_min_retired_age: int = Field(default=18, ge=1, le=10000)
     dormant_revival_status_index_enabled: bool = False
+    dormant_revival_semantic_index_enabled: bool = False
     conflict_supersession_enabled: bool = True
 
     @model_validator(mode="after")
@@ -214,6 +217,10 @@ class EvolutionConfig(ConfigModel):
             raise ValueError("dormant memory revival requires dynamic feedback trust")
         if self.dormant_revival_status_index_enabled and not self.dormant_revival_enabled:
             raise ValueError("status-indexed revival requires dormant memory revival")
+        if self.dormant_revival_semantic_index_enabled and not self.dormant_revival_enabled:
+            raise ValueError("semantic dormant view requires dormant memory revival")
+        if self.active_audit_retirement_probation_enabled and not self.active_audit_enabled:
+            raise ValueError("retirement probation requires active audit")
         if (
             self.dormant_revival_enabled
             and self.dormant_revival_min_trust >= self.min_feedback_trust_for_active_audit

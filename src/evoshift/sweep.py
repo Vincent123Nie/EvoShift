@@ -99,6 +99,23 @@ _AGGREGATE_FIELDS = {
     "circuit_unconfirmed_persistent_transitions": ("circuit_unconfirmed_persistent_transitions"),
     "circuit_mean_oracle_intervention_delta": "circuit_mean_oracle_intervention_delta",
     "circuit_control_requests": "circuit_control_requests",
+    "retirement_probation_registrations": "retirement_probation_registrations",
+    "retirement_probation_interventions": "retirement_probation_interventions",
+    "retirement_probation_confirmations": "retirement_probation_confirmations",
+    "retirement_probation_cancellations": "retirement_probation_cancellations",
+    "retirement_probation_deferrals": "retirement_probation_deferrals",
+    "retirement_probation_expirations": "retirement_probation_expirations",
+    "retirement_probation_confirmation_precision": ("retirement_probation_confirmation_precision"),
+    "retirement_probation_false_confirmation_rate": (
+        "retirement_probation_false_confirmation_rate"
+    ),
+    "retirement_probation_unconfirmed_persistent_transitions": (
+        "retirement_probation_unconfirmed_persistent_transitions"
+    ),
+    "retirement_probation_mean_oracle_intervention_delta": (
+        "retirement_probation_mean_oracle_intervention_delta"
+    ),
+    "retirement_probation_control_requests": "retirement_probation_control_requests",
     "revival_registrations": "revival_registrations",
     "revival_interventions": "revival_interventions",
     "revival_confirmations": "revival_confirmations",
@@ -226,6 +243,7 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         future_audit = result.metrics.get("future_audit", {})
         active_governance = result.metrics.get("active_memory_governance", {})
         circuit = active_governance.get("circuit_breaker", {})
+        retirement_probation = active_governance.get("retirement_probation", {})
         revival = active_governance.get("dormant_revival", {})
         trust_model = result.metrics.get("feedback_trust_model", {})
         recovery_steps = result.metrics.get("recovery_steps", {})
@@ -374,6 +392,27 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                     "mean_post_hoc_oracle_intervention_delta"
                 ),
                 "circuit_control_requests": circuit.get("control_requests"),
+                "retirement_probation_registrations": retirement_probation.get("registrations"),
+                "retirement_probation_interventions": retirement_probation.get("interventions"),
+                "retirement_probation_confirmations": retirement_probation.get("confirmations"),
+                "retirement_probation_cancellations": retirement_probation.get("cancellations"),
+                "retirement_probation_deferrals": retirement_probation.get("deferrals"),
+                "retirement_probation_expirations": retirement_probation.get("expirations"),
+                "retirement_probation_confirmation_precision": retirement_probation.get(
+                    "confirmation_precision"
+                ),
+                "retirement_probation_false_confirmation_rate": retirement_probation.get(
+                    "false_confirmation_rate"
+                ),
+                "retirement_probation_unconfirmed_persistent_transitions": (
+                    retirement_probation.get("unconfirmed_persistent_transitions")
+                ),
+                "retirement_probation_mean_oracle_intervention_delta": (
+                    retirement_probation.get("mean_post_hoc_oracle_intervention_delta")
+                ),
+                "retirement_probation_control_requests": retirement_probation.get(
+                    "control_requests"
+                ),
                 "revival_registrations": revival.get("registrations"),
                 "revival_interventions": revival.get("interventions"),
                 "revival_confirmations": revival.get("confirmations"),
@@ -830,6 +869,17 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "circuit_unconfirmed_persistent_transitions",
         "circuit_mean_oracle_intervention_delta",
         "circuit_control_requests",
+        "retirement_probation_registrations",
+        "retirement_probation_interventions",
+        "retirement_probation_confirmations",
+        "retirement_probation_cancellations",
+        "retirement_probation_deferrals",
+        "retirement_probation_expirations",
+        "retirement_probation_confirmation_precision",
+        "retirement_probation_false_confirmation_rate",
+        "retirement_probation_unconfirmed_persistent_transitions",
+        "retirement_probation_mean_oracle_intervention_delta",
+        "retirement_probation_control_requests",
         "revival_registrations",
         "revival_interventions",
         "revival_confirmations",

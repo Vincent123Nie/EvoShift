@@ -1,10 +1,65 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Mapping, Sequence
 
 from evoshift.config import EvolutionConfig
-from evoshift.schemas import MemoryItem
+from evoshift.schemas import MemoryItem, MemoryStatus, RetrievedMemory
+
+MemoryVersionKey = tuple[str, int]
+
+
+def dormant_candidate_keys(
+    memories: Iterable[MemoryItem],
+    retired_indices: Mapping[MemoryVersionKey, int],
+    *,
+    semantic_indexed: bool,
+) -> set[MemoryVersionKey]:
+    """Build the exact retired-version view used by recurrence probes.
+
+    The legacy view keeps only the most recently retired card in each scope.
+    The semantic view instead keeps the latest retired version of every memory
+    ID, allowing retrieval relevance to decide between competing rules.
+    """
+
+    latest: dict[str, MemoryItem] = {}
+    for item in memories:
+        key = (item.memory_id, item.version)
+        if item.status != MemoryStatus.RETIRED or key not in retired_indices:
+            continue
+        grouping_key = item.memory_id if semantic_indexed else item.scope
+        previous = latest.get(grouping_key)
+        if previous is None:
+            latest[grouping_key] = item
+            continue
+        previous_key = (previous.memory_id, previous.version)
+        if semantic_indexed:
+            replace = item.version > previous.version or (
+                item.version == previous.version
+                and retired_indices[key] > retired_indices[previous_key]
+            )
+        else:
+            replace = retired_indices[key] > retired_indices[previous_key]
+        if replace:
+            latest[grouping_key] = item
+    return {(item.memory_id, item.version) for item in latest.values()}
+
+
+def order_semantic_dormant_candidates(
+    candidates: Sequence[RetrievedMemory],
+    retired_indices: Mapping[MemoryVersionKey, int],
+) -> list[RetrievedMemory]:
+    """Order by retrieval score, using retirement recency only for exact ties."""
+
+    return sorted(
+        candidates,
+        key=lambda result: (
+            -result.final_score,
+            -retired_indices.get((result.item.memory_id, result.item.version), -1),
+            result.item.memory_id,
+            -result.item.version,
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -40,6 +95,7 @@ class DormantMemoryRevival:
         self.max_age = config.dormant_revival_max_age
         self.min_retired_age = config.dormant_revival_min_retired_age
         self.status_indexed = config.dormant_revival_status_index_enabled
+        self.semantic_indexed = config.dormant_revival_semantic_index_enabled
         self._pending: dict[tuple[str, str], PendingRevivalCanary] = {}
         self.probes = 0
         self.registrations = 0
@@ -143,6 +199,7 @@ class DormantMemoryRevival:
             "max_age": self.max_age,
             "min_retired_age": self.min_retired_age,
             "status_indexed": self.status_indexed,
+            "semantic_indexed": self.semantic_indexed,
             "probes": self.probes,
             "registrations": self.registrations,
             "interventions": self.interventions,
@@ -154,4 +211,9 @@ class DormantMemoryRevival:
         }
 
 
-__all__ = ["DormantMemoryRevival", "PendingRevivalCanary"]
+__all__ = [
+    "DormantMemoryRevival",
+    "PendingRevivalCanary",
+    "dormant_candidate_keys",
+    "order_semantic_dormant_candidates",
+]

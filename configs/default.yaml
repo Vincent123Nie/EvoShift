@@ -75,6 +75,8 @@ evolution:
   active_audit_early_retire_delta: -0.75
   active_audit_cooldown_episodes: 0
   active_audit_reactivation_grace_episodes: 0
+  active_audit_retirement_probation_enabled: false
+  active_audit_retirement_probation_max_age: 8
   active_audit_restore_predecessors: false
   min_feedback_trust_for_active_audit: 0.60
   active_audit_circuit_breaker_enabled: false
@@ -88,6 +90,7 @@ evolution:
   dormant_revival_max_age: 8
   dormant_revival_min_retired_age: 18
   dormant_revival_status_index_enabled: false
+  dormant_revival_semantic_index_enabled: false
 
 benchmark:
   kind: synthetic_shift
