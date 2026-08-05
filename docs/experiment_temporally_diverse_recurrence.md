@@ -91,3 +91,39 @@ clean/noise/burst conditions, for 60 confirmation runs.
 
 Failure of any held-out gate rejects the candidate and forbids merging it into
 `main`.
+
+## Result: rejected
+
+Implementation was frozen in `c9cbc0f`. The first diagnostic attempt
+(`runs/sweeps/20260805T114935Z`) exposed a shared lifecycle bug: a newer
+`SHADOW` draft could hide the exact active version from provisional-audit
+persistence, leaving a registered canary without a persisted ledger entry.
+Commit `87c3c76` fixed that invariant for every variant without changing any
+candidate threshold. The completed diagnostic artifact is
+`runs/sweeps/20260805T115802Z`.
+
+The frozen confirmation artifact is `runs/sweeps/20260805T115954Z`, using the
+pre-registered seeds `[177, 188, 199, 211, 222]`.
+
+| Condition | Current full | Lineage revival 15 | Chain-safe | Chain-safe delta vs current (95% CI) |
+|---|---:|---:|---:|---:|
+| clean | 0.9306 | 0.9514 | 0.9375 | `+0.0069 [-0.0056, +0.0208]` |
+| noise | 0.9264 | 0.9319 | 0.9319 | `+0.0056 [-0.0125, +0.0222]` |
+| clean + burst | 0.9306 | 0.9514 | 0.9375 | `+0.0069 [-0.0056, +0.0208]` |
+| noise + burst | 0.9264 | 0.9319 | 0.9319 | `+0.0056 [-0.0125, +0.0222]` |
+
+The candidate failed adoption even though all four score point estimates were
+positive:
+
+- every score interval still crossed zero;
+- clean score was below the unchanged lineage candidate;
+- future-case success fell from `1.0000` to `0.9634` under noise;
+- seed 177 still produced a false ordinary retirement after sparse noisy
+  contradictions accumulated across a longer span;
+- the global span gate delayed genuine adjacent changes, reducing the clean
+  changed-case gain.
+
+The mechanism diagnosis is that temporal spacing is neither necessary for a
+real change nor sufficient against repeated noise. The next candidate must
+protect destructive actions specifically, without slowing all feedback-driven
+adaptation. This branch is not eligible for merge into `main`.
