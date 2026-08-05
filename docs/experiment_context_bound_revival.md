@@ -73,6 +73,24 @@ development matrix only if:
 - the new path metrics are present and provisional valid-memory exposure does
   not exceed the unguarded sequential variant.
 
+The exact known-path checks are frozen as follows:
+
+- preserve the safe seed-233/burst-0 revival of
+  `mem-cfb49bc0ef485383@v1` in `refund:any:days_8_14`;
+- exclude `mem-61294fcf3a594201@v1`, retired in
+  `refund:premium:days_15_30`, before any forced-on probe in
+  `refund:any:days_8_14`; it must have zero mismatched probe, registration, and
+  confirmation events;
+- candidate post-confirmation tag-associated harmful exposure must be zero on
+  the targeted slice.
+
+The retirement path metrics are diagnostic, not an adoption claim for the
+inherited retirement mechanism. Registration precision must report both the
+post-hoc tag basis and exact paired-oracle coverage where an active-audit
+control exists. Tag-associated provisional exposure is explicitly a proxy,
+not causal attribution. A later retirement-focused candidate must set an
+absolute path-safety gate rather than merely match this branch.
+
 Failure is non-mergeable. Passing this inspected slice is necessary but not
 sufficient for merging; the candidate still requires the larger development
 matrix and fresh confirmation.
