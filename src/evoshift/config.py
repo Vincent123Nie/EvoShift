@@ -118,6 +118,7 @@ class EvolutionConfig(ConfigModel):
     active_audit_early_retire_enabled: bool = False
     active_audit_early_retire_delta: float = Field(default=-0.75, ge=-1.0, le=0.0)
     active_audit_cooldown_episodes: int = Field(default=0, ge=0, le=10000)
+    active_audit_reactivation_grace_episodes: int = Field(default=0, ge=0, le=10000)
     active_audit_restore_predecessors: bool = False
     min_feedback_trust_for_active_audit: float = Field(default=0.60, ge=0.0, le=1.0)
     active_audit_circuit_breaker_enabled: bool = False

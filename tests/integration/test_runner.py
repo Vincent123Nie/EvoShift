@@ -546,6 +546,82 @@ async def test_temporally_diverse_recurrence_blocks_adjacent_noise_failure_chain
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_reactivation_grace_blocks_destructive_noise_without_slowing_clean_changes(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    unguarded_config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 177}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.10, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "active_audit_circuit_breaker_enabled": True,
+                    "active_audit_lineage_control_enabled": True,
+                    "dormant_revival_enabled": True,
+                    "dormant_revival_min_retired_age": 15,
+                    "dormant_revival_status_index_enabled": True,
+                    "dynamic_feedback_change_min_span": 0,
+                }
+            ),
+        }
+    )
+    guarded_config = unguarded_config.model_copy(
+        update={
+            "evolution": unguarded_config.evolution.model_copy(
+                update={"active_audit_reactivation_grace_episodes": 8}
+            )
+        }
+    )
+
+    unguarded = await EvoShiftRunner(
+        unguarded_config,
+        create_benchmark(unguarded_config.benchmark, root=Path.cwd(), seed=177),
+        workdir=Path.cwd(),
+    ).run()
+    guarded = await EvoShiftRunner(
+        guarded_config,
+        create_benchmark(guarded_config.benchmark, root=Path.cwd(), seed=177),
+        workdir=Path.cwd(),
+    ).run()
+
+    unguarded_governance = unguarded.metrics["active_memory_governance"]
+    guarded_governance = guarded.metrics["active_memory_governance"]
+    assert guarded.metrics["overall"]["mean_score"] > unguarded.metrics["overall"]["mean_score"]
+    assert guarded_governance["false_retirement_rate"] == 0.0
+    assert unguarded_governance["false_retirement_rate"] > 0.0
+    assert guarded_governance["reactivation_grace_audit_suppressions"] >= 1
+    assert guarded.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+    assert guarded_governance["circuit_breaker"]["confirmation_precision"] == 1.0
+    assert guarded_governance["dormant_revival"]["confirmation_precision"] == 1.0
+
+    connection = sqlite3.connect(guarded.run_dir / "state.sqlite3")
+    try:
+        suppressions = [
+            (entity_id, json.loads(payload))
+            for entity_id, payload in connection.execute(
+                "SELECT entity_id, payload_json FROM evolution_events "
+                "WHERE event_type='active_memory_audit_suppressed'"
+            )
+        ]
+    finally:
+        connection.close()
+    assert suppressions
+    assert all("@v" in entity_id for entity_id, _ in suppressions)
+    assert all(payload["reactivation_age"] <= 8 for _, payload in suppressions)
+    assert all(
+        payload["online_decision_uses"] == "learner_visible_memory_lifecycle_only"
+        for _, payload in suppressions
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_quarantined_feedback_can_only_reach_memory_through_verified_shadow_lane(
     tmp_path: Path,
 ) -> None:

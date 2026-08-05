@@ -74,6 +74,7 @@ evolution:
   active_audit_early_retire_enabled: false
   active_audit_early_retire_delta: -0.75
   active_audit_cooldown_episodes: 0
+  active_audit_reactivation_grace_episodes: 0
   active_audit_restore_predecessors: false
   min_feedback_trust_for_active_audit: 0.60
   active_audit_circuit_breaker_enabled: false

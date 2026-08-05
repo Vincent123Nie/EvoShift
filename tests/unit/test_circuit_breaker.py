@@ -110,6 +110,27 @@ def test_circuit_breaker_invalidates_unpersisted_provisional_observation() -> No
     )
 
 
+def test_circuit_breaker_invalidates_canary_when_exact_version_is_reactivated() -> None:
+    config = _config()
+    breaker = CausalCircuitBreaker(config)
+    pending = breaker.register(
+        source="portal",
+        context="context",
+        observation=_provisional(config),
+    )
+
+    assert pending is not None
+    breaker.invalidate_memory_versions(
+        [("suspect", 3)],
+        reason="memory version was reactivated into a new lifecycle",
+    )
+
+    assert breaker.drain_invalidated() == (
+        (pending, "memory version was reactivated into a new lifecycle"),
+    )
+    assert breaker.snapshot()["pending"] == 0
+
+
 def test_cancelled_canary_restores_exact_persistent_causal_state(tmp_path: Path) -> None:
     config = _config()
     auditor = ActiveMemoryAuditor(config)

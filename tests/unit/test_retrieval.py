@@ -346,6 +346,39 @@ def test_active_lifecycle_is_not_hidden_by_newer_shadow_draft(tmp_path: Path) ->
     store.close()
 
 
+def test_reactivation_grace_updates_utility_without_posterior_retirement(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    active = _memory("rule", "refund policy", "Use the restored rule.").model_copy(
+        update={
+            "alpha": 1.0,
+            "beta": 9.0,
+            "use_count": 5,
+            "success_count": 0,
+        }
+    )
+    store.save_memory(active)
+    policy = PolicyGenome(rollback_min_uses=6, rollback_utility_threshold=0.30)
+
+    outcome = manager.record_outcome(
+        ["rule"],
+        success=False,
+        policy=policy,
+        retirement_protected_versions=[("rule", 1)],
+    )
+
+    persisted = store.get_memory("rule", version=1)
+    assert persisted is not None
+    assert persisted.status == MemoryStatus.ACTIVE
+    assert persisted.use_count == 6
+    assert persisted.beta == 10.0
+    assert outcome.rolled_back == ()
+    assert outcome.retirement_protected == (persisted,)
+    store.close()
+
+
 def test_probation_memory_is_retrievable_without_superseding_prior_rule(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
     manager = MemoryManager(store)

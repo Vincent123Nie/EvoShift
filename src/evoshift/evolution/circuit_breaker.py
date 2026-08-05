@@ -145,6 +145,17 @@ class CausalCircuitBreaker:
         self._invalidated.clear()
         return invalidated
 
+    def invalidate_memory_versions(
+        self,
+        memory_versions: Iterable[tuple[str, int]],
+        *,
+        reason: str,
+    ) -> None:
+        versions = set(memory_versions)
+        for key, pending in tuple(self._pending.items()):
+            if pending.memory_key in versions:
+                self._invalidate(key, pending, reason)
+
     def resolve(self, pending: PendingCausalCanary, *, confirmed: bool) -> None:
         del pending
         if confirmed:

@@ -308,6 +308,9 @@ class EvoShiftRunner:
             revival_unconfirmed_persistent_transitions = 0
             revival_oracle_intervention_deltas: List[float] = []
             retired_memory_indices: Dict[tuple[str, int], int] = {}
+            reactivated_memory_indices: Dict[tuple[str, int], int] = {}
+            reactivation_grace_audit_suppressions = 0
+            reactivation_grace_protected_rollbacks = 0
 
             def note_reacquisition(candidate: MemoryItem, activation_index: int) -> None:
                 nonlocal memory_reacquisitions
@@ -348,6 +351,30 @@ class EvoShiftRunner:
                         "oracle_metrics_are_post_hoc_only": True,
                     },
                 )
+
+            def note_reactivation(item: MemoryItem, episode_index: int) -> None:
+                if self.config.evolution.active_audit_reactivation_grace_episodes <= 0:
+                    return
+                key = (item.memory_id, item.version)
+                reactivated_memory_indices[key] = episode_index
+                if circuit_breaker is not None:
+                    circuit_breaker.invalidate_memory_versions(
+                        [key],
+                        reason="memory version was reactivated into a new lifecycle",
+                    )
+
+            def reactivation_grace(
+                item: MemoryItem,
+                episode_index: int,
+            ) -> tuple[int, int] | None:
+                grace_episodes = self.config.evolution.active_audit_reactivation_grace_episodes
+                reactivated_index = reactivated_memory_indices.get((item.memory_id, item.version))
+                if grace_episodes <= 0 or reactivated_index is None:
+                    return None
+                age = episode_index - reactivated_index
+                if age < 0 or age > grace_episodes:
+                    return None
+                return reactivated_index, age
 
             def complete_future_audit(outcome: FutureAuditOutcome) -> None:
                 nonlocal supersession_events
@@ -553,6 +580,7 @@ class EvoShiftRunner:
                     )
                 if audit_outcome is not None:
                     for reactivated in audit_outcome.reactivated:
+                        note_reactivation(reactivated, episode_index)
                         retired_memory_indices.pop(
                             (reactivated.memory_id, reactivated.version),
                             None,
@@ -615,6 +643,32 @@ class EvoShiftRunner:
                 )
                 return reverted
 
+            def drain_circuit_invalidations(episode_index: int) -> None:
+                if circuit_breaker is None:
+                    return
+                for invalidated_canary, invalidation_reason in circuit_breaker.drain_invalidated():
+                    reverted = revert_provisional_canary(
+                        invalidated_canary,
+                        episode_index=episode_index,
+                        reason=invalidation_reason,
+                    )
+                    store.record_event(
+                        run_id,
+                        "causal_circuit_breaker_invalidated",
+                        (f"{invalidated_canary.memory_key[0]}@v{invalidated_canary.memory_key[1]}"),
+                        {
+                            "episode_index": episode_index,
+                            "registered_index": invalidated_canary.registered_index,
+                            "source": invalidated_canary.source,
+                            "context": invalidated_canary.context,
+                            "control_memory_key": invalidated_canary.control_memory_key,
+                            "reason": invalidation_reason,
+                            "provisional_ledger_reverted": reverted,
+                            "persistent_state_changed": False,
+                            "online_decision_uses": "learner_visible_feedback_only",
+                        },
+                    )
+
             for index, sample in enumerate(samples):
                 memory_promoted_this_episode = False
                 memory_retired_this_episode = False
@@ -640,6 +694,14 @@ class EvoShiftRunner:
                             },
                         )
                 active_before = memory.active()
+                active_before_keys = {(item.memory_id, item.version) for item in active_before}
+                grace_episodes = self.config.evolution.active_audit_reactivation_grace_episodes
+                for memory_key, reactivated_index in tuple(reactivated_memory_indices.items()):
+                    if (
+                        memory_key not in active_before_keys
+                        or index - reactivated_index > grace_episodes
+                    ):
+                        reactivated_memory_indices.pop(memory_key, None)
                 known_before = store.list_memories()
                 retired_before = (
                     store.list_memories([MemoryStatus.RETIRED])
@@ -680,35 +742,7 @@ class EvoShiftRunner:
                     if circuit_breaker is not None
                     else None
                 )
-                if circuit_breaker is not None:
-                    for (
-                        invalidated_canary,
-                        invalidation_reason,
-                    ) in circuit_breaker.drain_invalidated():
-                        reverted = revert_provisional_canary(
-                            invalidated_canary,
-                            episode_index=index,
-                            reason=invalidation_reason,
-                        )
-                        store.record_event(
-                            run_id,
-                            "causal_circuit_breaker_invalidated",
-                            (
-                                f"{invalidated_canary.memory_key[0]}"
-                                f"@v{invalidated_canary.memory_key[1]}"
-                            ),
-                            {
-                                "episode_index": index,
-                                "registered_index": invalidated_canary.registered_index,
-                                "source": invalidated_canary.source,
-                                "context": invalidated_canary.context,
-                                "control_memory_key": (invalidated_canary.control_memory_key),
-                                "reason": invalidation_reason,
-                                "provisional_ledger_reverted": reverted,
-                                "persistent_state_changed": False,
-                                "online_decision_uses": "learner_visible_feedback_only",
-                            },
-                        )
+                drain_circuit_invalidations(index)
                 revival_intervention = (
                     dormant_revival.match(
                         source=observable_source,
@@ -969,6 +1003,7 @@ class EvoShiftRunner:
                         )
                     )
                     if confirmed and reactivated is not None:
+                        note_reactivation(reactivated, index)
                         retired_memory_indices.pop(
                             (reactivated.memory_id, reactivated.version),
                             None,
@@ -1154,6 +1189,47 @@ class EvoShiftRunner:
                             if ordinary_audit_eligible or circuit_probe_eligible
                             else []
                         )
+                        grace_suppressed = [
+                            item
+                            for item in eligible_active
+                            if reactivation_grace(item, index) is not None
+                        ]
+                        for suppressed_memory in grace_suppressed:
+                            grace_state = reactivation_grace(suppressed_memory, index)
+                            assert grace_state is not None
+                            reactivated_index, reactivation_age = grace_state
+                            reactivation_grace_audit_suppressions += 1
+                            store.record_event(
+                                run_id,
+                                "active_memory_audit_suppressed",
+                                (f"{suppressed_memory.memory_id}@v{suppressed_memory.version}"),
+                                {
+                                    "episode_index": index,
+                                    "reactivated_index": reactivated_index,
+                                    "reactivation_age": reactivation_age,
+                                    "grace_episodes": (
+                                        self.config.evolution.active_audit_reactivation_grace_episodes
+                                    ),
+                                    "audit_lane": (
+                                        "ordinary" if ordinary_audit_eligible else "causal_circuit"
+                                    ),
+                                    "feedback_trust": assessment.trust,
+                                    "feedback_trust_reason": assessment.reason,
+                                    "reason": "exact reactivated version is inside grace",
+                                    "persistent_state_changed": False,
+                                    "online_decision_uses": (
+                                        "learner_visible_memory_lifecycle_only"
+                                    ),
+                                },
+                            )
+                        grace_suppressed_keys = {
+                            (item.memory_id, item.version) for item in grace_suppressed
+                        }
+                        eligible_active = [
+                            item
+                            for item in eligible_active
+                            if (item.memory_id, item.version) not in grace_suppressed_keys
+                        ]
                         active_audit_eligible += len(eligible_active)
                         selected_active = eligible_active[
                             : self.config.evolution.active_audit_max_per_episode
@@ -1432,10 +1508,16 @@ class EvoShiftRunner:
                     >= self.config.evolution.min_feedback_trust_for_memory_update
                 ):
                     credited_ids = prediction.output.applied_memory_ids or selected_ids
+                    outcome_protected_versions = {
+                        (item.memory_id, item.version)
+                        for item in memory.active()
+                        if reactivation_grace(item, index) is not None
+                    }
                     memory_outcome = memory.record_outcome(
                         credited_ids,
                         feedback_score.success,
                         policy,
+                        retirement_protected_versions=outcome_protected_versions,
                     )
                     for item in memory_outcome.rolled_back:
                         retired_memory_indices[(item.memory_id, item.version)] = index
@@ -1447,7 +1529,29 @@ class EvoShiftRunner:
                             item.memory_id,
                             payload,
                         )
+                    for item in memory_outcome.retirement_protected:
+                        grace_state = reactivation_grace(item, index)
+                        assert grace_state is not None
+                        reactivated_index, reactivation_age = grace_state
+                        reactivation_grace_protected_rollbacks += 1
+                        store.record_event(
+                            run_id,
+                            "memory_rollback_suppressed",
+                            f"{item.memory_id}@v{item.version}",
+                            {
+                                "episode_index": index,
+                                "reactivated_index": reactivated_index,
+                                "reactivation_age": reactivation_age,
+                                "grace_episodes": (
+                                    self.config.evolution.active_audit_reactivation_grace_episodes
+                                ),
+                                "reason": ("posterior rollback blocked inside reactivation grace"),
+                                "persistent_state_changed": False,
+                                "online_decision_uses": ("learner_visible_memory_lifecycle_only"),
+                            },
+                        )
                     for item in memory_outcome.reactivated:
+                        note_reactivation(item, index)
                         retired_memory_indices.pop((item.memory_id, item.version), None)
                         memory_reactivations += 1
                         store.record_event(
@@ -1846,6 +1950,7 @@ class EvoShiftRunner:
                         )
 
             if circuit_breaker is not None:
+                drain_circuit_invalidations(len(samples))
                 for expired_canary in circuit_breaker.expire_all():
                     revert_provisional_canary(
                         expired_canary,
@@ -2138,6 +2243,15 @@ class EvoShiftRunner:
                     },
                     "active_memory_governance": {
                         "enabled": active_auditor is not None,
+                        "reactivation_grace_episodes": (
+                            self.config.evolution.active_audit_reactivation_grace_episodes
+                        ),
+                        "reactivation_grace_audit_suppressions": (
+                            reactivation_grace_audit_suppressions
+                        ),
+                        "reactivation_grace_protected_rollbacks": (
+                            reactivation_grace_protected_rollbacks
+                        ),
                         "eligible_active_memory_failures": active_audit_eligible,
                         "counterfactual_audit_observations": active_audit_observations,
                         "counterfactual_audit_coverage": (

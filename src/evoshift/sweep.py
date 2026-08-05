@@ -78,6 +78,8 @@ _AGGREGATE_FIELDS = {
     "correct_reacquisition_rate": "correct_reacquisition",
     "memory_reacquisitions": "memory_reacquisitions",
     "active_audit_control_requests": "active_audit_control_requests",
+    "reactivation_grace_audit_suppressions": "reactivation_grace_audit_suppressions",
+    "reactivation_grace_protected_rollbacks": "reactivation_grace_protected_rollbacks",
     "counterfactual_audit_coverage": "counterfactual_audit_coverage",
     "active_audit_budget_utilization": "active_audit_budget_utilization",
     "active_audit_mean_retirement_latency": "active_audit_mean_retirement_latency",
@@ -333,6 +335,12 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "correct_reacquisition_rate": active_governance.get("correct_reacquisition_rate"),
                 "memory_reacquisitions": active_governance.get("reacquisitions"),
                 "active_audit_control_requests": active_governance.get("control_requests"),
+                "reactivation_grace_audit_suppressions": active_governance.get(
+                    "reactivation_grace_audit_suppressions"
+                ),
+                "reactivation_grace_protected_rollbacks": active_governance.get(
+                    "reactivation_grace_protected_rollbacks"
+                ),
                 "counterfactual_audit_coverage": active_governance.get(
                     "counterfactual_audit_coverage"
                 ),
@@ -801,6 +809,8 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "correct_reacquisition_rate",
         "memory_reacquisitions",
         "active_audit_control_requests",
+        "reactivation_grace_audit_suppressions",
+        "reactivation_grace_protected_rollbacks",
         "counterfactual_audit_coverage",
         "active_audit_budget_utilization",
         "active_audit_mean_retirement_latency",

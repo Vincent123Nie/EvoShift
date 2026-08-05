@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from evoshift.memory.retriever import (
     BM25MemoryRetriever,
@@ -32,6 +32,7 @@ class MemoryActivation:
 class MemoryOutcome:
     rolled_back: tuple[MemoryItem, ...] = ()
     reactivated: tuple[MemoryItem, ...] = ()
+    retirement_protected: tuple[MemoryItem, ...] = ()
 
 
 class MemoryManager:
@@ -203,10 +204,17 @@ class MemoryManager:
         return rejected
 
     def record_outcome(
-        self, memory_ids: Sequence[str], success: bool, policy: PolicyGenome
+        self,
+        memory_ids: Sequence[str],
+        success: bool,
+        policy: PolicyGenome,
+        *,
+        retirement_protected_versions: Iterable[tuple[str, int]] = (),
     ) -> MemoryOutcome:
         rolled_back: List[MemoryItem] = []
         reactivated: List[MemoryItem] = []
+        retirement_protected: List[MemoryItem] = []
+        protected_versions = set(retirement_protected_versions)
         for memory_id in memory_ids:
             current = self._latest_status_memory(
                 memory_id,
@@ -231,11 +239,18 @@ class MemoryManager:
                 and updated.use_count >= policy.rollback_min_uses
                 and updated.posterior_utility < policy.rollback_utility_threshold
             ):
-                updated = updated.model_copy(update={"status": MemoryStatus.RETIRED})
-                rolled_back.append(updated)
-                reactivated.extend(self._restore_predecessors(updated))
+                if (current.memory_id, current.version) in protected_versions:
+                    retirement_protected.append(updated)
+                else:
+                    updated = updated.model_copy(update={"status": MemoryStatus.RETIRED})
+                    rolled_back.append(updated)
+                    reactivated.extend(self._restore_predecessors(updated))
             self.store.save_memory(updated)
-        return MemoryOutcome(tuple(rolled_back), tuple(reactivated))
+        return MemoryOutcome(
+            tuple(rolled_back),
+            tuple(reactivated),
+            tuple(retirement_protected),
+        )
 
     def apply_active_audit(
         self,

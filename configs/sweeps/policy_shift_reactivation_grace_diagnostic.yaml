@@ -1,0 +1,62 @@
+base_config: configs/experiments/policy_shift_causal_memory_demo.yaml
+seeds: [122, 133, 144, 155, 166, 177, 188, 199, 211, 222]
+algorithms:
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_burst_length: [0, 2]
+variants:
+  current_full:
+    evolution.active_audit_circuit_breaker_enabled: false
+    evolution.active_audit_lineage_control_enabled: false
+    evolution.dormant_revival_enabled: false
+    evolution.dynamic_feedback_change_min_span: 0
+    evolution.dormant_revival_status_index_enabled: false
+    evolution.active_audit_reactivation_grace_episodes: 0
+  lineage_revival_15:
+    evolution.active_audit_circuit_breaker_enabled: true
+    evolution.active_audit_lineage_control_enabled: true
+    evolution.dormant_revival_enabled: true
+    evolution.dormant_revival_min_trust: 0.10
+    evolution.dormant_revival_delta: 0.75
+    evolution.dormant_revival_max_age: 8
+    evolution.dormant_revival_min_retired_age: 15
+    evolution.dynamic_feedback_change_min_span: 0
+    evolution.dormant_revival_status_index_enabled: false
+    evolution.active_audit_reactivation_grace_episodes: 0
+  status_indexed_revival:
+    evolution.active_audit_circuit_breaker_enabled: true
+    evolution.active_audit_lineage_control_enabled: true
+    evolution.dormant_revival_enabled: true
+    evolution.dormant_revival_min_trust: 0.10
+    evolution.dormant_revival_delta: 0.75
+    evolution.dormant_revival_max_age: 8
+    evolution.dormant_revival_min_retired_age: 15
+    evolution.dynamic_feedback_change_min_span: 0
+    evolution.dormant_revival_status_index_enabled: true
+    evolution.active_audit_reactivation_grace_episodes: 0
+  reactivation_grace_only:
+    evolution.active_audit_circuit_breaker_enabled: true
+    evolution.active_audit_lineage_control_enabled: true
+    evolution.dormant_revival_enabled: true
+    evolution.dormant_revival_min_trust: 0.10
+    evolution.dormant_revival_delta: 0.75
+    evolution.dormant_revival_max_age: 8
+    evolution.dormant_revival_min_retired_age: 15
+    evolution.dynamic_feedback_change_min_span: 0
+    evolution.dormant_revival_status_index_enabled: false
+    evolution.active_audit_reactivation_grace_episodes: 8
+  reactivation_guarded_recurrence:
+    evolution.active_audit_circuit_breaker_enabled: true
+    evolution.active_audit_lineage_control_enabled: true
+    evolution.dormant_revival_enabled: true
+    evolution.dormant_revival_min_trust: 0.10
+    evolution.dormant_revival_delta: 0.75
+    evolution.dormant_revival_max_age: 8
+    evolution.dormant_revival_min_retired_age: 15
+    evolution.dynamic_feedback_change_min_span: 0
+    evolution.dormant_revival_status_index_enabled: true
+    evolution.active_audit_reactivation_grace_episodes: 8
+# All development seeds were already inspected and cannot establish adoption.
+# 5 variants * 10 seeds * 2 noise levels * 2 burst lengths = 200 runs.
+max_runs: 200
