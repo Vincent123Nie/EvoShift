@@ -77,6 +77,40 @@ def test_active_audit_does_not_accept_oracle_evidence_or_retire_on_neutral_contr
     assert second.memory_after.causal_negative_count == 0
 
 
+def test_shift_gated_sequential_retirement_requires_strong_harm() -> None:
+    auditor = _auditor(
+        active_audit_early_retire_enabled=True,
+        active_audit_early_retire_delta=-0.75,
+    )
+    not_shift = auditor.observe(
+        _memory("no-shift"),
+        episode_index=10,
+        feedback_control=1.0,
+        feedback_candidate=0.0,
+        shift_detected=False,
+    )
+    assert not_shift.retire is False
+
+    early = auditor.observe(
+        _memory("shift"),
+        episode_index=10,
+        feedback_control=1.0,
+        feedback_candidate=0.0,
+        shift_detected=True,
+    )
+    assert early.retire is True
+    assert early.reason.startswith("early retire:")
+
+    mild = auditor.observe(
+        _memory("mild"),
+        episode_index=10,
+        feedback_control=1.0,
+        feedback_candidate=0.4,
+        shift_detected=True,
+    )
+    assert mild.retire is False
+
+
 def test_active_audit_configuration_rejects_impossible_negative_evidence_gate() -> None:
     with pytest.raises(ValueError, match="negative_observations"):
         EvolutionConfig(

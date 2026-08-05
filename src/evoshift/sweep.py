@@ -80,6 +80,9 @@ _AGGREGATE_FIELDS = {
     "counterfactual_audit_coverage": "counterfactual_audit_coverage",
     "active_audit_budget_utilization": "active_audit_budget_utilization",
     "active_audit_mean_retirement_latency": "active_audit_mean_retirement_latency",
+    "early_causal_retirements": "early_causal_retirements",
+    "early_causal_retirement_precision": "early_causal_retirement_precision",
+    "early_causal_false_retirement_rate": "early_causal_false_retirement_rate",
     "confirmed_context_changes": "confirmed_context_changes",
     "total_requests": "total_requests",
     "total_tokens": "total_tokens",
@@ -310,6 +313,13 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 ),
                 "active_audit_mean_retirement_latency": active_governance.get(
                     "mean_retirement_latency"
+                ),
+                "early_causal_retirements": active_governance.get("early_causal_retirements"),
+                "early_causal_retirement_precision": active_governance.get(
+                    "early_causal_retirement_precision"
+                ),
+                "early_causal_false_retirement_rate": active_governance.get(
+                    "early_causal_false_retirement_rate"
                 ),
                 "confirmed_context_changes": trust_model.get("confirmed_context_changes"),
             }
@@ -632,6 +642,9 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "counterfactual_audit_coverage",
         "active_audit_budget_utilization",
         "active_audit_mean_retirement_latency",
+        "early_causal_retirements",
+        "early_causal_retirement_precision",
+        "early_causal_false_retirement_rate",
         "confirmed_context_changes",
         "run_dir",
     ]

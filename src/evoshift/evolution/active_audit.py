@@ -31,6 +31,8 @@ class ActiveMemoryAuditor:
         self.min_observations = config.active_audit_min_observations
         self.min_negative_observations = config.active_audit_min_negative_observations
         self.retire_mean_delta = config.active_audit_retire_mean_delta
+        self.early_retire_enabled = config.active_audit_early_retire_enabled
+        self.early_retire_delta = config.active_audit_early_retire_delta
         self.cooldown_episodes = config.active_audit_cooldown_episodes
 
     def eligible(
@@ -82,6 +84,7 @@ class ActiveMemoryAuditor:
         episode_index: int,
         feedback_control: float,
         feedback_candidate: float,
+        shift_detected: bool = False,
     ) -> ActiveAuditDecision:
         if memory.status != MemoryStatus.ACTIVE:
             raise ValueError("active memory audit requires an active memory")
@@ -103,13 +106,24 @@ class ActiveMemoryAuditor:
             updated.causal_audit_count >= self.min_observations
             and updated.causal_negative_count >= self.min_negative_observations
         )
-        retire = enough_evidence and updated.causal_mean_delta <= self.retire_mean_delta
+        early_retire = (
+            self.early_retire_enabled and shift_detected and delta <= self.early_retire_delta
+        )
+        retire = early_retire or (
+            enough_evidence and updated.causal_mean_delta <= self.retire_mean_delta
+        )
         if retire:
-            reason = (
-                "retire: learner-visible leave-one-memory-out mean delta "
-                f"{updated.causal_mean_delta:.3f} <= {self.retire_mean_delta:.3f} "
-                f"after {updated.causal_audit_count} audits"
-            )
+            if early_retire:
+                reason = (
+                    "early retire: shift-gated learner-visible leave-one-memory-out "
+                    f"delta {delta:.3f} <= {self.early_retire_delta:.3f}"
+                )
+            else:
+                reason = (
+                    "retire: learner-visible leave-one-memory-out mean delta "
+                    f"{updated.causal_mean_delta:.3f} <= {self.retire_mean_delta:.3f} "
+                    f"after {updated.causal_audit_count} audits"
+                )
         elif not enough_evidence:
             reason = "keep active: insufficient learner-visible causal evidence"
         else:
