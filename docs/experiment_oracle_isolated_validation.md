@@ -33,6 +33,48 @@ Apply the correction uniformly to every algorithm and ablation:
 This is a validity correction, not a candidate-specific feature. Thresholds,
 memory policies, and candidate ordering remain unchanged.
 
+## Frozen observable compatibility replacement
+
+Removing the hidden marker also removes the old one-third replay safety quota.
+To avoid replacing leakage with catastrophic forgetting, use the same replay
+window and model-call budget with an observable historical-compatibility lane:
+
+- add `replay_historical_context_anchors_enabled`, default `false`, and enable
+  it for the PolicyShift experiment family;
+- add `replay_historical_context_anchor_fraction`, default `1/3`;
+- when a learner-visible drift boundary exists, group trusted pre-boundary
+  episodes by exact `(feedback source, configured feedback context)`;
+- retain the most recent episode from each distinct observable context and
+  fill at most the fixed anchor fraction by recency;
+- explicitly configured `benchmark.protected_phases` consume this same safety
+  quota first; they are deployment contracts, not inferred invariants;
+- fill the remainder with the existing relevance-ranked current-regime replay;
+- historical context anchors are not labelled protected and receive no special
+  promotion rule; they enter the existing global mean, confidence, and
+  regression-rate gates like every other replay example;
+- if no drift boundary or historical context exists, preserve the existing
+  current-regime replay behavior;
+- do not add LLM requests, enlarge the replay window, or tune the one-third
+  fraction on oracle outcomes.
+
+This lane does not claim to identify true invariants. It is a learner-visible
+compatibility sample that asks whether a candidate regresses recently observed
+behavior from distinct historical contexts.
+
+## Oracle firewall
+
+Before any score matrix, run a label-perturbation firewall. For identical
+samples and feedback, replace the hidden `metadata["protected"]` values with
+all-false, complement, and a deterministic shuffle. Require:
+
+- replay-buffer sample IDs and masks are identical;
+- promotion and rollback decisions are identical;
+- state-changing event fingerprints and final state hashes are identical;
+- only post-hoc invariant slice metrics may differ.
+
+Report replay-buffer Jaccard `1.0`, decision flip rate `0.0`, and state-hash
+match `1.0` for every perturbation.
+
 ## Revalidation sequence
 
 1. Rerun `policy_shift_context_bound_revival_targeted.yaml` unchanged after the
