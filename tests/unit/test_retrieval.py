@@ -264,7 +264,7 @@ def test_dormant_revival_rejects_non_latest_retired_version(tmp_path: Path) -> N
 
 def test_status_indexed_revival_survives_newer_rejected_draft(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
-    manager = MemoryManager(store, status_indexed_lifecycle=True)
+    manager = MemoryManager(store, status_indexed_revival=True)
     retired = _memory("rule", "refund policy", "Use the recurring rule.").model_copy(
         update={"status": MemoryStatus.RETIRED}
     )
@@ -297,7 +297,7 @@ def test_status_indexed_revival_survives_newer_rejected_draft(tmp_path: Path) ->
 
 def test_status_indexed_revival_requires_latest_exact_retired_version(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
-    manager = MemoryManager(store, status_indexed_lifecycle=True)
+    manager = MemoryManager(store, status_indexed_revival=True)
     retired_v1 = _memory("rule", "refund policy", "Use rule one.").model_copy(
         update={"status": MemoryStatus.RETIRED}
     )
@@ -309,6 +309,40 @@ def test_status_indexed_revival_requires_latest_exact_retired_version(tmp_path: 
 
     assert manager.reactivate_retired(retired_v1) is None
     assert manager.reactivate_retired(retired_v2) is not None
+    store.close()
+
+
+def test_active_lifecycle_is_not_hidden_by_newer_shadow_draft(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    active = _memory("rule", "refund policy", "Use the active rule.")
+    shadow = active.model_copy(
+        update={
+            "version": 2,
+            "status": MemoryStatus.SHADOW,
+            "directive": "Unverified newer draft.",
+        }
+    )
+    store.save_memory(active)
+    store.save_memory(shadow)
+
+    manager.record_outcome(["rule"], success=True, policy=PolicyGenome())
+    updated = store.get_memory("rule", version=1)
+    assert updated is not None
+    assert updated.use_count == 1
+
+    audited = updated.model_copy(
+        update={
+            "causal_audit_count": 1,
+            "causal_negative_count": 1,
+            "causal_delta_sum": -1.0,
+        }
+    )
+    manager.apply_active_audit(audited, retire=False)
+    persisted = store.get_memory("rule", version=1)
+    assert persisted is not None
+    assert persisted.causal_audit_count == 1
+    assert store.get_memory("rule").status == MemoryStatus.SHADOW  # type: ignore[union-attr]
     store.close()
 
 

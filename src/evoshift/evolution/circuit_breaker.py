@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from evoshift.config import EvolutionConfig
-from evoshift.evolution.active_audit import ActiveAuditDecision
+from evoshift.evolution.active_audit import ActiveAuditDecision, ActiveMemoryAuditor
 from evoshift.schemas import MemoryItem
 
 
@@ -97,15 +97,27 @@ class CausalCircuitBreaker:
         source: str,
         context: str,
         episode_index: int,
-        active_memory_versions: Iterable[tuple[str, int]],
+        active_memories: Iterable[MemoryItem],
         lineage_control_versions: Iterable[tuple[str, int]] = (),
     ) -> PendingCausalCanary | None:
         key = (source, context)
         pending = self._pending.get(key)
         if pending is None or episode_index <= pending.registered_index:
             return None
-        if pending.memory_key not in set(active_memory_versions):
+        active_by_key = {(memory.memory_id, memory.version): memory for memory in active_memories}
+        active_memory = active_by_key.get(pending.memory_key)
+        if active_memory is None:
             self._invalidate(key, pending, "audited memory version is no longer active")
+            return None
+        if not ActiveMemoryAuditor.observation_is_present(
+            active_memory,
+            pending.observation,
+        ):
+            self._invalidate(
+                key,
+                pending,
+                "provisional causal observation is no longer persisted",
+            )
             return None
         if pending.control_memory_key is not None and pending.control_memory_key not in set(
             lineage_control_versions

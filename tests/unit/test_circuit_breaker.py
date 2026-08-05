@@ -53,7 +53,7 @@ def test_circuit_breaker_matches_only_same_context_and_exact_active_version() ->
             source="portal",
             context="refund:premium:days_15_30",
             episode_index=11,
-            active_memory_versions=[("suspect", 3)],
+            active_memories=[pending.observation.memory_after],
         )
         is None
     )
@@ -61,7 +61,7 @@ def test_circuit_breaker_matches_only_same_context_and_exact_active_version() ->
         source="portal",
         context="refund:any:days_8_14",
         episode_index=12,
-        active_memory_versions=[("suspect", 3)],
+        active_memories=[pending.observation.memory_after],
     )
 
     assert matched == pending
@@ -84,6 +84,30 @@ def test_circuit_breaker_expires_after_bounded_ttl() -> None:
     assert breaker.expire(13) == (pending,)
     assert breaker.snapshot()["expirations"] == 1
     assert breaker.snapshot()["pending"] == 0
+
+
+def test_circuit_breaker_invalidates_unpersisted_provisional_observation() -> None:
+    config = _config()
+    breaker = CausalCircuitBreaker(config)
+    pending = breaker.register(
+        source="portal",
+        context="context",
+        observation=_provisional(config),
+    )
+
+    assert pending is not None
+    assert (
+        breaker.match(
+            source="portal",
+            context="context",
+            episode_index=11,
+            active_memories=[_memory()],
+        )
+        is None
+    )
+    assert breaker.drain_invalidated() == (
+        (pending, "provisional causal observation is no longer persisted"),
+    )
 
 
 def test_cancelled_canary_restores_exact_persistent_causal_state(tmp_path: Path) -> None:
@@ -148,7 +172,7 @@ def test_lineage_control_is_exact_and_invalidated_before_intervention() -> None:
             source="portal",
             context="refund:any:days_8_14",
             episode_index=11,
-            active_memory_versions=[("suspect", 3)],
+            active_memories=[pending.observation.memory_after],
             lineage_control_versions=[("predecessor", 1)],
         )
         is None
@@ -184,7 +208,7 @@ def test_lineage_control_counts_successful_exact_intervention() -> None:
         source="portal",
         context="refund:any:days_8_14",
         episode_index=11,
-        active_memory_versions=[("suspect", 3)],
+        active_memories=[pending.observation.memory_after],
         lineage_control_versions=[("predecessor", 2)],
     )
 

@@ -147,6 +147,31 @@ class ActiveMemoryAuditor:
         )
 
     @staticmethod
+    def observation_is_present(
+        memory: MemoryItem,
+        observation: ActiveAuditDecision,
+    ) -> bool:
+        """Return whether an aggregate ledger still contains a provisional observation."""
+
+        before = observation.memory_before
+        after = observation.memory_after
+        if (memory.memory_id, memory.version) != (before.memory_id, before.version):
+            return False
+        positive = after.causal_positive_count - before.causal_positive_count
+        negative = after.causal_negative_count - before.causal_negative_count
+        neutral = after.causal_neutral_count - before.causal_neutral_count
+        if (positive, negative, neutral).count(1) != 1 or any(
+            value not in {0, 1} for value in (positive, negative, neutral)
+        ):
+            return False
+        return (
+            memory.causal_audit_count >= after.causal_audit_count
+            and memory.causal_positive_count >= after.causal_positive_count
+            and memory.causal_negative_count >= after.causal_negative_count
+            and memory.causal_neutral_count >= after.causal_neutral_count
+        )
+
+    @staticmethod
     def revert_observation(memory: MemoryItem, observation: ActiveAuditDecision) -> MemoryItem:
         """Remove one provisional audit observation while preserving later evidence."""
 
@@ -154,8 +179,6 @@ class ActiveMemoryAuditor:
         after = observation.memory_after
         if (memory.memory_id, memory.version) != (before.memory_id, before.version):
             raise ValueError("cannot revert a causal observation from another memory version")
-        if memory.causal_audit_count < 1:
-            raise ValueError("cannot revert a causal observation from an empty ledger")
         positive = after.causal_positive_count - before.causal_positive_count
         negative = after.causal_negative_count - before.causal_negative_count
         neutral = after.causal_neutral_count - before.causal_neutral_count
@@ -163,6 +186,8 @@ class ActiveMemoryAuditor:
             value not in {0, 1} for value in (positive, negative, neutral)
         ):
             raise ValueError("invalid provisional causal observation")
+        if not ActiveMemoryAuditor.observation_is_present(memory, observation):
+            raise ValueError("cannot revert a causal observation absent from the ledger")
         audit_count = memory.causal_audit_count - 1
         last_index = memory.causal_last_audit_index
         if last_index == observation.episode_index:

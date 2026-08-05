@@ -212,7 +212,7 @@ class EvolutionConfig(ConfigModel):
         if self.dormant_revival_enabled and not self.dynamic_feedback_trust_enabled:
             raise ValueError("dormant memory revival requires dynamic feedback trust")
         if self.dormant_revival_status_index_enabled and not self.dormant_revival_enabled:
-            raise ValueError("status-indexed lifecycle requires dormant memory revival")
+            raise ValueError("status-indexed revival requires dormant memory revival")
         if (
             self.dormant_revival_enabled
             and self.dormant_revival_min_trust >= self.min_feedback_trust_for_active_audit

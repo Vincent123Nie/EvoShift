@@ -174,9 +174,7 @@ class EvoShiftRunner:
                 store.save_memory(item)
             memory = MemoryManager(
                 store,
-                status_indexed_lifecycle=(
-                    self.config.evolution.dormant_revival_status_index_enabled
-                ),
+                status_indexed_revival=(self.config.evolution.dormant_revival_status_index_enabled),
             )
             behavior = behavior_for(self.config.algorithm)
             agent = MemoryAgent(client, self.config.provider, memory)
@@ -593,7 +591,11 @@ class EvoShiftRunner:
                 memory_id, version = pending.memory_key
                 current = store.get_memory(memory_id, version=version)
                 reverted = False
-                if current is not None and current.status == MemoryStatus.ACTIVE:
+                if (
+                    current is not None
+                    and current.status == MemoryStatus.ACTIVE
+                    and active_auditor.observation_is_present(current, pending.observation)
+                ):
                     restored = active_auditor.revert_observation(current, pending.observation)
                     memory.apply_active_audit(restored, retire=False)
                     reverted = True
@@ -670,9 +672,7 @@ class EvoShiftRunner:
                         source=observable_source,
                         context=observable_context,
                         episode_index=index,
-                        active_memory_versions={
-                            (item.memory_id, item.version) for item in active_before
-                        },
+                        active_memories=active_before,
                         lineage_control_versions={
                             (item.memory_id, item.version) for item in superseded_before
                         },

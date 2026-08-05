@@ -40,11 +40,11 @@ class MemoryManager:
         store: SQLiteStore,
         retriever: Optional[BM25MemoryRetriever] = None,
         *,
-        status_indexed_lifecycle: bool = False,
+        status_indexed_revival: bool = False,
     ):
         self.store = store
         self.retriever = retriever or BM25MemoryRetriever()
-        self.status_indexed_lifecycle = status_indexed_lifecycle
+        self.status_indexed_revival = status_indexed_revival
 
     @staticmethod
     def stable_memory_id(trigger: str, directive: str) -> str:
@@ -170,7 +170,7 @@ class MemoryManager:
             for memory_id in candidate.supersedes_memory_ids:
                 if memory_id == candidate.memory_id:
                     continue
-                previous = self._latest_lifecycle_memory(
+                previous = self._latest_status_memory(
                     memory_id,
                     [MemoryStatus.ACTIVE],
                 )
@@ -208,7 +208,7 @@ class MemoryManager:
         rolled_back: List[MemoryItem] = []
         reactivated: List[MemoryItem] = []
         for memory_id in memory_ids:
-            current = self._latest_lifecycle_memory(
+            current = self._latest_status_memory(
                 memory_id,
                 [MemoryStatus.ACTIVE, MemoryStatus.PROBATION],
             )
@@ -245,7 +245,7 @@ class MemoryManager:
         restore_predecessors: bool = False,
     ) -> MemoryOutcome:
         current = self.store.get_memory(updated.memory_id, version=updated.version)
-        latest = self._latest_lifecycle_memory(
+        latest = self._latest_status_memory(
             updated.memory_id,
             [MemoryStatus.ACTIVE],
         )
@@ -271,9 +271,10 @@ class MemoryManager:
 
     def reactivate_retired(self, item: MemoryItem) -> Optional[MemoryItem]:
         current = self.store.get_memory(item.memory_id, version=item.version)
-        latest = self._latest_lifecycle_memory(
-            item.memory_id,
-            [MemoryStatus.RETIRED],
+        latest = (
+            self._latest_status_memory(item.memory_id, [MemoryStatus.RETIRED])
+            if self.status_indexed_revival
+            else self.store.get_memory(item.memory_id)
         )
         if (
             current is None
@@ -305,7 +306,7 @@ class MemoryManager:
     def _restorable_predecessors(self, successor: MemoryItem) -> list[MemoryItem]:
         restored_items: list[MemoryItem] = []
         for superseded_id in successor.supersedes_memory_ids:
-            previous = self._latest_lifecycle_memory(
+            previous = self._latest_status_memory(
                 superseded_id,
                 [MemoryStatus.SUPERSEDED],
             )
@@ -320,13 +321,11 @@ class MemoryManager:
             restored_items.append(restored)
         return restored_items
 
-    def _latest_lifecycle_memory(
+    def _latest_status_memory(
         self,
         memory_id: str,
         statuses: Sequence[MemoryStatus],
     ) -> Optional[MemoryItem]:
-        if not self.status_indexed_lifecycle:
-            return self.store.get_memory(memory_id)
         return next(
             (item for item in self.store.list_memories(statuses) if item.memory_id == memory_id),
             None,
