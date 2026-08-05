@@ -38,6 +38,7 @@ class MemoryOutcome:
     # sufficient to undo one retirement transaction without touching an
     # unrelated lineage when several memories are updated in one episode.
     retirement_predecessors: tuple[tuple[MemoryItem, ...], ...] = ()
+    retirement_snapshots: tuple[MemoryItem, ...] = ()
 
 
 class MemoryManager:
@@ -220,6 +221,7 @@ class MemoryManager:
         reactivated: List[MemoryItem] = []
         retirement_protected: List[MemoryItem] = []
         retirement_predecessors: List[tuple[MemoryItem, ...]] = []
+        retirement_snapshots: List[MemoryItem] = []
         protected_versions = set(retirement_protected_versions)
         for memory_id in memory_ids:
             current = self._latest_status_memory(
@@ -248,17 +250,21 @@ class MemoryManager:
                 if (current.memory_id, current.version) in protected_versions:
                     retirement_protected.append(updated)
                 else:
+                    retirement_snapshots.append(current)
                     updated = updated.model_copy(update={"status": MemoryStatus.RETIRED})
                     rolled_back.append(updated)
-                    restored = tuple(self._restore_predecessors(updated))
+                    restored = tuple(self._restorable_predecessors(updated))
                     retirement_predecessors.append(restored)
                     reactivated.extend(restored)
+                    self.store.save_memories_atomic([updated, *restored])
+                    continue
             self.store.save_memory(updated)
         return MemoryOutcome(
             tuple(rolled_back),
             tuple(reactivated),
             tuple(retirement_protected),
             tuple(retirement_predecessors),
+            tuple(retirement_snapshots),
         )
 
     def apply_active_audit(
@@ -295,10 +301,15 @@ class MemoryManager:
             rolled_back=(retired,),
             reactivated=tuple(restored),
             retirement_predecessors=(tuple(restored),),
+            retirement_snapshots=(current,),
         )
 
     def reactivate_retired(self, item: MemoryItem) -> Optional[MemoryItem]:
         current = self.store.get_memory(item.memory_id, version=item.version)
+        active_version = self._latest_status_memory(
+            item.memory_id,
+            [MemoryStatus.ACTIVE, MemoryStatus.PROBATION],
+        )
         latest = (
             self._latest_status_memory(item.memory_id, [MemoryStatus.RETIRED])
             if self.status_indexed_revival
@@ -309,6 +320,7 @@ class MemoryManager:
             or latest is None
             or latest.version != item.version
             or current.status != MemoryStatus.RETIRED
+            or (active_version is not None and active_version.version != item.version)
         ):
             return None
         reactivated = current.model_copy(
@@ -330,13 +342,23 @@ class MemoryManager:
         self,
         retired: MemoryItem,
         restored_predecessors: Sequence[MemoryItem],
+        active_snapshot: MemoryItem | None = None,
     ) -> Optional[MemoryItem]:
         """Undo one exact retirement transaction and its predecessor restores."""
 
         current = self.store.get_memory(retired.memory_id, version=retired.version)
         if current is None or current.status != MemoryStatus.RETIRED:
             return None
-        active = current.model_copy(
+        active_version = self._latest_status_memory(
+            retired.memory_id,
+            [MemoryStatus.ACTIVE, MemoryStatus.PROBATION],
+        )
+        if active_version is not None and active_version.version != retired.version:
+            return None
+        snapshot = active_snapshot or current
+        if snapshot.memory_id != retired.memory_id or snapshot.version != retired.version:
+            raise ValueError("retirement snapshot does not match the exact retired version")
+        active = snapshot.model_copy(
             update={
                 "status": MemoryStatus.ACTIVE,
                 "updated_at": datetime.now(timezone.utc),

@@ -77,6 +77,8 @@ evolution:
   active_audit_reactivation_grace_episodes: 0
   active_audit_retirement_probation_enabled: false
   active_audit_retirement_probation_max_age: 8
+  active_audit_retirement_probation_min_confirmations: 2
+  active_audit_retirement_probation_min_evidence_span: 2
   active_audit_restore_predecessors: false
   min_feedback_trust_for_active_audit: 0.60
   active_audit_circuit_breaker_enabled: false

@@ -50,5 +50,8 @@ development matrix only if `transactional_semantic_recurrence`:
 - has zero unconfirmed persistent transitions;
 - does not reduce invariant retention relative to `semantic_revival`.
 
+The executable frozen slice is
+`configs/sweeps/policy_shift_transactional_retirement_targeted.yaml`.
+
 The full 400-run diagnostic and 240-run fresh confirmation retain the adoption
 gates in `experiment_transactional_retirement.md`. Failure remains non-mergeable.

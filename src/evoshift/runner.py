@@ -67,6 +67,12 @@ class ExperimentResult:
     decisions: List[PromotionDecision]
 
 
+@dataclass(frozen=True)
+class ActiveAuditApplication:
+    retired: bool
+    pending_retirement: PendingRetirement | None = None
+
+
 def _new_run_id(algorithm: str) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{timestamp}-{algorithm}-{uuid.uuid4().hex[:8]}"
@@ -325,6 +331,7 @@ class EvoShiftRunner:
             retirement_probation_control_requests = 0
             retirement_probation_control_input_tokens = 0
             retirement_probation_control_output_tokens = 0
+            retirement_circuit_canaries: Dict[tuple[str, str, str, int], PendingCausalCanary] = {}
             retired_memory_indices: Dict[tuple[str, int], int] = {}
             reactivated_memory_indices: Dict[tuple[str, int], int] = {}
             reactivation_grace_audit_suppressions = 0
@@ -572,7 +579,7 @@ class EvoShiftRunner:
                 context: str,
                 persist_non_retirement: bool = True,
                 circuit_request: bool = False,
-            ) -> bool:
+            ) -> ActiveAuditApplication:
                 nonlocal rollbacks
                 nonlocal memory_reactivations
                 nonlocal active_audit_observations
@@ -613,6 +620,7 @@ class EvoShiftRunner:
                             source=source,
                             context=context,
                             memory=retired,
+                            active_snapshot=decision.memory_before,
                             restored_predecessors=audit_outcome.reactivated,
                             episode_index=episode_index,
                             mechanism=mechanism,
@@ -702,7 +710,7 @@ class EvoShiftRunner:
                                 "oracle_metrics_are_post_hoc_only": True,
                             },
                         )
-                return actually_retired
+                return ActiveAuditApplication(actually_retired, pending_retirement)
 
             def revert_provisional_canary(
                 pending: PendingCausalCanary,
@@ -775,6 +783,7 @@ class EvoShiftRunner:
                 restored = memory.rollback_retirement(
                     pending.memory,
                     pending.restored_predecessors,
+                    pending.active_snapshot,
                 )
                 if restored is not None:
                     retired_memory_indices.pop(pending.memory_key, None)
@@ -820,8 +829,50 @@ class EvoShiftRunner:
                     )
                 return restored
 
+            def resolve_retirement_circuit(
+                pending: PendingRetirement,
+                *,
+                committed: bool,
+                episode_index: int,
+                oracle_stale: bool,
+                reason: str,
+            ) -> None:
+                nonlocal circuit_correct_confirmations
+                nonlocal circuit_false_confirmations
+                canary = retirement_circuit_canaries.pop(pending.transaction_key, None)
+                if canary is None or circuit_breaker is None:
+                    return
+                reverted = False
+                if committed:
+                    circuit_breaker.resolve(canary, confirmed=True)
+                    circuit_correct_confirmations += int(oracle_stale)
+                    circuit_false_confirmations += int(not oracle_stale)
+                else:
+                    reverted = revert_provisional_canary(
+                        canary,
+                        episode_index=episode_index,
+                        reason=reason,
+                    )
+                    circuit_breaker.resolve(canary, confirmed=False)
+                store.record_event(
+                    run_id,
+                    "causal_circuit_breaker_retirement_resolved",
+                    f"{canary.memory_key[0]}@v{canary.memory_key[1]}",
+                    {
+                        "episode_index": episode_index,
+                        "retirement_transaction_key": pending.transaction_key,
+                        "committed": committed,
+                        "reason": reason,
+                        "provisional_ledger_reverted": reverted,
+                        "online_decision_uses": "learner_visible_feedback_only",
+                        "oracle_metrics_are_post_hoc_only": True,
+                        "oracle_stale_at_resolution": oracle_stale,
+                    },
+                )
+
             def register_posterior_retirement(
                 retired: MemoryItem,
+                active_snapshot: MemoryItem,
                 predecessors: Sequence[MemoryItem],
                 *,
                 episode_index: int,
@@ -837,6 +888,7 @@ class EvoShiftRunner:
                         source=assessment.source,
                         context=assessment.context,
                         memory=retired,
+                        active_snapshot=active_snapshot,
                         restored_predecessors=predecessors,
                         episode_index=episode_index,
                         mechanism="posterior_utility",
@@ -894,6 +946,13 @@ class EvoShiftRunner:
                         rollback_retirement_probation(
                             expired_retirement,
                             episode_index=index,
+                            reason="retirement probation TTL expired",
+                        )
+                        resolve_retirement_circuit(
+                            expired_retirement,
+                            committed=False,
+                            episode_index=index,
+                            oracle_stale=expired_retirement.oracle_stale,
                             reason="retirement probation TTL expired",
                         )
                 active_before = memory.active()
@@ -958,6 +1017,33 @@ class EvoShiftRunner:
                     if retirement_probation is not None and circuit_intervention is None
                     else None
                 )
+                if retirement_probation is not None:
+                    for (
+                        invalidated_retirement,
+                        invalidation_reason,
+                    ) in retirement_probation.drain_invalidated():
+                        resolve_retirement_circuit(
+                            invalidated_retirement,
+                            committed=False,
+                            episode_index=index,
+                            oracle_stale=invalidated_retirement.oracle_stale,
+                            reason=invalidation_reason,
+                        )
+                        store.record_event(
+                            run_id,
+                            "memory_retirement_probation_invalidated",
+                            (
+                                f"{invalidated_retirement.memory.memory_id}"
+                                f"@v{invalidated_retirement.memory.version}"
+                            ),
+                            {
+                                "episode_index": index,
+                                "registered_index": invalidated_retirement.registered_index,
+                                "reason": invalidation_reason,
+                                "persistent_state_changed": False,
+                                "online_decision_uses": "learner_visible_memory_lifecycle_only",
+                            },
+                        )
                 revival_intervention = (
                     dormant_revival.match(
                         source=observable_source,
@@ -1194,6 +1280,10 @@ class EvoShiftRunner:
                     old_memory_prediction = await agent.solve(
                         sample,
                         policy,
+                        exclude_memory_versions=[
+                            (item.memory_id, item.version)
+                            for item in retirement_intervention.restored_predecessors
+                        ],
                         extra_memories=[retirement_intervention.memory],
                         use_memory=behavior.use_memory,
                     )
@@ -1213,71 +1303,70 @@ class EvoShiftRunner:
                         retirement_memory_id in old_memory_prediction.output.applied_memory_ids
                     )
                     feedback_delta = feedback_score.primary - old_memory_feedback.primary
-                    trusted_pair = assessment.trust >= retirement_probation.ordinary_trust
-                    confirmed = bool(
-                        trusted_pair
-                        and old_memory_applied
-                        and retirement_probation.qualifies(feedback_delta)
+                    evidence_decision = retirement_probation.observe(
+                        retirement_intervention,
+                        episode_index=index,
+                        trust=assessment.trust,
+                        old_memory_applied=old_memory_applied,
+                        delta=feedback_delta,
                     )
-                    vetoed = bool(
-                        trusted_pair
-                        and old_memory_applied
-                        and retirement_probation.qualifies(-feedback_delta)
-                    )
-                    deferred = not confirmed and not vetoed
+                    resolved_retirement = evidence_decision.pending
+                    confirmed = evidence_decision.outcome == "confirm"
+                    vetoed = evidence_decision.outcome == "veto"
+                    deferred = evidence_decision.outcome == "defer"
                     restored_retirement: MemoryItem | None = None
                     confirmation_oracle_stale = bool(
-                        stale_tags.intersection(retirement_intervention.memory.tags)
+                        stale_tags.intersection(resolved_retirement.memory.tags)
                     )
                     if confirmed:
-                        retirement_probation.resolve(
-                            retirement_intervention,
-                            confirmed=True,
-                        )
                         finalize_retirement(
-                            retirement_intervention.memory,
+                            resolved_retirement.memory,
                             episode_index=index,
                             phase_index=phase_index,
                             is_oracle_stale=confirmation_oracle_stale,
-                            early_retirement=retirement_intervention.early_retirement,
+                            early_retirement=resolved_retirement.early_retirement,
                             reason="confirmed retirement probation",
-                            mechanism=retirement_intervention.mechanism,
+                            mechanism=resolved_retirement.mechanism,
                             entity_id=(f"{retirement_memory_id}@v{retirement_memory_version}"),
                             count_active_audit=(
-                                retirement_intervention.mechanism != "posterior_utility"
+                                resolved_retirement.mechanism != "posterior_utility"
                             ),
                         )
                         retirement_probation_correct_confirmations += int(confirmation_oracle_stale)
                         retirement_probation_false_confirmations += int(
                             not confirmation_oracle_stale
                         )
-                    elif vetoed:
-                        retirement_probation.resolve(
-                            retirement_intervention,
-                            confirmed=False,
-                        )
-                        restored_retirement = rollback_retirement_probation(
-                            retirement_intervention,
+                        resolve_retirement_circuit(
+                            resolved_retirement,
+                            committed=True,
                             episode_index=index,
-                            reason="trusted old-memory counterfactual vetoed retirement",
+                            oracle_stale=confirmation_oracle_stale,
+                            reason="sequential retirement evidence confirmed",
+                        )
+                    elif vetoed:
+                        restored_retirement = rollback_retirement_probation(
+                            resolved_retirement,
+                            episode_index=index,
+                            reason="sequential old-memory evidence vetoed retirement",
                         )
                         memory_reactivations += int(restored_retirement is not None)
-                    else:
-                        retirement_probation.defer(retirement_intervention)
+                        resolve_retirement_circuit(
+                            resolved_retirement,
+                            committed=False,
+                            episode_index=index,
+                            oracle_stale=confirmation_oracle_stale,
+                            reason="sequential retirement evidence vetoed",
+                        )
                     if confirmed:
                         resolution_reason = (
-                            "confirm: trusted post-retirement behavior beat old memory"
+                            "confirm: sequential current-over-old evidence reached threshold"
                         )
                     elif vetoed:
                         resolution_reason = (
-                            "cancel: trusted old memory beat post-retirement behavior"
+                            "cancel: sequential old-over-current evidence reached threshold"
                         )
-                    elif not trusted_pair:
-                        resolution_reason = "defer: feedback trust below audit threshold"
-                    elif not old_memory_applied:
-                        resolution_reason = "defer: forced old memory was not explicitly applied"
                     else:
-                        resolution_reason = "defer: trusted paired effect was inconclusive"
+                        resolution_reason = f"defer: {evidence_decision.reason}"
                     store.record_event(
                         run_id,
                         (
@@ -1296,6 +1385,9 @@ class EvoShiftRunner:
                             "feedback_delta": feedback_delta,
                             "old_memory_applied": old_memory_applied,
                             "feedback_trust": assessment.trust,
+                            "evidence_recorded": evidence_decision.evidence_recorded,
+                            "confirmation_indices": list(resolved_retirement.confirmation_indices),
+                            "veto_indices": list(resolved_retirement.veto_indices),
                             "confirmed": confirmed,
                             "vetoed": vetoed,
                             "deferred": deferred,
@@ -1455,6 +1547,7 @@ class EvoShiftRunner:
                                 >= self.config.evolution.min_feedback_trust_for_active_audit
                             )
                             confirmed = False
+                            circuit_retirement_pending = False
                             resolution_reason = ""
                             if confirmation_eligible:
                                 confirmation_decision = active_auditor.observe(
@@ -1464,7 +1557,7 @@ class EvoShiftRunner:
                                     feedback_candidate=forced_on_feedback.primary,
                                     shift_detected=shift.detected,
                                 )
-                                confirmed = record_causal_audit(
+                                circuit_application = record_causal_audit(
                                     confirmation_decision,
                                     episode_index=index,
                                     phase_index=phase_index,
@@ -1479,7 +1572,20 @@ class EvoShiftRunner:
                                     persist_non_retirement=False,
                                     circuit_request=True,
                                 )
-                                resolution_reason = confirmation_decision.reason
+                                confirmed = bool(
+                                    circuit_application.retired
+                                    and circuit_application.pending_retirement is None
+                                )
+                                if circuit_application.pending_retirement is not None:
+                                    circuit_retirement_pending = True
+                                    retirement_circuit_canaries[
+                                        circuit_application.pending_retirement.transaction_key
+                                    ] = circuit_intervention
+                                    resolution_reason = (
+                                        "pending: destructive retirement awaits sequential evidence"
+                                    )
+                                else:
+                                    resolution_reason = confirmation_decision.reason
                             else:
                                 record_extra_audit_request(
                                     forced_on_prediction,
@@ -1499,6 +1605,8 @@ class EvoShiftRunner:
                                 is_oracle_stale = bool(stale_tags.intersection(audited_memory.tags))
                                 circuit_correct_confirmations += int(is_oracle_stale)
                                 circuit_false_confirmations += int(not is_oracle_stale)
+                            elif circuit_retirement_pending:
+                                memory_retired_this_episode = True
                             else:
                                 revert_provisional_canary(
                                     circuit_intervention,
@@ -1511,7 +1619,11 @@ class EvoShiftRunner:
                                 )
                             store.record_event(
                                 run_id,
-                                "causal_circuit_breaker_resolved",
+                                (
+                                    "causal_circuit_breaker_resolution_pending"
+                                    if circuit_retirement_pending
+                                    else "causal_circuit_breaker_resolved"
+                                ),
                                 f"{memory_id}@v{memory_version}",
                                 {
                                     "episode_index": index,
@@ -1529,6 +1641,7 @@ class EvoShiftRunner:
                                     "forced_memory_applied": treatment_applied,
                                     "feedback_trust": assessment.trust,
                                     "confirmed": confirmed,
+                                    "retirement_probation_pending": (circuit_retirement_pending),
                                     "reason": resolution_reason,
                                     "online_decision_uses": ("learner_visible_feedback_only"),
                                     "oracle_metrics_are_post_hoc_only": True,
@@ -1627,21 +1740,21 @@ class EvoShiftRunner:
                                     feedback_candidate=feedback_score.primary,
                                     shift_detected=shift.detected,
                                 )
+                                audit_application = record_causal_audit(
+                                    audit_decision,
+                                    episode_index=index,
+                                    phase_index=phase_index,
+                                    stale_tags=stale_tags,
+                                    valid_tags=valid_tags,
+                                    oracle_control=control_score.primary,
+                                    oracle_candidate=score.primary,
+                                    additional_prediction=control_prediction,
+                                    mechanism="active_causal",
+                                    source=assessment.source,
+                                    context=assessment.context,
+                                )
                                 memory_retired_this_episode = (
-                                    record_causal_audit(
-                                        audit_decision,
-                                        episode_index=index,
-                                        phase_index=phase_index,
-                                        stale_tags=stale_tags,
-                                        valid_tags=valid_tags,
-                                        oracle_control=control_score.primary,
-                                        oracle_candidate=score.primary,
-                                        additional_prediction=control_prediction,
-                                        mechanism="active_causal",
-                                        source=assessment.source,
-                                        context=assessment.context,
-                                    )
-                                    or memory_retired_this_episode
+                                    audit_application.retired or memory_retired_this_episode
                                 )
                         elif circuit_probe_eligible and circuit_breaker is not None:
                             for audited_memory in selected_active:
@@ -1692,7 +1805,7 @@ class EvoShiftRunner:
                                     control_memory=lineage_control,
                                 )
                                 if pending is not None:
-                                    unexpected_transition = record_causal_audit(
+                                    provisional_application = record_causal_audit(
                                         provisional_decision,
                                         episode_index=index,
                                         phase_index=phase_index,
@@ -1707,7 +1820,7 @@ class EvoShiftRunner:
                                         circuit_request=True,
                                     )
                                     circuit_unconfirmed_persistent_transitions += int(
-                                        unexpected_transition
+                                        provisional_application.retired
                                     )
                                     store.record_event(
                                         run_id,
@@ -1901,16 +2014,38 @@ class EvoShiftRunner:
                         policy,
                         retirement_protected_versions=outcome_protected_versions,
                     )
-                    posterior_predecessor_sets = iter(memory_outcome.retirement_predecessors)
-                    for item in memory_outcome.rolled_back:
-                        predecessors = tuple(next(posterior_predecessor_sets, ()))
+                    for item, predecessors, active_snapshot in zip(
+                        memory_outcome.rolled_back,
+                        memory_outcome.retirement_predecessors,
+                        memory_outcome.retirement_snapshots,
+                    ):
+                        memory_retired_this_episode = True
                         pending_posterior = register_posterior_retirement(
                             item,
+                            active_snapshot,
                             predecessors,
                             episode_index=index,
                             phase_index=phase_index,
                             oracle_stale=bool(stale_tags.intersection(item.tags)),
                         )
+                        for reactivated in predecessors:
+                            note_reactivation(reactivated, index)
+                            retired_memory_indices.pop(
+                                (reactivated.memory_id, reactivated.version),
+                                None,
+                            )
+                            memory_reactivations += 1
+                            candidate_pool.seed_accepted([reactivated])
+                            store.record_event(
+                                run_id,
+                                "memory_reactivated",
+                                reactivated.memory_id,
+                                {
+                                    "reason": "posterior-retired successor rolled back",
+                                    "mechanism": "posterior_utility",
+                                    "provisional_retirement": pending_posterior is not None,
+                                },
+                            )
                         if pending_posterior is not None:
                             continue
                         rollbacks += 1
@@ -1920,22 +2055,6 @@ class EvoShiftRunner:
                             item.memory_id,
                             {"reason": "posterior utility below rollback threshold"},
                         )
-                        for reactivated in predecessors:
-                            note_reactivation(reactivated, index)
-                            retired_memory_indices.pop(
-                                (reactivated.memory_id, reactivated.version),
-                                None,
-                            )
-                            memory_reactivations += 1
-                            store.record_event(
-                                run_id,
-                                "memory_reactivated",
-                                reactivated.memory_id,
-                                {
-                                    "reason": "posterior-retired successor rolled back",
-                                    "mechanism": "posterior_utility",
-                                },
-                            )
                     for item in memory_outcome.retirement_protected:
                         grace_state = reactivation_grace(item, index)
                         assert grace_state is not None
@@ -2352,6 +2471,13 @@ class EvoShiftRunner:
                         pending_retirement,
                         episode_index=len(samples),
                         reason="stream_end",
+                    )
+                    resolve_retirement_circuit(
+                        pending_retirement,
+                        committed=False,
+                        episode_index=len(samples),
+                        oracle_stale=pending_retirement.oracle_stale,
+                        reason="retirement probation stream end",
                     )
 
             if circuit_breaker is not None:

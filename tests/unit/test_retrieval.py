@@ -312,6 +312,35 @@ def test_status_indexed_revival_requires_latest_exact_retired_version(tmp_path: 
     store.close()
 
 
+def test_pending_v1_cannot_replace_active_v2_during_rollback_or_revival(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store, status_indexed_revival=True)
+    active_snapshot_v1 = _memory("rule", "refund policy", "Use rule one.")
+    retired_v1 = active_snapshot_v1.model_copy(update={"status": MemoryStatus.RETIRED})
+    active_v2 = active_snapshot_v1.model_copy(
+        update={
+            "version": 2,
+            "status": MemoryStatus.ACTIVE,
+            "directive": "Use rule two.",
+        }
+    )
+    store.save_memory(retired_v1)
+    store.save_memory(active_v2)
+
+    assert manager.rollback_retirement(retired_v1, (), active_snapshot_v1) is None
+    assert manager.reactivate_retired(retired_v1) is None
+    persisted_v1 = store.get_memory("rule", version=1)
+    persisted_v2 = store.get_memory("rule", version=2)
+    assert persisted_v1 is not None
+    assert persisted_v2 is not None
+    assert persisted_v1.status == MemoryStatus.RETIRED
+    assert persisted_v2.status == MemoryStatus.ACTIVE
+    assert persisted_v2.directive == "Use rule two."
+    store.close()
+
+
 def test_active_lifecycle_is_not_hidden_by_newer_shadow_draft(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
     manager = MemoryManager(store)
@@ -406,12 +435,22 @@ def test_posterior_retirement_can_rollback_only_its_exact_predecessors(tmp_path:
     assert [[item.memory_id for item in group] for group in outcome.retirement_predecessors] == [
         ["prior"]
     ]
+    assert len(outcome.retirement_snapshots) == 1
+    snapshot = outcome.retirement_snapshots[0]
+    retired = outcome.rolled_back[0]
+    assert retired.beta == snapshot.beta + 1.0
+    assert retired.use_count == snapshot.use_count + 1
     restored = manager.rollback_retirement(
-        outcome.rolled_back[0],
+        retired,
         outcome.retirement_predecessors[0],
+        snapshot,
     )
     assert restored is not None
     assert restored.status == MemoryStatus.ACTIVE
+    assert restored.alpha == snapshot.alpha
+    assert restored.beta == snapshot.beta
+    assert restored.use_count == snapshot.use_count
+    assert restored.success_count == snapshot.success_count
     assert store.get_memory("prior").status == MemoryStatus.SUPERSEDED  # type: ignore[union-attr]
     assert store.get_memory("unrelated").status == MemoryStatus.ACTIVE  # type: ignore[union-attr]
     store.close()

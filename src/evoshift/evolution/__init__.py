@@ -9,7 +9,11 @@ from evoshift.evolution.future_audit import (
     FutureCounterfactualAuditor,
     PendingFutureAudit,
 )
-from evoshift.evolution.retirement import PendingRetirement, RetirementProbation
+from evoshift.evolution.retirement import (
+    PendingRetirement,
+    RetirementEvidenceDecision,
+    RetirementProbation,
+)
 from evoshift.evolution.revival import (
     DormantMemoryRevival,
     PendingRevivalCanary,
@@ -33,6 +37,7 @@ __all__ = [
     "PendingFutureAudit",
     "PendingRetirement",
     "PendingRevivalCanary",
+    "RetirementEvidenceDecision",
     "RetirementProbation",
     "candidate_signature",
     "dormant_candidate_keys",

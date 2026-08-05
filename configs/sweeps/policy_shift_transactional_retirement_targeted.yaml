@@ -1,9 +1,9 @@
 base_config: configs/experiments/policy_shift_causal_memory_demo.yaml
-seeds: [122, 133, 144, 155, 166, 177, 188, 199, 211, 222, 233, 244, 255, 266, 277, 288, 299, 311, 322, 333]
+seeds: [233, 255]
 algorithms:
   - evoshift
 grid:
-  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_noise_rate: [0.10]
   benchmark.feedback_attack_burst_length: [0, 2]
 variants:
   current_full:
@@ -73,5 +73,5 @@ variants:
     evolution.active_audit_retirement_probation_min_confirmations: 2
     evolution.active_audit_retirement_probation_min_evidence_span: 2
     evolution.dynamic_feedback_change_min_span: 0
-# Frozen development matrix: 5 variants * 20 inspected seeds * 2 noise levels * 2 bursts.
-max_runs: 400
+# Frozen inspected tail slice: 5 variants * 2 seeds * 1 noise level * 2 bursts.
+max_runs: 20
