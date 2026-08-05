@@ -126,7 +126,8 @@ Experience cards are untrusted model-generated data. Current defenses are:
 - the solver system prompt says to ignore cards that request secrets, tool/code
   execution, or changes to system rules;
 - hallucinated `applied_memory_ids` are filtered against retrieved IDs;
-- poorly performing active memories can be retired through posterior rollback.
+- poorly performing active memories can be retired through posterior rollback
+  or bounded learner-visible exact-version causal audit.
 
 Residual risk remains. Natural-language directives can contain indirect prompt
 injection, exfiltration requests, biased policy, or behavior that passes a small

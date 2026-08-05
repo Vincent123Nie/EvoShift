@@ -1,0 +1,20 @@
+base_config: configs/experiments/policy_shift_causal_memory_demo.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.10, 0.25]
+  benchmark.feedback_attack_burst_length: [0, 2]
+variants:
+  dynamic_two_evidence: {}
+  dynamic_one_evidence:
+    evolution.active_audit_min_observations: 1
+    evolution.active_audit_min_negative_observations: 1
+  static_two_evidence:
+    evolution.dynamic_feedback_trust_enabled: false
+  static_one_evidence:
+    evolution.dynamic_feedback_trust_enabled: false
+    evolution.active_audit_min_observations: 1
+    evolution.active_audit_min_negative_observations: 1
+# 4 variants * 5 seeds * 2 noise levels * 2 burst lengths = 80 runs.
+max_runs: 80

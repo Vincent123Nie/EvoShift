@@ -288,6 +288,10 @@ framework.
 - Early future rollback can reject useful memories under noisy feedback.
 - Some probationary cards expire without enough later relevant observations.
 - Solver-reported memory IDs are an imperfect causal attribution mechanism.
+- Failure-triggered active audits can accumulate rare noisy negatives because
+  successful uses are not routinely counterfactually audited.
+- Automatically restoring a predecessor is unsafe when a multi-step reversion
+  invalidates both successor and predecessor; recurring rules are reverified.
 - API aliases and nondeterminism weaken bitwise reproducibility.
 - Shared caches can distort latency/cost comparisons.
 - Token fallback is only a cost proxy when private gateway prices are unknown.
@@ -309,6 +313,8 @@ Do not fill this table until the run artifacts exist.
 | VERA without dynamic trust | TBD | TBD | TBD | TBD | TBD | TBD |
 | VERA without future audit | TBD | TBD | TBD | TBD | TBD | TBD |
 | VERA with symmetric future stopping | TBD | TBD | TBD | TBD | TBD | TBD |
+| VERA without active causal governance | TBD | TBD | TBD | TBD | TBD | TBD |
+| VERA with eager predecessor restoration | TBD | TBD | TBD | TBD | TBD | TBD |
 | Full VERA | TBD | TBD | TBD | TBD | TBD | TBD |
 
 Useful hyperparameter sensitivity plots include replay window, `top_k`,
@@ -323,7 +329,8 @@ Use placeholders until measured:
 > Built EvoShift, an API-only self-evolving memory Agent with typed procedural
 > memories, same-source temporal trust, Page-Hinkley drift detection, BM25 +
 > online utility/UCB + MMR retrieval, replay-to-probation admission, later
-> memory-on/off counterfactual audit, and SQLite rollback/supersession; on
+> admission audit, continuous exact-version active-memory audit, and SQLite
+> rollback/supersession; on
 > `[pinned benchmark]` under the same `[model/budget]`,
 > improved `[metric]` by `[artifact-backed value]` while limiting protected
 > regression to `[value]` and adaptation overhead to `[tokens or dollars]`.
@@ -334,16 +341,39 @@ during the interview.
 
 ## Sensible next research steps
 
-1. Reduce dynamic-trust adaptation delay without reopening premature updates.
-2. Replace repeated-look bootstrap stopping with confidence sequences or a
+1. Validate active-memory causal governance with a frozen public API model and
+   a realistic policy/tool environment rather than the deterministic provider.
+2. Replace cumulative failure-only evidence with context-windowed or
+   sequentially valid causal monitoring that controls false retirement.
+3. Replace repeated-look bootstrap stopping with confidence sequences or a
    sequential non-inferiority test.
-3. Run per-candidate counterfactuals on an untouched held-out policy stream.
-4. Add dense/hybrid retrieval and semantic contradiction detection.
-5. Replace heuristic policy mutation with constrained Bayesian optimization or
+4. Run per-candidate counterfactuals on an untouched held-out policy stream.
+5. Add dense/hybrid retrieval and semantic contradiction detection.
+6. Replace heuristic policy mutation with constrained Bayesian optimization or
    contextual bandits.
-6. Improve causal memory credit with leave-one-out or Shapley approximations.
-7. Calibrate LLM graders against rule metrics and a small human-labeled set.
-8. Evaluate on pinned BBH streams and at least one public long-term memory
+7. Extend one-memory leave-out to bounded interaction attribution for multiple
+   simultaneously applied memories.
+8. Calibrate LLM graders against rule metrics and a small human-labeled set.
+9. Evaluate on pinned BBH streams and at least one public long-term memory
    benchmark with identical model/budget baselines.
-9. Add a multi-tenant storage/cache boundary before calling the runtime
+10. Add a multi-tenant storage/cache boundary before calling the runtime
    production-ready.
+
+## Causal-governance defense in one minute
+
+> Admission-time replay and probation only tell me that a memory was useful
+> when promoted. They do not tell me it remains valid after policy revocation.
+> EvoShift therefore audits an applied active memory only on a trusted failure,
+> runs a paired solve excluding that exact version, and persists the
+> learner-visible treatment-control delta. Two negative audits can retire the
+> card. Hidden truth is attached later for forgetting precision and false
+> retirement. I also rejected automatic predecessor restoration: on a v3 to v1
+> reversion, v2 is stale too, so it must be reacquired through replay and
+> probation rather than activated by provenance alone.
+
+The strongest deterministic result is not merely higher score. Against current
+posterior rollback at 10% noise plus burst, harm exposure falls from 17.2 to
+4.6 and stale retention from 0.80 to 0.358, while forgetting precision/recall
+and invariant retention are all 1.0 across five seeds. The stress test also
+shows the limit: aggressive one-evidence retirement becomes unsafe when trust
+is static or noise reaches 25%.

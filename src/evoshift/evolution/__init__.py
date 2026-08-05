@@ -1,3 +1,4 @@
+from evoshift.evolution.active_audit import ActiveAuditDecision, ActiveMemoryAuditor
 from evoshift.evolution.candidates import CandidateEvidencePool, candidate_signature
 from evoshift.evolution.critic import ExperienceCritic
 from evoshift.evolution.drift import PageHinkleyShiftDetector
@@ -9,6 +10,8 @@ from evoshift.evolution.future_audit import (
 )
 
 __all__ = [
+    "ActiveAuditDecision",
+    "ActiveMemoryAuditor",
     "CandidateEvidencePool",
     "ExperienceCritic",
     "FeedbackAssessment",

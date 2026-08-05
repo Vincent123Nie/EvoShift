@@ -82,6 +82,7 @@ class MemoryAgent:
         policy: PolicyGenome,
         extra_memories: Optional[Sequence[MemoryItem]] = None,
         exclude_memory_ids: Optional[Sequence[str]] = None,
+        exclude_memory_versions: Optional[Sequence[tuple[str, int]]] = None,
         use_memory: bool = True,
         self_refine: bool = False,
     ) -> AgentPrediction:
@@ -95,13 +96,18 @@ class MemoryAgent:
             )
         forced_ids = {item.memory_id for item in extra_memories or []}
         excluded_ids = set(exclude_memory_ids or [])
+        excluded_versions = set(exclude_memory_versions or [])
         retrieved = [
             item
             for item in retrieved
-            if item.item.memory_id not in forced_ids and item.item.memory_id not in excluded_ids
+            if item.item.memory_id not in forced_ids
+            and item.item.memory_id not in excluded_ids
+            and (item.item.memory_id, item.item.version) not in excluded_versions
         ]
         for item in reversed(list(extra_memories or [])):
             if item.memory_id in excluded_ids:
+                continue
+            if (item.memory_id, item.version) in excluded_versions:
                 continue
             retrieved.insert(
                 0,

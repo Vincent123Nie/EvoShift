@@ -125,6 +125,12 @@ class MemoryItem(StrictModel):
     beta: float = Field(default=1.0, gt=0.0)
     use_count: int = Field(default=0, ge=0)
     success_count: int = Field(default=0, ge=0)
+    causal_audit_count: int = Field(default=0, ge=0)
+    causal_positive_count: int = Field(default=0, ge=0)
+    causal_negative_count: int = Field(default=0, ge=0)
+    causal_neutral_count: int = Field(default=0, ge=0)
+    causal_delta_sum: float = 0.0
+    causal_last_audit_index: Optional[int] = Field(default=None, ge=0)
     validation_gain: float = 0.0
     validation_lcb: float = 0.0
     regression_rate: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -134,6 +140,10 @@ class MemoryItem(StrictModel):
     @property
     def posterior_utility(self) -> float:
         return self.alpha / (self.alpha + self.beta)
+
+    @property
+    def causal_mean_delta(self) -> float:
+        return self.causal_delta_sum / self.causal_audit_count if self.causal_audit_count else 0.0
 
 
 class RetrievedMemory(StrictModel):

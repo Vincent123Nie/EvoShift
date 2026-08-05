@@ -21,6 +21,7 @@ from evoshift.evaluation import (
     score_sample,
 )
 from evoshift.evolution import (
+    ActiveMemoryAuditor,
     CandidateEvidencePool,
     ExperienceCritic,
     FeedbackTrustModel,
@@ -179,6 +180,13 @@ class EvoShiftRunner:
                 if self.config.evolution.future_audit_enabled and behavior.verify_before_promotion
                 else None
             )
+            active_auditor = (
+                ActiveMemoryAuditor(self.config.evolution)
+                if self.config.evolution.active_audit_enabled
+                and behavior.verify_before_promotion
+                and behavior.use_memory
+                else None
+            )
             episodes: List[Episode] = []
             failures: List[FailureRecord] = []
             decisions: List[PromotionDecision] = []
@@ -199,6 +207,67 @@ class EvoShiftRunner:
             future_audit_expired = 0
             future_audit_outcomes: List[FutureAuditOutcome] = []
             audit_evidence: Dict[str, CandidateEvidence] = {}
+            active_audit_eligible = 0
+            active_audit_observations = 0
+            active_audit_retirements = 0
+            active_audit_correct_retirements = 0
+            active_audit_false_retirements = 0
+            active_audit_control_requests = 0
+            active_audit_control_input_tokens = 0
+            active_audit_control_output_tokens = 0
+            active_audit_oracle_deltas: List[float] = []
+            active_audit_retirement_latencies: List[int] = []
+            stale_memory_opportunities = 0
+            stale_active_memory_opportunities = 0
+            active_memory_applications = 0
+            stale_active_memory_applications = 0
+            harmful_active_memory_exposure = 0
+            stale_pair_opportunities: Dict[tuple[str, int], int] = {}
+            stale_pair_first_active_index: Dict[tuple[str, int], int] = {}
+            stale_pair_active_at_last_opportunity: Dict[tuple[str, int], bool] = {}
+            active_audit_reactivations = 0
+            active_audit_correct_reactivations = 0
+            memory_reacquisitions = 0
+            correct_memory_reacquisitions = 0
+
+            def note_reacquisition(candidate: MemoryItem, activation_index: int) -> None:
+                nonlocal memory_reacquisitions
+                nonlocal correct_memory_reacquisitions
+                if candidate.version <= 1:
+                    return
+                previous = store.get_memory(candidate.memory_id, version=candidate.version - 1)
+                if previous is None or previous.status not in {
+                    MemoryStatus.RETIRED,
+                    MemoryStatus.SUPERSEDED,
+                }:
+                    return
+                memory_reacquisitions += 1
+                activation_sample = episodes[activation_index].sample
+                activation_valid_tags = {
+                    str(tag) for tag in activation_sample.metadata.get("valid_memory_tags", [])
+                }
+                activation_stale_tags = {
+                    str(tag) for tag in activation_sample.metadata.get("stale_memory_tags", [])
+                }
+                correct = bool(activation_valid_tags.intersection(candidate.tags)) and not bool(
+                    activation_stale_tags.intersection(candidate.tags)
+                )
+                if activation_stale_tags.intersection(candidate.tags):
+                    activation_phase = int(activation_sample.metadata.get("phase_index", -1))
+                    stale_pair_active_at_last_opportunity[
+                        (candidate.memory_id, activation_phase)
+                    ] = True
+                correct_memory_reacquisitions += int(correct)
+                store.record_event(
+                    run_id,
+                    "memory_reacquired",
+                    f"{candidate.memory_id}@v{candidate.version}",
+                    {
+                        "activation_index": activation_index,
+                        "oracle_correct_for_current_policy": correct,
+                        "oracle_metrics_are_post_hoc_only": True,
+                    },
+                )
 
             def complete_future_audit(outcome: FutureAuditOutcome) -> None:
                 nonlocal supersession_events
@@ -232,6 +301,9 @@ class EvoShiftRunner:
                         apply_supersession=(self.config.evolution.conflict_supersession_enabled),
                     )
                     supersession_events += len(activation.superseded)
+                    activation_index = decision.result.observation_end_index
+                    if activation_index is not None:
+                        note_reacquisition(activation.active, activation_index)
                     future_audit_confirmed += 1
                     if evidence is not None:
                         candidate_pool.mark_accepted(evidence)
@@ -256,7 +328,26 @@ class EvoShiftRunner:
 
             for index, sample in enumerate(samples):
                 memory_promoted_this_episode = False
+                memory_retired_this_episode = False
                 active_before = memory.active()
+                known_before = store.list_memories()
+                stale_tags = {str(tag) for tag in sample.metadata.get("stale_memory_tags", [])}
+                valid_tags = {str(tag) for tag in sample.metadata.get("valid_memory_tags", [])}
+                phase_index = int(sample.metadata.get("phase_index", -1))
+                for item in known_before:
+                    if item.status not in {
+                        MemoryStatus.ACTIVE,
+                        MemoryStatus.SUPERSEDED,
+                        MemoryStatus.RETIRED,
+                    } or not stale_tags.intersection(item.tags):
+                        continue
+                    pair = (item.memory_id, phase_index)
+                    stale_memory_opportunities += 1
+                    stale_pair_opportunities[pair] = stale_pair_opportunities.get(pair, 0) + 1
+                    stale_pair_active_at_last_opportunity[pair] = item.status == MemoryStatus.ACTIVE
+                    if item.status == MemoryStatus.ACTIVE:
+                        stale_active_memory_opportunities += 1
+                        stale_pair_first_active_index.setdefault(pair, index)
                 prediction = await agent.solve(
                     sample,
                     policy,
@@ -275,6 +366,20 @@ class EvoShiftRunner:
                 feedback_eligible = (
                     assessment.trust >= self.config.evolution.min_feedback_trust_for_candidate
                 )
+                applied_ids = set(prediction.output.applied_memory_ids)
+                applied_active = [
+                    retrieved.item
+                    for retrieved in prediction.retrieved
+                    if retrieved.item.memory_id in applied_ids
+                    and retrieved.item.status == MemoryStatus.ACTIVE
+                ]
+                active_memory_applications += len(applied_active)
+                stale_applied = [
+                    item for item in applied_active if stale_tags.intersection(item.tags)
+                ]
+                stale_active_memory_applications += len(stale_applied)
+                if not score.success:
+                    harmful_active_memory_exposure += len(stale_applied)
                 detector = detectors.setdefault(
                     sample.domain,
                     PageHinkleyShiftDetector(self.config.shift),
@@ -354,6 +459,127 @@ class EvoShiftRunner:
                             complete_future_audit(future_result)
 
                 if (
+                    active_auditor is not None
+                    and not self.frozen_audit
+                    and not feedback_score.success
+                    and assessment.trust
+                    >= self.config.evolution.min_feedback_trust_for_active_audit
+                ):
+                    eligible_active = active_auditor.eligible(
+                        applied_active,
+                        prediction.output.applied_memory_ids,
+                        episode_index=index,
+                    )
+                    active_audit_eligible += len(eligible_active)
+                    for audited_memory in eligible_active[
+                        : self.config.evolution.active_audit_max_per_episode
+                    ]:
+                        control_prediction = await agent.solve(
+                            sample,
+                            policy,
+                            exclude_memory_versions=[
+                                (audited_memory.memory_id, audited_memory.version)
+                            ],
+                            use_memory=behavior.use_memory,
+                        )
+                        control_score = score_sample(sample, control_prediction.output.answer)
+                        control_feedback = score_feedback_sample(
+                            sample,
+                            control_prediction.output.answer,
+                        )
+                        audit_decision = active_auditor.observe(
+                            audited_memory,
+                            episode_index=index,
+                            feedback_control=control_feedback.primary,
+                            feedback_candidate=feedback_score.primary,
+                        )
+                        audit_outcome = memory.apply_active_audit(
+                            audit_decision.memory_after,
+                            retire=audit_decision.retire,
+                            restore_predecessors=(
+                                self.config.evolution.active_audit_restore_predecessors
+                            ),
+                        )
+                        active_audit_observations += 1
+                        active_audit_control_requests += 1
+                        active_audit_control_input_tokens += control_prediction.usage.input_tokens
+                        active_audit_control_output_tokens += control_prediction.usage.output_tokens
+                        oracle_delta = score.primary - control_score.primary
+                        active_audit_oracle_deltas.append(oracle_delta)
+                        is_oracle_stale = bool(stale_tags.intersection(audited_memory.tags))
+                        actually_retired = bool(audit_outcome.rolled_back)
+                        store.record_event(
+                            run_id,
+                            "active_memory_causal_audit",
+                            audit_decision.candidate_id,
+                            {
+                                "episode_index": index,
+                                "feedback_control": audit_decision.feedback_control,
+                                "feedback_candidate": audit_decision.feedback_candidate,
+                                "learner_visible_delta": audit_decision.delta,
+                                "causal_audit_count": (
+                                    audit_decision.memory_after.causal_audit_count
+                                ),
+                                "causal_mean_delta": (
+                                    audit_decision.memory_after.causal_mean_delta
+                                ),
+                                "retirement_decision": audit_decision.retire,
+                                "retirement_applied": actually_retired,
+                                "reason": audit_decision.reason,
+                                "online_decision_uses": "learner_visible_feedback_only",
+                                "oracle_metrics_are_post_hoc_only": True,
+                                "oracle_delta": oracle_delta,
+                                "oracle_stale_for_sample": is_oracle_stale,
+                            },
+                        )
+                        if actually_retired:
+                            retired = audit_outcome.rolled_back[0]
+                            memory_retired_this_episode = True
+                            rollbacks += 1
+                            active_audit_retirements += 1
+                            candidate_pool.mark_memory_retired(retired)
+                            for predecessor_id in retired.supersedes_memory_ids:
+                                predecessor = store.get_memory(predecessor_id)
+                                if predecessor is not None:
+                                    candidate_pool.mark_memory_retired(predecessor)
+                            pair = (retired.memory_id, phase_index)
+                            if is_oracle_stale:
+                                active_audit_correct_retirements += 1
+                                stale_pair_active_at_last_opportunity[pair] = False
+                            else:
+                                active_audit_false_retirements += 1
+                            first_stale = stale_pair_first_active_index.get(pair)
+                            if first_stale is not None:
+                                active_audit_retirement_latencies.append(index - first_stale + 1)
+                            store.record_event(
+                                run_id,
+                                "memory_rollback",
+                                audit_decision.candidate_id,
+                                {"reason": audit_decision.reason, "mechanism": "active_causal"},
+                            )
+                        for reactivated in audit_outcome.reactivated:
+                            memory_reactivations += 1
+                            active_audit_reactivations += 1
+                            correct_reactivation = bool(
+                                valid_tags.intersection(reactivated.tags)
+                            ) and not bool(stale_tags.intersection(reactivated.tags))
+                            if stale_tags.intersection(reactivated.tags):
+                                stale_pair_active_at_last_opportunity[
+                                    (reactivated.memory_id, phase_index)
+                                ] = True
+                            active_audit_correct_reactivations += int(correct_reactivation)
+                            store.record_event(
+                                run_id,
+                                "memory_reactivated",
+                                reactivated.memory_id,
+                                {
+                                    "reason": "causally retired successor",
+                                    "oracle_correct_for_current_policy": correct_reactivation,
+                                    "oracle_metrics_are_post_hoc_only": True,
+                                },
+                            )
+
+                if (
                     not self.frozen_audit
                     and assessment.trust
                     >= self.config.evolution.min_feedback_trust_for_memory_update
@@ -399,12 +625,16 @@ class EvoShiftRunner:
                         },
                     )
 
-                should_extract = feedback_eligible and (
-                    not feedback_score.success
-                    or (
-                        policy.learn_from_success_every > 0
-                        and (index + 1) % policy.learn_from_success_every == 0
+                should_extract = (
+                    feedback_eligible
+                    and (
+                        not feedback_score.success
+                        or (
+                            policy.learn_from_success_every > 0
+                            and (index + 1) % policy.learn_from_success_every == 0
+                        )
                     )
+                    and not memory_retired_this_episode
                 )
                 if (
                     self.config.evolution.enabled
@@ -441,6 +671,7 @@ class EvoShiftRunner:
                                     ),
                                 )
                                 supersession_events += len(activation.superseded)
+                                note_reacquisition(activation.active, index)
                                 store.record_event(
                                     run_id,
                                     "memory_promoted_unverified",
@@ -592,6 +823,7 @@ class EvoShiftRunner:
                                                     ),
                                                 )
                                                 supersession_events += len(activation.superseded)
+                                                note_reacquisition(activation.active, index)
                                                 candidate_pool.mark_accepted(evidence)
                                                 memory_promoted_this_episode = True
                                         else:
@@ -916,6 +1148,105 @@ class EvoShiftRunner:
                             if harmful_exposure_observations
                             else None
                         ),
+                    },
+                    "active_memory_governance": {
+                        "enabled": active_auditor is not None,
+                        "eligible_active_memory_failures": active_audit_eligible,
+                        "counterfactual_audit_observations": active_audit_observations,
+                        "counterfactual_audit_coverage": (
+                            active_audit_observations / active_audit_eligible
+                            if active_audit_eligible
+                            else 0.0
+                        ),
+                        "audit_budget_utilization": (
+                            active_audit_observations
+                            / (len(episodes) * self.config.evolution.active_audit_max_per_episode)
+                            if episodes and active_auditor is not None
+                            else 0.0
+                        ),
+                        "harmful_active_memory_exposure_n": (harmful_active_memory_exposure),
+                        "harmful_active_memory_exposure_rate": (
+                            harmful_active_memory_exposure / active_memory_applications
+                            if active_memory_applications
+                            else 0.0
+                        ),
+                        "stale_active_memory_application_n": (stale_active_memory_applications),
+                        "stale_application_harm_rate": (
+                            harmful_active_memory_exposure / stale_active_memory_applications
+                            if stale_active_memory_applications
+                            else 0.0
+                        ),
+                        "stale_memory_opportunities": stale_memory_opportunities,
+                        "stale_active_memory_opportunities": (stale_active_memory_opportunities),
+                        "stale_memory_retention_rate": (
+                            stale_active_memory_opportunities / stale_memory_opportunities
+                            if stale_memory_opportunities
+                            else 0.0
+                        ),
+                        "causal_retirements": active_audit_retirements,
+                        "selective_forgetting_precision": (
+                            active_audit_correct_retirements / active_audit_retirements
+                            if active_audit_retirements
+                            else 0.0
+                        ),
+                        "selective_forgetting_recall": (
+                            len(
+                                {
+                                    pair
+                                    for pair, active in (
+                                        stale_pair_active_at_last_opportunity.items()
+                                    )
+                                    if not active
+                                }
+                                & {
+                                    pair
+                                    for pair, count in stale_pair_opportunities.items()
+                                    if count >= self.config.evolution.active_audit_min_observations
+                                }
+                            )
+                            / len(
+                                {
+                                    pair
+                                    for pair, count in stale_pair_opportunities.items()
+                                    if count >= self.config.evolution.active_audit_min_observations
+                                }
+                            )
+                            if any(
+                                count >= self.config.evolution.active_audit_min_observations
+                                for count in stale_pair_opportunities.values()
+                            )
+                            else 0.0
+                        ),
+                        "false_retirement_rate": (
+                            active_audit_false_retirements / active_audit_retirements
+                            if active_audit_retirements
+                            else 0.0
+                        ),
+                        "mean_retirement_latency": (
+                            statistics.fmean(active_audit_retirement_latencies)
+                            if active_audit_retirement_latencies
+                            else None
+                        ),
+                        "reactivations": active_audit_reactivations,
+                        "correct_reactivation_rate": (
+                            active_audit_correct_reactivations / active_audit_reactivations
+                            if active_audit_reactivations
+                            else None
+                        ),
+                        "reacquisitions": memory_reacquisitions,
+                        "correct_reacquisition_rate": (
+                            correct_memory_reacquisitions / memory_reacquisitions
+                            if memory_reacquisitions
+                            else None
+                        ),
+                        "mean_post_hoc_oracle_delta": (
+                            statistics.fmean(active_audit_oracle_deltas)
+                            if active_audit_oracle_deltas
+                            else None
+                        ),
+                        "control_requests": active_audit_control_requests,
+                        "control_input_tokens": active_audit_control_input_tokens,
+                        "control_output_tokens": active_audit_control_output_tokens,
                     },
                     "audit": {
                         "frozen": self.frozen_audit,

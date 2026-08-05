@@ -1,0 +1,102 @@
+project: evoshift-policy-shift-causal-memory-demo
+algorithm: evoshift
+
+provider:
+  kind: demo
+  model: evoshift-demo
+  max_output_tokens: 512
+  reasoning_effort: null
+
+budget:
+  max_requests: 5000
+  max_total_tokens: 8000000
+  max_cost_usd: 0.0
+
+storage:
+  cache_enabled: false
+  isolate_runs: true
+  runs_dir: runs
+
+benchmark:
+  kind: policy_shift
+  name: enterprise_refund_policy_causal_memory_governance
+  path: null
+  phase_size: 24
+  policy_schedule: [v1, v2, v3, v2, v1, v2]
+  shuffle: false
+  feedback_noise_rate: 0.10
+  feedback_attack_rate: 0.0
+  feedback_shared_source: true
+  feedback_shared_source_name: customer_support_portal
+  feedback_attack_burst_length: 2
+
+shift:
+  enabled: true
+  min_instances: 6
+  threshold: 0.80
+  delta: 0.0
+  novelty_threshold: 0.80
+  cooldown_episodes: 4
+
+evolution:
+  enabled: true
+  validation_window: 8
+  min_validation_examples: 4
+  bootstrap_samples: 1000
+  confidence_level: 0.90
+  min_mean_gain: 0.05
+  min_ci_lower_bound: -0.01
+  max_regression_rate: 0.10
+  max_protected_slice_regression: 0.0
+  max_cost_increase_ratio: 1.0
+  paired_replay: true
+  feedback_mode: reward_only
+  feedback_default_trust: 0.50
+  feedback_source_trust:
+    customer_support_portal: 0.90
+  dynamic_feedback_trust_enabled: true
+  dynamic_feedback_context_field: feedback_context
+  dynamic_feedback_min_consistent_observations: 2
+  dynamic_feedback_cold_start_trust: 0.40
+  dynamic_feedback_conflict_trust: 0.10
+  dynamic_feedback_prior_strength: 8.0
+  min_feedback_trust_for_drift: 0.60
+  min_feedback_trust_for_memory_update: 0.60
+  min_feedback_trust_for_candidate: 0.60
+  min_feedback_trust_for_replay: 0.60
+  min_feedback_trust_for_active_audit: 0.60
+  candidate_min_observations: 1
+  candidate_min_new_observations: 1
+  candidate_cooldown_episodes: 4
+  replay_current_regime_only: true
+  candidate_replay_since_first_evidence: true
+  policy_evolution_enabled: true
+  policy_evolve_on_shift: true
+  policy_evolve_if_memory_promoted: false
+  future_audit_enabled: true
+  future_audit_min_observations: 2
+  future_audit_max_observations: 4
+  future_audit_early_harm_observations: 1
+  active_audit_enabled: true
+  active_audit_max_per_episode: 1
+  active_audit_min_observations: 2
+  active_audit_min_negative_observations: 2
+  active_audit_retire_mean_delta: -0.50
+  active_audit_cooldown_episodes: 0
+  active_audit_restore_predecessors: false
+  conflict_supersession_enabled: true
+
+evaluation:
+  seed: 42
+  bootstrap_samples: 2000
+  confidence_level: 0.95
+  recovery_fraction: 0.90
+
+policy:
+  top_k: 3
+  memory_token_budget: 700
+  write_confidence_threshold: 0.50
+  dedup_similarity_threshold: 0.82
+  rollback_min_uses: 6
+  rollback_utility_threshold: 0.30
+  allow_cross_domain_transfer: false

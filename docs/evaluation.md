@@ -245,11 +245,18 @@ unreliable feedback.
 ### 5.2 PolicyShift benchmark
 
 The deterministic enterprise-style stream keeps one refund-policy domain while
-changing the hidden policy over three phases:
+changing the hidden policy. The default remains three phases:
 
 1. seven-day refund window;
 2. expansion to fourteen days;
 3. thirty-day premium exception while standard customers remain at fourteen.
+
+`benchmark.policy_schedule` can repeat versions to construct revocation and
+recurrence without changing the task format. The causal-governance experiment
+uses `v1 -> v2 -> v3 -> v2 -> v1 -> v2`. Every phase has a unique public phase
+index, while the active version, valid/stale memory tags, and reversion labels
+remain hidden from solver and critic prompts and are used only for post-hoc
+evaluation.
 
 The prompt exposes only customer tier and request day. Policy versions and both
 labels remain outside the solver payload. Every sample belongs to exactly one
@@ -408,6 +415,28 @@ both precision fields as `N/A` rather than implying a measured zero.
 Future-audit harm, false rollback, latency, and observation-count metrics use
 only evidence-completed audits. Hidden oracle deltas score the result after the
 learner-visible decision; they do not choose confirmation or rollback.
+
+### Active-memory governance metrics
+
+For schedules with revocation or recurrence, the runner records:
+
+- harmful active-memory exposure: stale cards explicitly applied on an oracle
+  failure;
+- stale-memory retention: active/retrievable stale memory opportunities divided
+  by all known stale memory opportunities;
+- selective-forgetting precision and recall over adequately exposed
+  memory/regime pairs;
+- false retirement of a memory whose tags remain valid in the current regime;
+- exact-version counterfactual audit coverage and budget utilization;
+- learner-visible retirement latency and post-hoc oracle delta;
+- predecessor reactivation and replay/probation reacquisition correctness;
+- control requests/tokens and the full budget-ledger total.
+
+The benchmark metadata supplies only post-hoc valid/stale tags. Online
+retirement receives task input, applied memory IDs, visible feedback, feedback
+trust, and the paired control result. Static has no stale-memory exposure
+because it never learns a memory; that does not make it a forgetting solution,
+so retention metrics must be read together with changed-case success.
 
 ### 6.8 Resource and latency metrics
 

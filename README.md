@@ -34,7 +34,9 @@ flowchart LR
     Q --> F["Later memory-on/off future audit"]
     F -->|confirm| A["Activate + supersede conflicts"]
     F -->|harm| J
-    A --> U["Online utility + rollback/reactivation"]
+    A --> U["Online utility + rollback"]
+    A --> K["Trusted-failure exact-version audit"]
+    K -->|causal harm| Z["Retire + verified reacquisition"]
 ```
 
 VERA has two time scales:
@@ -67,8 +69,12 @@ validation decision, event, and rollback is persisted with provenance.
   current-regime ordinary replay, and cross-regime protected replay.
 - Probationary memory, later memory-on/off counterfactual audit, asymmetric
   harm stopping, stream-end expiration, and explicit realized-audit coverage.
-- Conflict-aware supersession with predecessor reactivation after successor
-  rollback.
+- Conflict-aware supersession with predecessor reactivation after legacy
+  posterior rollback; causal retirement instead requires verified
+  reacquisition because the predecessor may also be stale.
+- Continuous active-memory governance with budgeted exact-version
+  leave-one-out controls, persisted learner-visible causal ledgers, selective
+  retirement, and replay/probation-based recurring-rule reacquisition.
 - Paired bootstrap promotion gates with protected-slice and resource checks.
 - Immutable run artifacts, SQLite audit state, sweeps, paired run comparison,
   and Markdown/JSON reports.
@@ -172,6 +178,20 @@ one visible source. Replay-passing memories enter probation and are confirmed
 or rolled back on later paired counterfactuals. This is deterministic mechanism
 evidence, not a public-model benchmark.
 
+## Active-memory revocation and recurrence diagnostic
+
+```bash
+evoshift run --config configs/experiments/policy_shift_causal_memory_demo.yaml
+evoshift sweep --spec configs/sweeps/policy_shift_causal_memory_baselines.yaml
+evoshift sweep --spec configs/sweeps/policy_shift_causal_memory_ablations.yaml
+evoshift sweep --spec configs/sweeps/policy_shift_causal_memory_stress.yaml
+```
+
+This schedule tests whether an already-active rule is selectively forgotten
+when policy versions are revoked and whether a recurring rule can be reacquired
+through normal verification. Oracle regime tags are metrics-only; online
+retirement uses trusted learner-visible memory-on/off deltas.
+
 ## Reproducibility and quality gates
 
 ```bash
@@ -185,20 +205,22 @@ python scripts/verify_bbh_manifest.py
 
 Verified locally on 2026-08-05:
 
-- 109 tests passed;
-- branch-aware coverage: 84.77% (`fail_under = 80`);
-- Ruff and strict mypy passed;
+- 120 tests passed;
+- branch-aware coverage: 85.03% (`fail_under = 80`);
+- Ruff and strict mypy passed over 50 source files;
 - source and wheel distributions built successfully;
-- all 27 experiment, benchmark fragment, provider fragment, and sweep YAML
-  files passed schema/loading validation, including 408 expanded sweep
+- all 31 experiment, benchmark fragment, provider fragment, and sweep YAML
+  files passed schema/loading validation, including 668 expanded sweep
   assignments;
 - the OpenAI-compatible provider contract suite passed, and an opt-in live
   smoke against a private compatible gateway returned exactly `OK`;
-- four BBH task files and 16 public smoke samples passed integrity checks.
+- all 27 pinned BBH manifest files passed upstream byte-size and SHA-256 audit,
+  and 16 public smoke samples passed adapter checks.
 
-The final deterministic evidence includes a 60-run same-stream baseline sweep
-and a 140-run named ablation sweep. These diagnose algorithm semantics and
-resource tradeoffs; they are not public-model or SOTA results.
+The active-memory experiment adds a 60-run baseline sweep, 120-run named
+ablation sweep, and 80-run feedback/threshold stress sweep. These diagnose
+algorithm semantics and resource tradeoffs; they are not public-model or SOTA
+results.
 
 The live smoke proves protocol compatibility only. It is not a benchmark result.
 
@@ -229,6 +251,7 @@ dataset hash, and comparison artifact.
 - [Results template](docs/results_template.md)
 - [Robust-feedback experiment](docs/experiment_robust_feedback_promotion.md)
 - [Dynamic-trust and future-audit experiment](docs/experiment_dynamic_trust_conflict_memory.md)
+- [Active-memory causal-governance experiment](docs/experiment_causal_memory_governance.md)
 
 ## Security
 

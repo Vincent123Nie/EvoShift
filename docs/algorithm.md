@@ -419,6 +419,41 @@ This reduces harmful exposure but is not anytime-valid inference. Repeated
 looks at a conventional bootstrap interval can inflate error; confidence
 sequences or sequential probability-ratio tests are a next-step replacement.
 
+## Continuous causal governance for active memories
+
+Probation audit answers whether a new card should become active. It does not
+answer whether a once-valid active card remains valid after later policy
+revocation. Mixed success/failure posterior updates also confound the base
+model, other memories, and the audited card.
+
+When a confirmed active card is explicitly reported in `applied_memory_ids`,
+the learner-visible result is a trusted failure, and the per-episode budget is
+available, EvoShift runs one exact-version control:
+
+```text
+active_delta_t = visible_feedback(memory_on_t)
+               - visible_feedback(memory_off_t)
+```
+
+The exact `(memory_id, version)` is excluded; other observable state is held
+fixed. `MemoryItem` persists the count of audits, positive/negative/neutral
+observations, delta sum, and last audit index. Hidden oracle scores are not
+accepted by `ActiveMemoryAuditor.observe`; the runner attaches them later for
+precision, false-retirement, and harm metrics.
+
+The default retirement rule requires two negative observations and a mean delta
+at or below `active_audit_retire_mean_delta`. At most
+`active_audit_max_per_episode` controls are issued. Probation memories are
+ineligible, so future admission audit and active governance never compete for
+the same version.
+
+If a retired successor names a superseded predecessor, active causal retirement
+does not restore it immediately. A multi-step policy reversion can invalidate
+both. Instead, the candidate pool releases the predecessor signature while
+SQLite retains provenance; a recurring rule must be proposed as a new version
+and pass replay plus probation again. Eager restoration remains an explicit
+ablation.
+
 ## Slow-loop policy mutation
 
 The MVP policy proposer is deterministic, not LLM-generated. It summarizes
@@ -465,6 +500,12 @@ deleting provenance. If the successor later crosses posterior rollback, each
 still-superseded predecessor is reactivated. A candidate rejected during future
 probation never supersedes the old rule, so there is nothing to restore.
 
+Posterior rollback remains a low-cost baseline and fallback. Active causal
+governance is the higher-fidelity path for attributed trusted failures. On the
+registered revocation benchmark, disabling posterior rollback leaves the causal
+auditor's results unchanged, while disabling the causal auditor leaves stale
+memories active.
+
 This mechanism can misattribute success when several cards are retrieved. The
 `applied_memory_ids` contract reduces but does not eliminate the credit
 assignment problem. Counterfactual leave-one-memory-out evaluation would be
@@ -486,6 +527,9 @@ The canonical report supports:
 - future-audit confirmation, rollback, expiration, false rollback, exposure,
   observation, and latency metrics;
 - conflict supersession and reactivation counts;
+- harmful active-memory exposure and stale-memory retention;
+- selective-forgetting precision/recall, false retirement, retirement latency,
+  audit coverage/budget utilization, and reacquisition correctness;
 - total shift-alarm events and affected domains;
 - separate memory and policy validation/promotion counts;
 - tokens, cost, and p50/p95 latency.

@@ -167,3 +167,42 @@ falls from `0.8571` with static trust to `0.7143` with the full method, and to
 `0.5857` under noise plus burst. The next P1 target is lower-latency change
 confirmation using sequentially valid evidence, without sacrificing the new
 safety slices. UCB versus Thompson sampling remains P2.
+
+## Iteration 4: continuous causal governance for active memory
+
+- Branch: `codex/causal-memory-governance`
+- Experiment record:
+  [experiment_causal_memory_governance.md](experiment_causal_memory_governance.md)
+- Scope: policy revocation, multi-step reversion, recurrence, selective
+  forgetting, and bounded exact-version active-memory audit.
+
+PolicyShift now accepts a version schedule; the registered stream is
+`v1 -> v2 -> v3 -> v2 -> v1 -> v2`. On a trusted failure where an active card
+was actually applied, EvoShift runs a paired control excluding that exact
+version. Only the learner-visible delta updates its persisted causal ledger.
+Hidden oracle tags score harm, stale retention, forgetting, false retirement,
+and reacquisition after the online decision.
+
+Across five seeds, clean causal governance improves score from `0.8333` to
+`0.9167` versus current posterior rollback, cuts harmful exposure from `20.0`
+to `3.0`, cuts stale retention from `0.7500` to `0.2222`, and raises invariant
+retention from `0.8826` to `1.0`. Under 10% noise plus burst, harm falls from
+`17.2` to `4.6` and stale retention from `0.8000` to `0.3580`; forgetting
+precision/recall and invariant retention remain `1.0`.
+
+Two discoveries changed the implementation. First, causal auditing with
+posterior rollback disabled is identical to the full row, so posterior utility
+does not solve this benchmark. Second, eager predecessor restoration is unsafe:
+it raises clean harm from `3.0` to `9.0` because a multi-step reversion can make
+both successor and predecessor stale. The adopted path retains provenance but
+requires recurring rules to pass replay and probation as a new version.
+
+The one-negative-observation variant scores higher in the primary matrix but is
+rejected. Under static trust at 10% noise its false-retirement rate is about
+`0.50`; at 25% noise it reaches `0.83-0.87`. Dynamic two-evidence retirement is
+the safer default, though its own 25% noise stress still reaches `0.10` false
+retirement in one condition. Public-model validation remains open.
+
+Final quality evidence: 120 tests, 85.03% branch-aware coverage, Ruff,
+formatting, strict mypy over 50 source files, package build, 31 YAML files with
+668 expanded sweep assignments, and the full pinned BBH manifest audit.

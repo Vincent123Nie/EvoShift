@@ -66,3 +66,18 @@ def test_candidate_pool_blocks_probation_and_reopens_after_future_rejection() ->
     pool.mark_rejected(evidence)
     evidence = pool.observe(_candidate("e2"), 5)
     assert pool.readiness(evidence, 5) == (True, "ready")
+
+
+def test_candidate_pool_reopens_a_causally_retired_memory_for_recurrence() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_new_observations=1,
+        cooldown_episodes=0,
+    )
+    active = _candidate().model_copy(update={"memory_id": "memory", "status": MemoryStatus.ACTIVE})
+    pool.seed_accepted([active])
+
+    pool.mark_memory_retired(active.model_copy(update={"status": MemoryStatus.RETIRED}))
+    evidence = pool.observe(_candidate("e2"), 20)
+
+    assert pool.readiness(evidence, 20) == (True, "ready")

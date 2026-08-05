@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Callable
 
@@ -65,11 +66,27 @@ def _v3_scenario(index: int, rng: random.Random) -> PolicyScenario:
     return cases[index % len(cases)]
 
 
-POLICY_PHASES: tuple[PolicyPhase, ...] = (
-    PolicyPhase("phase_0", "v1", 7, 7, _v1_scenario),
-    PolicyPhase("phase_1", "v2", 14, 14, _v2_scenario),
-    PolicyPhase("phase_2", "v3", 14, 30, _v3_scenario),
+POLICY_TEMPLATES: dict[str, PolicyPhase] = {
+    "v1": PolicyPhase("", "v1", 7, 7, _v1_scenario),
+    "v2": PolicyPhase("", "v2", 14, 14, _v2_scenario),
+    "v3": PolicyPhase("", "v3", 14, 30, _v3_scenario),
+}
+DEFAULT_POLICY_SCHEDULE: tuple[str, ...] = ("v1", "v2", "v3")
+POLICY_PHASES: tuple[PolicyPhase, ...] = tuple(
+    PolicyPhase(
+        f"phase_{phase_index}",
+        version,
+        POLICY_TEMPLATES[version].standard_window,
+        POLICY_TEMPLATES[version].premium_window,
+        POLICY_TEMPLATES[version].scenario,
+    )
+    for phase_index, version in enumerate(DEFAULT_POLICY_SCHEDULE)
 )
+VALID_MEMORY_TAGS: dict[str, tuple[str, ...]] = {
+    "v1": (),
+    "v2": ("policy_v2",),
+    "v3": ("policy_v2", "policy_v3"),
+}
 
 
 class PolicyShiftBenchmark(BenchmarkAdapter):
@@ -90,6 +107,7 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         feedback_shared_source: bool = False,
         feedback_shared_source_name: str = "customer_support_portal",
         feedback_attack_burst_length: int = 0,
+        policy_schedule: Sequence[str] | None = None,
         shuffle_within_phase: bool = False,
         limit: int = 0,
     ) -> None:
@@ -107,6 +125,15 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
             raise DatasetError("feedback_shared_source_name must not be empty")
         if feedback_attack_burst_length < 0:
             raise DatasetError("feedback_attack_burst_length cannot be negative")
+        schedule = tuple(policy_schedule or DEFAULT_POLICY_SCHEDULE)
+        if not schedule:
+            raise DatasetError("policy_shift policy_schedule must not be empty")
+        invalid_versions = sorted(set(schedule) - set(POLICY_TEMPLATES))
+        if invalid_versions:
+            raise DatasetError(
+                "policy_shift policy_schedule supports only v1, v2, and v3: "
+                + ", ".join(invalid_versions)
+            )
         self.seed = seed
         self.phase_size = phase_size
         self.feedback_noise_rate = feedback_noise_rate
@@ -114,15 +141,36 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         self.feedback_shared_source = feedback_shared_source
         self.feedback_shared_source_name = feedback_shared_source_name.strip()
         self.feedback_attack_burst_length = feedback_attack_burst_length
+        self.policy_schedule = schedule
         self.shuffle_within_phase = shuffle_within_phase
         self.limit = limit
 
     def load(self) -> list[BenchmarkSample]:
         stream: list[BenchmarkSample] = []
-        for phase_index, phase in enumerate(POLICY_PHASES):
+        phases = [
+            PolicyPhase(
+                f"phase_{phase_index}",
+                version,
+                POLICY_TEMPLATES[version].standard_window,
+                POLICY_TEMPLATES[version].premium_window,
+                POLICY_TEMPLATES[version].scenario,
+            )
+            for phase_index, version in enumerate(self.policy_schedule)
+        ]
+        for phase_index, phase in enumerate(phases):
             rng = random.Random(stable_seed(self.seed, phase.name))
+            previous_phase = phases[phase_index - 1] if phase_index > 0 else None
+            future_phases = phases[phase_index + 1 :]
             samples = [
-                self._make_sample(phase, phase_index, position, rng)
+                self._make_sample(
+                    phase,
+                    phase_index,
+                    position,
+                    rng,
+                    previous_phase=previous_phase,
+                    future_phases=future_phases,
+                    previously_seen_versions=self.policy_schedule[:phase_index],
+                )
                 for position in range(self.phase_size)
             ]
             if self.shuffle_within_phase:
@@ -148,12 +196,33 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         phase_index: int,
         position: int,
         rng: random.Random,
+        *,
+        previous_phase: PolicyPhase | None,
+        future_phases: Sequence[PolicyPhase],
+        previously_seen_versions: Sequence[str],
     ) -> BenchmarkSample:
         scenario = phase.scenario(position, rng)
         tier = scenario.tier
         request_day = scenario.request_day
         window = phase.premium_window if tier == "premium" else phase.standard_window
         oracle = APPROVE if request_day <= window else DENY
+        previous_oracle = (
+            self._oracle_for(previous_phase, tier, request_day) if previous_phase else None
+        )
+        transition_case = previous_oracle is not None and previous_oracle != oracle
+        future_change_case = not transition_case and any(
+            self._oracle_for(future_phase, tier, request_day) != oracle
+            for future_phase in future_phases
+        )
+        protected = not transition_case and not future_change_case
+        scenario = PolicyScenario(
+            tier=tier,
+            request_day=request_day,
+            transition_case=transition_case,
+            protected=protected,
+            future_change_case=future_change_case,
+            case_type=scenario.case_type,
+        )
         feedback, feedback_kind, feedback_source, feedback_attack_goal = self._observed_feedback(
             oracle,
             scenario=scenario,
@@ -178,6 +247,9 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
                 "position_in_phase": position,
                 "is_shift_boundary": phase_index > 0 and position == 0,
                 "policy_version": phase.version,
+                "previous_policy_version": previous_phase.version if previous_phase else "",
+                "is_policy_reversion": phase.version in previously_seen_versions,
+                "policy_schedule": list(self.policy_schedule),
                 "standard_window": phase.standard_window,
                 "premium_window": phase.premium_window,
                 "customer_tier": tier,
@@ -193,8 +265,17 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
                 "feedback_source": feedback_source,
                 "feedback_attack_goal": feedback_attack_goal,
                 "feedback_corrupted": feedback != oracle,
+                "valid_memory_tags": list(VALID_MEMORY_TAGS[phase.version]),
+                "stale_memory_tags": sorted(
+                    set().union(*VALID_MEMORY_TAGS.values()) - set(VALID_MEMORY_TAGS[phase.version])
+                ),
             },
         )
+
+    @staticmethod
+    def _oracle_for(phase: PolicyPhase, tier: str, request_day: int) -> str:
+        window = phase.premium_window if tier == "premium" else phase.standard_window
+        return APPROVE if request_day <= window else DENY
 
     def _observed_feedback(
         self,

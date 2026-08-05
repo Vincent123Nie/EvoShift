@@ -142,6 +142,11 @@ class CandidateEvidencePool:
         evidence.accepted = False
         evidence.probationary = False
 
+    def mark_memory_retired(self, memory: MemoryItem) -> None:
+        evidence = self._items.get(candidate_signature(memory))
+        if evidence is not None:
+            self.mark_rejected(evidence)
+
 
 __all__ = [
     "CandidateEvidence",

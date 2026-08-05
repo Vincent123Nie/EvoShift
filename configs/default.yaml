@@ -65,6 +65,14 @@ evolution:
   policy_evolution_enabled: true
   policy_evolve_on_shift: true
   policy_evolve_if_memory_promoted: false
+  active_audit_enabled: false
+  active_audit_max_per_episode: 1
+  active_audit_min_observations: 2
+  active_audit_min_negative_observations: 2
+  active_audit_retire_mean_delta: -0.25
+  active_audit_cooldown_episodes: 0
+  active_audit_restore_predecessors: false
+  min_feedback_trust_for_active_audit: 0.60
 
 benchmark:
   kind: synthetic_shift

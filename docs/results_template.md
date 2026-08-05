@@ -162,6 +162,21 @@ Backward transfer: TBD. Forgetting: TBD. Frozen held-out forward transfer: TBD.
 Only the named component may differ from Full VERA. Record the resolved config
 hash for every row.
 
+### 9.1 Active-memory governance
+
+| Variant | Harm exposure | Stale retention | Forget precision | Forget recall | False retirement | Reacquisition n / correctness | Audit coverage | Control requests/tokens |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Posterior rollback | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| Explicit supersession only | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| Causal auditor | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| Eager predecessor restoration | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+| One-negative-observation | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+
+Report the number of adequately exposed memory/regime pairs. A zero
+false-retirement rate with zero retirements is not evidence of selective
+forgetting, and Static's zero stale exposure must be read together with its
+changed-rule success.
+
 ## 10. Resource and latency breakdown
 
 | Method | Foreground logical requests | External provider requests | Foreground input tokens | Foreground output tokens | External provider tokens | USD | Tokens / success | Foreground p50 ms | Foreground p95 ms |

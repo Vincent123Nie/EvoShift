@@ -35,6 +35,9 @@ flowchart LR
     V --> G["Promotion gate"]
     G --> F["Probation + future counterfactual audit"]
     F --> M
+    R --> K["Active-memory causal auditor"]
+    K --> A
+    K --> M
     R --> X["Run artifacts"]
     R --> L["Budget ledger"]
     O --> Q["SQLite response cache"]
@@ -60,6 +63,7 @@ cache behavior remain behind `LLMClient`.
 | `ReplayVerifier` | Same-example champion/challenger replay and protected-buffer construction | Threshold policy |
 | `PromotionGate` | Statistical, regression, and resource gates | Candidate generation |
 | `FutureCounterfactualAuditor` | Later memory-on/off evidence, confirmation, rollback, expiration, and post-hoc oracle attribution | Hidden-oracle online decisions |
+| `ActiveMemoryAuditor` | Budgeted exact-version leave-one-out monitoring and learner-visible causal retirement decisions | Oracle labels, probation governance, or unbounded audits |
 | `ResponsesClient` | `/responses`, retry, parsing, idempotency, cache and budget integration | Benchmark semantics |
 | `SQLiteStore` | Transactional audit state | Large-scale vector search |
 | `RunArtifacts` | Human- and machine-readable experiment evidence | Secret storage |
@@ -116,6 +120,12 @@ sequenceDiagram
         R->>R: decide from learner-visible future delta
         R->>S: confirm, rollback, or keep pending
     end
+    opt confirmed active card is applied on a trusted failure
+        R->>A: solve control excluding the exact active version
+        A-->>R: leave-one-memory-out control
+        R->>R: update persisted learner-visible causal ledger
+        R->>S: keep active or retire; oracle attribution is post-hoc
+    end
     alt detected shift and policy evolution enabled
         R->>R: deterministic bounded PolicyPatch
         R->>V: replay champion policy vs challenger policy
@@ -152,6 +162,9 @@ The fast loop runs at episode granularity:
 9. supersede explicitly conflicting predecessors only after confirmation;
 10. retire an active memory whose posterior utility remains too low after enough
    uses.
+11. on a trusted failure caused by an applied active card, spend a bounded
+    control call, update its causal ledger, and selectively retire it after the
+    configured evidence threshold.
 
 The slow loop is gated by detected distribution shift:
 
@@ -181,7 +194,9 @@ stateDiagram-v2
     Active --> Superseded: confirmed successor names this memory
     Superseded --> Active: successor later rolls back
     Active --> Retired: posterior utility below threshold after min uses
+    Active --> Retired: repeated negative active leave-one-out evidence
     Active --> Retired: newer version becomes active
+    Superseded --> Shadow: recurring rule is proposed as a new version
     Rejected --> [*]
     Superseded --> [*]
     Retired --> [*]
@@ -192,6 +207,11 @@ provenance episode IDs, confidence, validation statistics, and a Beta posterior
 state. A stable content hash supplies a memory ID. Near-duplicate candidates
 reuse the existing ID and increment its version. Activating a new version
 retires older active versions of the same memory.
+
+Active causal retirement does not eagerly reactivate a predecessor. The
+predecessor may also be stale under a multi-step reversion. EvoShift retains its
+versioned provenance, reopens its candidate signature, and requires recurring
+evidence to pass replay and probation before reacquisition.
 
 `SHADOW` is a crucial safety boundary: the candidate can be forced into a
 challenger replay without appearing in normal champion retrieval. `PROBATION`

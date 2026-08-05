@@ -1,0 +1,11 @@
+base_config: configs/experiments/policy_shift_causal_memory_demo.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - static
+  - reflexion
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_burst_length: [0, 2]
+# 3 algorithms * 5 seeds * 2 noise levels * 2 burst lengths = 60 runs.
+max_runs: 60

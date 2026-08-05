@@ -366,6 +366,9 @@ Tunable values include:
 - whether slow policy evolution still runs after same-episode memory promotion;
 - bootstrap samples/confidence;
 - future-audit minimum, maximum, and early-harm observation counts;
+- active-audit enablement, exact per-episode budget, minimum/negative evidence
+  counts, retirement mean-delta threshold, cooldown, and eager-restoration
+  ablation;
 - conflict supersession and replay-since-first-evidence toggles;
 - minimum gain, CI lower bound, regression and cost gates;
 - rollback utility threshold and minimum uses.
@@ -413,6 +416,11 @@ result.
   precision, realized precision, and realized coverage separately.
 - The hard PolicyShift results use a deterministic demo provider and therefore
   validate lifecycle semantics rather than real-model generalization.
+- Active-memory governance uses hidden policy/tag metadata only for post-hoc
+  forgetting metrics. The online auditor accepts learner-visible deltas only;
+  verify this separation when adding a new benchmark adapter.
+- Reversion/recurrence metrics are synthetic-policy labels. They do not replace
+  an untouched public-model or executable-policy evaluation.
 
 These gaps should be disclosed and, for publication-quality work, closed before
 making a strong empirical claim.

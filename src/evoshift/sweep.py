@@ -56,6 +56,17 @@ _AGGREGATE_FIELDS = {
     ),
     "memory_supersessions": "memory_supersessions",
     "memory_reactivations": "memory_reactivations",
+    "harmful_active_memory_exposure_n": "harmful_active_memory_exposure",
+    "stale_memory_retention_rate": "stale_memory_retention",
+    "selective_forgetting_precision": "selective_forgetting_precision",
+    "selective_forgetting_recall": "selective_forgetting_recall",
+    "false_retirement_rate": "false_retirement",
+    "correct_reacquisition_rate": "correct_reacquisition",
+    "memory_reacquisitions": "memory_reacquisitions",
+    "active_audit_control_requests": "active_audit_control_requests",
+    "counterfactual_audit_coverage": "counterfactual_audit_coverage",
+    "active_audit_budget_utilization": "active_audit_budget_utilization",
+    "active_audit_mean_retirement_latency": "active_audit_mean_retirement_latency",
     "confirmed_context_changes": "confirmed_context_changes",
     "total_requests": "total_requests",
     "total_tokens": "total_tokens",
@@ -170,6 +181,7 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         feedback = result.metrics.get("feedback", {})
         evolution = result.metrics.get("evolution", {})
         future_audit = result.metrics.get("future_audit", {})
+        active_governance = result.metrics.get("active_memory_governance", {})
         trust_model = result.metrics.get("feedback_trust_model", {})
         recovery_steps = result.metrics.get("recovery_steps", {})
         recovered = [
@@ -246,6 +258,27 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 ),
                 "memory_supersessions": evolution.get("memory_supersessions"),
                 "memory_reactivations": evolution.get("memory_reactivations"),
+                "harmful_active_memory_exposure_n": active_governance.get(
+                    "harmful_active_memory_exposure_n"
+                ),
+                "stale_memory_retention_rate": active_governance.get("stale_memory_retention_rate"),
+                "selective_forgetting_precision": active_governance.get(
+                    "selective_forgetting_precision"
+                ),
+                "selective_forgetting_recall": active_governance.get("selective_forgetting_recall"),
+                "false_retirement_rate": active_governance.get("false_retirement_rate"),
+                "correct_reacquisition_rate": active_governance.get("correct_reacquisition_rate"),
+                "memory_reacquisitions": active_governance.get("reacquisitions"),
+                "active_audit_control_requests": active_governance.get("control_requests"),
+                "counterfactual_audit_coverage": active_governance.get(
+                    "counterfactual_audit_coverage"
+                ),
+                "active_audit_budget_utilization": active_governance.get(
+                    "audit_budget_utilization"
+                ),
+                "active_audit_mean_retirement_latency": active_governance.get(
+                    "mean_retirement_latency"
+                ),
                 "confirmed_context_changes": trust_model.get("confirmed_context_changes"),
             }
         )
@@ -341,6 +374,17 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "future_audit_mean_harmful_exposure_observations",
         "memory_supersessions",
         "memory_reactivations",
+        "harmful_active_memory_exposure_n",
+        "stale_memory_retention_rate",
+        "selective_forgetting_precision",
+        "selective_forgetting_recall",
+        "false_retirement_rate",
+        "correct_reacquisition_rate",
+        "memory_reacquisitions",
+        "active_audit_control_requests",
+        "counterfactual_audit_coverage",
+        "active_audit_budget_utilization",
+        "active_audit_mean_retirement_latency",
         "confirmed_context_changes",
         "run_dir",
     ]
@@ -361,12 +405,12 @@ def _write_sweep_markdown(path: Path, aggregates: Iterable[Mapping[str, Any]]) -
             "| Algorithm | Variant | Parameters | Seeds | Score | Changed | Old leakage | "
             "Invariant | Premature | Attack follow | Corrupt quarantine | Promotion precision | "
             "Replay-est. precision | Realized precision | Realized coverage | Audit rollback | "
-            "Harmful promotion | False rollback | Rollback observations | Recovery | Requests | "
-            "Tokens |"
+            "Harmful promotion | False rollback | Harm exposure | Stale retention | Forget P | "
+            "Forget R | False retire | Reacquire | Recovery | Requests | Tokens |"
         ),
         (
             "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
-            "---:|---:|---:|---:|---:|---:|---:|---:|"
+            "---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
         ),
     ]
     for item in aggregates:
@@ -392,7 +436,12 @@ def _write_sweep_markdown(path: Path, aggregates: Iterable[Mapping[str, Any]]) -
                     _format_mean(item, "future_audit_rolled_back"),
                     _format_mean(item, "future_audit_harmful_promotion_rate"),
                     _format_mean(item, "future_audit_false_rollback_rate"),
-                    _format_mean(item, "future_audit_mean_rollback_observations"),
+                    _format_mean(item, "harmful_active_memory_exposure"),
+                    _format_mean(item, "stale_memory_retention"),
+                    _format_mean(item, "selective_forgetting_precision"),
+                    _format_mean(item, "selective_forgetting_recall"),
+                    _format_mean(item, "false_retirement"),
+                    _format_mean(item, "correct_reacquisition"),
                     _format_mean(item, "mean_recovery_steps"),
                     f"{item.get('total_requests_mean', 0.0):.1f}",
                     f"{item.get('total_tokens_mean', 0.0):.1f}",

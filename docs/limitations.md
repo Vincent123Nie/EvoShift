@@ -112,6 +112,21 @@ looks up to `future_audit_max_observations` are not backed by an anytime-valid
 confidence sequence. Ordinary noise can therefore increase unnecessary
 rollback, as observed in the static-trust ablation.
 
+### Active causal audit is selective, not complete causal identification
+
+The active auditor runs only after a trusted failure and only for applied IDs
+reported by the solver. This makes cost bounded, but it does not audit silent
+harm, successful-but-unnecessary memories, or interactions among several cards.
+Its ledger accumulates negative observations across the memory version rather
+than using an anytime-valid or context-windowed test. At 25% noise the adopted
+dynamic two-evidence rule still shows up to 0.10 false retirement in the
+deterministic stress sweep.
+
+Oracle valid/stale memory tags exist only for the synthetic PolicyShift metric.
+A real deployment needs domain policy provenance, executable counterfactuals,
+or human review to know whether a retirement was correct. The deterministic
+demo validates lifecycle semantics, not general causal identifiability.
+
 ## Dataset limitations
 
 ### BBH is a proxy for changing task distributions
@@ -165,15 +180,17 @@ EvoShift currently does not attempt to:
 
 ## Prioritized roadmap
 
-1. Reduce dynamic-trust adaptation delay with sequentially valid change
-   evidence while preserving premature-update and poison-persistence safety.
-2. Run per-card counterfactual audit on an untouched public or realistic policy
+1. Validate causal active-memory governance with a frozen public API model and
+   a realistic policy/tool benchmark.
+2. Replace cumulative failure-triggered evidence with context-windowed,
+   sequentially valid retirement tests and bounded multi-memory attribution.
+3. Run per-card counterfactual audit on an untouched public or realistic policy
    stream with a frozen API model.
-3. Implement exact McNemar plus block/cluster bootstrap for repeated seeds.
-4. Add a dedicated LongMemEval-V2 adapter and temporal scorers.
-5. Add dense/hybrid retrieval and contradiction-aware memory admission.
-6. Add BFCL structured tool-call state and official executable scoring.
-7. Add tenant-aware storage/cache isolation and encrypted artifact export.
+4. Implement exact McNemar plus block/cluster bootstrap for repeated seeds.
+5. Add a dedicated LongMemEval-V2 adapter and temporal scorers.
+6. Add dense/hybrid retrieval and contradiction-aware memory admission.
+7. Add BFCL structured tool-call state and official executable scoring.
+8. Add tenant-aware storage/cache isolation and encrypted artifact export.
 
 Until those items are complete, the strongest honest claim is a tested,
 auditable framework for studying API-only test-time adaptation—not a proven

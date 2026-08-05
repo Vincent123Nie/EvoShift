@@ -61,3 +61,28 @@ async def test_memory_agent_injects_retrieved_experience(tmp_path: Path) -> None
     user_payload = str(request.messages[-1]["content"])
     assert '"phase"' not in user_payload
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_agent_can_exclude_one_exact_memory_version(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    memory = MemoryItem(
+        memory_id="m1",
+        version=2,
+        status=MemoryStatus.ACTIVE,
+        trigger="addition arithmetic",
+        directive="Add operands carefully.",
+    )
+    store.save_memory(memory)
+    client = CapturingClient()
+    agent = MemoryAgent(client, ProviderConfig(model="fake"), MemoryManager(store))
+
+    prediction = await agent.solve(
+        BenchmarkSample(sample_id="s", prompt="addition: 2+2", reference="4"),
+        PolicyGenome(top_k=1),
+        exclude_memory_versions=[("m1", 2)],
+    )
+
+    assert prediction.retrieved == []
+    assert prediction.output.applied_memory_ids == []
+    store.close()

@@ -169,6 +169,7 @@ def test_policy_shift_factory_uses_noise_configuration(tmp_path: Path) -> None:
         feedback_shared_source=True,
         feedback_shared_source_name="shared_portal",
         feedback_attack_burst_length=2,
+        policy_schedule=["v1", "v2", "v1", "v2"],
     )
 
     adapter = create_benchmark(config, root=tmp_path, seed=9)
@@ -179,6 +180,43 @@ def test_policy_shift_factory_uses_noise_configuration(tmp_path: Path) -> None:
     assert adapter.feedback_shared_source is True
     assert adapter.feedback_shared_source_name == "shared_portal"
     assert adapter.feedback_attack_burst_length == 2
+    assert adapter.policy_schedule == ("v1", "v2", "v1", "v2")
+
+
+def test_policy_shift_supports_revocation_and_recurring_regimes() -> None:
+    samples = PolicyShiftBenchmark(
+        seed=7,
+        phase_size=8,
+        feedback_noise_rate=0.0,
+        feedback_attack_rate=0.0,
+        policy_schedule=["v1", "v2", "v1", "v2"],
+    ).load()
+
+    assert len(samples) == 32
+    assert [
+        next(sample for sample in samples if sample.phase == f"phase_{index}").metadata[
+            "policy_version"
+        ]
+        for index in range(4)
+    ] == ["v1", "v2", "v1", "v2"]
+    reverted = [sample for sample in samples if sample.phase == "phase_2"]
+    recurring = [sample for sample in samples if sample.phase == "phase_3"]
+    assert all(sample.metadata["is_policy_reversion"] for sample in reverted + recurring)
+    assert any(sample.metadata["transition_case"] for sample in reverted)
+    assert any(sample.metadata["transition_case"] for sample in recurring)
+    assert all("policy_v2" in sample.metadata["stale_memory_tags"] for sample in reverted)
+    assert all("policy_v2" in sample.metadata["valid_memory_tags"] for sample in recurring)
+    assert all(
+        "policy_schedule" not in sample.prompt and "stale_memory_tags" not in sample.prompt
+        for sample in samples
+    )
+
+
+def test_policy_shift_rejects_unknown_policy_versions() -> None:
+    with pytest.raises(ValueError, match="supports only v1, v2, and v3"):
+        BenchmarkConfig(kind="policy_shift", path=None, policy_schedule=["v1", "v4"])
+    with pytest.raises(DatasetError, match="supports only v1, v2, and v3"):
+        PolicyShiftBenchmark(policy_schedule=["v4"])
 
 
 def test_policy_shift_shared_source_burst_creates_observable_contexts() -> None:

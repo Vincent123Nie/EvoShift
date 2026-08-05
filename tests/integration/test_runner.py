@@ -185,6 +185,69 @@ async def test_policy_shift_hard_rolls_back_poison_and_relearns_real_change(
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_causal_memory_governance_forgets_stale_and_reacquires_recurring_rule(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            )
+        }
+    )
+    baseline_config = config.model_copy(
+        update={"evolution": config.evolution.model_copy(update={"active_audit_enabled": False})}
+    )
+    causal_adapter = create_benchmark(
+        config.benchmark,
+        root=Path.cwd(),
+        seed=config.evaluation.seed,
+    )
+    baseline_adapter = create_benchmark(
+        baseline_config.benchmark,
+        root=Path.cwd(),
+        seed=baseline_config.evaluation.seed,
+    )
+
+    causal = await EvoShiftRunner(config, causal_adapter, workdir=Path.cwd()).run()
+    baseline = await EvoShiftRunner(
+        baseline_config,
+        baseline_adapter,
+        workdir=Path.cwd(),
+    ).run()
+
+    governance = causal.metrics["active_memory_governance"]
+    baseline_governance = baseline.metrics["active_memory_governance"]
+    assert governance["causal_retirements"] >= 1
+    assert governance["selective_forgetting_precision"] == 1.0
+    assert (
+        governance["selective_forgetting_recall"]
+        > baseline_governance["selective_forgetting_recall"]
+    )
+    assert governance["false_retirement_rate"] == 0.0
+    assert (
+        governance["harmful_active_memory_exposure_n"]
+        < baseline_governance["harmful_active_memory_exposure_n"]
+    )
+    assert (
+        governance["stale_memory_retention_rate"]
+        < baseline_governance["stale_memory_retention_rate"]
+    )
+    assert governance["counterfactual_audit_coverage"] == 1.0
+    assert governance["control_requests"] <= (
+        causal.metrics["n_episodes"] * config.evolution.active_audit_max_per_episode
+    )
+    assert governance["reacquisitions"] >= 1
+    assert governance["correct_reacquisition_rate"] == 1.0
+    assert (
+        causal.metrics["policy_shift"]["invariant_retention_rate"]
+        >= baseline.metrics["policy_shift"]["invariant_retention_rate"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_frozen_audit_reuses_state_without_mutating_it(tmp_path: Path) -> None:
     source_config = load_config(Path("configs/experiments/offline_demo.yaml"))
     source_config = source_config.model_copy(

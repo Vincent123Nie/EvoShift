@@ -1,0 +1,23 @@
+base_config: configs/experiments/policy_shift_causal_memory_demo.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_burst_length: [0, 2]
+variants:
+  causal_auditor: {}
+  current_posterior_rollback:
+    evolution.active_audit_enabled: false
+  explicit_supersession_only:
+    evolution.active_audit_enabled: false
+    policy.rollback_min_uses: 1000
+  causal_auditor_no_posterior:
+    policy.rollback_min_uses: 1000
+  eager_predecessor_reactivation:
+    evolution.active_audit_restore_predecessors: true
+  one_negative_observation:
+    evolution.active_audit_min_observations: 1
+    evolution.active_audit_min_negative_observations: 1
+# 6 variants * 5 seeds * 2 noise levels * 2 burst lengths = 120 runs.
+max_runs: 120

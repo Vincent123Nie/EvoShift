@@ -86,6 +86,12 @@ class MemoryManager:
                     "beta": nearest.beta,
                     "use_count": nearest.use_count,
                     "success_count": nearest.success_count,
+                    "causal_audit_count": 0,
+                    "causal_positive_count": 0,
+                    "causal_negative_count": 0,
+                    "causal_neutral_count": 0,
+                    "causal_delta_sum": 0.0,
+                    "causal_last_audit_index": None,
                     "updated_at": datetime.now(timezone.utc),
                 }
             )
@@ -190,20 +196,54 @@ class MemoryManager:
             ):
                 updated = updated.model_copy(update={"status": MemoryStatus.RETIRED})
                 rolled_back.append(updated)
-                for superseded_id in updated.supersedes_memory_ids:
-                    previous = self.store.get_memory(superseded_id)
-                    if previous is None or previous.status != MemoryStatus.SUPERSEDED:
-                        continue
-                    restored = previous.model_copy(
-                        update={
-                            "status": MemoryStatus.ACTIVE,
-                            "updated_at": datetime.now(timezone.utc),
-                        }
-                    )
-                    self.store.save_memory(restored)
-                    reactivated.append(restored)
+                reactivated.extend(self._restore_predecessors(updated))
             self.store.save_memory(updated)
         return MemoryOutcome(tuple(rolled_back), tuple(reactivated))
+
+    def apply_active_audit(
+        self,
+        updated: MemoryItem,
+        *,
+        retire: bool,
+        restore_predecessors: bool = False,
+    ) -> MemoryOutcome:
+        current = self.store.get_memory(updated.memory_id, version=updated.version)
+        latest = self.store.get_memory(updated.memory_id)
+        if (
+            current is None
+            or latest is None
+            or latest.version != updated.version
+            or current.status != MemoryStatus.ACTIVE
+        ):
+            return MemoryOutcome()
+        if not retire:
+            self.store.save_memory(updated)
+            return MemoryOutcome()
+        retired = updated.model_copy(
+            update={
+                "status": MemoryStatus.RETIRED,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.store.save_memory(retired)
+        restored = self._restore_predecessors(retired) if restore_predecessors else []
+        return MemoryOutcome((retired,), tuple(restored))
+
+    def _restore_predecessors(self, successor: MemoryItem) -> list[MemoryItem]:
+        restored_items: list[MemoryItem] = []
+        for superseded_id in successor.supersedes_memory_ids:
+            previous = self.store.get_memory(superseded_id)
+            if previous is None or previous.status != MemoryStatus.SUPERSEDED:
+                continue
+            restored = previous.model_copy(
+                update={
+                    "status": MemoryStatus.ACTIVE,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
+            self.store.save_memory(restored)
+            restored_items.append(restored)
+        return restored_items
 
 
 __all__ = ["MemoryActivation", "MemoryManager", "MemoryOutcome"]

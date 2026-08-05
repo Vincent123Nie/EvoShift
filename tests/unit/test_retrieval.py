@@ -130,6 +130,57 @@ def test_confirmed_successor_supersedes_and_rollback_restores_prior_rule(
     store.close()
 
 
+def test_active_causal_retirement_persists_ledger_and_restores_prior_rule(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    prior = _memory("prior", "refund policy", "Use the 14 day rule.")
+    successor = _memory("successor", "refund policy", "Use the premium 30 day rule.").model_copy(
+        update={"supersedes_memory_ids": ["prior"]}
+    )
+    store.save_memory(prior)
+    manager.activate(successor, 0.2, 0.1, 0.0)
+    audited = successor.model_copy(
+        update={
+            "causal_audit_count": 2,
+            "causal_negative_count": 2,
+            "causal_delta_sum": -2.0,
+            "causal_last_audit_index": 20,
+        }
+    )
+
+    outcome = manager.apply_active_audit(audited, retire=True, restore_predecessors=True)
+
+    assert [item.memory_id for item in outcome.rolled_back] == ["successor"]
+    assert [item.memory_id for item in outcome.reactivated] == ["prior"]
+    retired = store.get_memory("successor")
+    assert retired is not None
+    assert retired.status == MemoryStatus.RETIRED
+    assert retired.causal_audit_count == 2
+    assert store.get_memory("prior").status == MemoryStatus.ACTIVE  # type: ignore[union-attr]
+    store.close()
+
+
+def test_active_causal_retirement_does_not_eagerly_restore_predecessor_by_default(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    prior = _memory("prior", "refund policy", "Use the 14 day rule.")
+    successor = _memory("successor", "refund policy", "Use the premium 30 day rule.").model_copy(
+        update={"supersedes_memory_ids": ["prior"]}
+    )
+    store.save_memory(prior)
+    active = manager.activate(successor, 0.2, 0.1, 0.0).active
+
+    outcome = manager.apply_active_audit(active, retire=True)
+
+    assert outcome.reactivated == ()
+    assert store.get_memory("prior").status == MemoryStatus.SUPERSEDED  # type: ignore[union-attr]
+    store.close()
+
+
 def test_probation_memory_is_retrievable_without_superseding_prior_rule(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "memory.sqlite3")
     manager = MemoryManager(store)

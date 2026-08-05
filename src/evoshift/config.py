@@ -102,6 +102,14 @@ class EvolutionConfig(ConfigModel):
     future_audit_min_observations: int = Field(default=4, ge=1, le=100)
     future_audit_max_observations: int = Field(default=8, ge=1, le=1000)
     future_audit_early_harm_observations: int = Field(default=0, ge=0, le=100)
+    active_audit_enabled: bool = False
+    active_audit_max_per_episode: int = Field(default=1, ge=1, le=20)
+    active_audit_min_observations: int = Field(default=2, ge=1, le=100)
+    active_audit_min_negative_observations: int = Field(default=2, ge=1, le=100)
+    active_audit_retire_mean_delta: float = Field(default=-0.25, ge=-1.0, le=0.0)
+    active_audit_cooldown_episodes: int = Field(default=0, ge=0, le=10000)
+    active_audit_restore_predecessors: bool = False
+    min_feedback_trust_for_active_audit: float = Field(default=0.60, ge=0.0, le=1.0)
     conflict_supersession_enabled: bool = True
 
     @model_validator(mode="after")
@@ -128,6 +136,11 @@ class EvolutionConfig(ConfigModel):
             raise ValueError(
                 "future_audit_early_harm_observations must not exceed future_audit_max_observations"
             )
+        if self.active_audit_min_negative_observations > self.active_audit_min_observations:
+            raise ValueError(
+                "active_audit_min_negative_observations must not exceed "
+                "active_audit_min_observations"
+            )
         return self
 
 
@@ -147,11 +160,19 @@ class BenchmarkConfig(ConfigModel):
     feedback_shared_source: bool = False
     feedback_shared_source_name: str = "customer_support_portal"
     feedback_attack_burst_length: int = Field(default=0, ge=0, le=1000)
+    policy_schedule: List[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_feedback_source(self) -> "BenchmarkConfig":
         if self.feedback_shared_source and not self.feedback_shared_source_name.strip():
             raise ValueError("feedback_shared_source_name must not be empty")
+        invalid_versions = sorted(
+            {version for version in self.policy_schedule if version not in {"v1", "v2", "v3"}}
+        )
+        if invalid_versions:
+            raise ValueError(
+                "policy_schedule supports only v1, v2, and v3: " + ", ".join(invalid_versions)
+            )
         return self
 
 
