@@ -94,3 +94,32 @@ absolute path-safety gate rather than merely match this branch.
 Failure is non-mergeable. Passing this inspected slice is necessary but not
 sufficient for merging; the candidate still requires the larger development
 matrix and fresh confirmation.
+
+## Targeted result: mechanism gates passed
+
+The frozen 16-run slice completed at
+`runs/sweeps/20260805T163314Z`. Across its four seed/burst conditions, the
+context-bound candidate scored `0.9236`, versus `0.9184` for both
+`semantic_revival` and `transactional_retirement`. Candidate invariant
+retention was `1.0` in all four runs.
+
+The exact path checks also passed:
+
+- seed 233 / burst 0 preserved the same-context revival of
+  `mem-cfb49bc0ef485383@v1`;
+- seed 233 / burst 2 and both seed-255 conditions excluded
+  `mem-61294fcf3a594201@v1` before any mismatched forced-on request;
+- mismatched probe, registration, and confirmation counts for that exact
+  version were all zero;
+- context-mismatch confirmations and post-confirmation tag-associated harmful
+  exposure were zero for every candidate run;
+- context-record coverage was `1.0`, and retirement confirmation precision was
+  `1.0` whenever defined.
+
+This is still only a mechanism screen. Before opening the larger matrices, an
+audit found that the inherited replay and future-audit validation paths used
+the benchmark-only `metadata["protected"]` marker in online gates. The marker
+is valid for post-hoc metrics but is not learner-visible. The targeted result
+therefore cannot support an adoption claim until the oracle-isolation
+amendment in `experiment_oracle_isolated_validation.md` is implemented and the
+same slice is rerun.
