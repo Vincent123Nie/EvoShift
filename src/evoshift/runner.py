@@ -180,6 +180,14 @@ class EvoShiftRunner:
                 min_trusted_observations=(self.config.evolution.candidate_min_trusted_observations),
                 min_new_observations=(self.config.evolution.candidate_min_new_observations),
                 cooldown_episodes=self.config.evolution.candidate_cooldown_episodes,
+                shadow_eprocess_enabled=self.config.evolution.shadow_eprocess_enabled,
+                shadow_eprocess_null_match_probability=(
+                    self.config.evolution.shadow_eprocess_null_match_probability
+                ),
+                shadow_eprocess_alternative_match_probability=(
+                    self.config.evolution.shadow_eprocess_alternative_match_probability
+                ),
+                shadow_eprocess_alpha=self.config.evolution.shadow_eprocess_alpha,
             )
             candidate_pool.seed_accepted(memory.active())
             future_auditor = (
@@ -209,10 +217,12 @@ class EvoShiftRunner:
             shadow_failure_extractions = 0
             shadow_candidate_observations = 0
             shadow_candidate_replay_attempts = 0
+            shadow_only_candidate_replay_attempts = 0
             shadow_candidate_probations = 0
             shadow_candidate_activations = 0
             shadow_candidate_rejections = 0
             shadow_candidate_expirations = 0
+            trusted_candidate_shadow_cooldown_bypasses = 0
             shift_detection_events = 0
             policy_evolution_suppressed_by_memory = 0
             supersession_events = 0
@@ -735,10 +745,17 @@ class EvoShiftRunner:
                                 trusted=feedback_eligible,
                             )
                             shadow_candidate_observations += int(not feedback_eligible)
+                            shadow_cooldown_active = (
+                                feedback_eligible
+                                and candidate_pool.shadow_cooldown_would_block(evidence, index)
+                            )
                             ready, readiness_reason = candidate_pool.readiness(
                                 evidence,
                                 index,
+                                trusted=feedback_eligible,
                             )
+                            if ready and shadow_cooldown_active:
+                                trusted_candidate_shadow_cooldown_bypasses += 1
                             if not ready:
                                 candidate_deferred += 1
                                 if readiness_reason == "duplicate_of_active_memory":
@@ -753,6 +770,12 @@ class EvoShiftRunner:
                                         "last_validation_observation_count": (
                                             evidence.last_validation_observation_count
                                         ),
+                                        "last_trusted_validation_observation_count": (
+                                            evidence.last_trusted_validation_observation_count
+                                        ),
+                                        "last_shadow_validation_observation_count": (
+                                            evidence.last_shadow_validation_observation_count
+                                        ),
                                         "trusted_observation_count": (
                                             evidence.trusted_observation_count
                                         ),
@@ -760,14 +783,27 @@ class EvoShiftRunner:
                                             evidence.shadow_observation_count
                                         ),
                                         "mean_evidence_trust": evidence.mean_trust,
+                                        "evidence_lane": evidence_lane,
+                                        "shadow_e_value": evidence.shadow_e_value,
+                                        "shadow_eprocess_ready": (evidence.shadow_eprocess_ready),
+                                        "shadow_eprocess_threshold": (
+                                            candidate_pool.shadow_eprocess_threshold
+                                        ),
                                     },
                                 )
                             else:
                                 regime_start = regime_starts.get(sample.domain)
                                 if self.config.evolution.candidate_replay_since_first_evidence:
+                                    lane_first_evidence = (
+                                        evidence.first_trusted_episode_index
+                                        if feedback_eligible
+                                        else evidence.first_shadow_episode_index
+                                    )
                                     regime_start = max(
                                         regime_start or 0,
-                                        evidence.first_episode_index,
+                                        lane_first_evidence
+                                        if lane_first_evidence is not None
+                                        else evidence.first_episode_index,
                                     )
                                 replay_buffer, _ = verifier.memory_buffer(
                                     evidence.candidate,
@@ -788,6 +824,11 @@ class EvoShiftRunner:
                                             "observation_count": evidence.observation_count,
                                             "replay_count": len(replay_buffer),
                                             "regime_start_index": regime_start,
+                                            "evidence_lane": evidence_lane,
+                                            "shadow_e_value": evidence.shadow_e_value,
+                                            "shadow_eprocess_ready": (
+                                                evidence.shadow_eprocess_ready
+                                            ),
                                         },
                                     )
                                 else:
@@ -800,13 +841,25 @@ class EvoShiftRunner:
                                             "status": candidate.status.value,
                                             "candidate_signature": evidence.signature,
                                             "observation_count": evidence.observation_count,
+                                            "evidence_lane": evidence_lane,
+                                            "shadow_e_value": evidence.shadow_e_value,
+                                            "shadow_eprocess_ready": (
+                                                evidence.shadow_eprocess_ready
+                                            ),
                                         },
                                     )
-                                    candidate_pool.mark_validated(evidence, index)
+                                    candidate_pool.mark_validated(
+                                        evidence,
+                                        index,
+                                        trusted=feedback_eligible,
+                                    )
                                     if candidate.status != MemoryStatus.REJECTED:
                                         candidate_replay_attempts += 1
                                         shadow_candidate_replay_attempts += int(
                                             evidence.has_shadow_evidence
+                                        )
+                                        shadow_only_candidate_replay_attempts += int(
+                                            not feedback_eligible
                                         )
                                         decision = await verifier.validate_memory(
                                             candidate,
@@ -888,6 +941,13 @@ class EvoShiftRunner:
                                                             ),
                                                             "mean_evidence_trust": (
                                                                 evidence.mean_trust
+                                                            ),
+                                                            "evidence_lane": evidence_lane,
+                                                            "shadow_e_value": (
+                                                                evidence.shadow_e_value
+                                                            ),
+                                                            "shadow_eprocess_ready": (
+                                                                evidence.shadow_eprocess_ready
                                                             ),
                                                         },
                                                     )
@@ -1170,10 +1230,20 @@ class EvoShiftRunner:
                         "shadow_failure_extractions": shadow_failure_extractions,
                         "shadow_candidate_observations": shadow_candidate_observations,
                         "shadow_candidate_replay_attempts": (shadow_candidate_replay_attempts),
+                        "shadow_only_candidate_replay_attempts": (
+                            shadow_only_candidate_replay_attempts
+                        ),
                         "shadow_candidate_probations": shadow_candidate_probations,
                         "shadow_candidate_activations": shadow_candidate_activations,
                         "shadow_candidate_rejections": shadow_candidate_rejections,
                         "shadow_candidate_expirations": shadow_candidate_expirations,
+                        "shadow_eprocess_opportunities": (
+                            candidate_pool.shadow_eprocess_opportunities
+                        ),
+                        "shadow_eprocess_crossings": (candidate_pool.shadow_eprocess_crossings),
+                        "trusted_candidate_shadow_cooldown_bypasses": (
+                            trusted_candidate_shadow_cooldown_bypasses
+                        ),
                         "feedback_quarantined": feedback_quarantined,
                         "detector_domains": len(detectors),
                         "shift_detection_events": shift_detection_events,

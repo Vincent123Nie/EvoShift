@@ -179,6 +179,16 @@ def test_shadow_candidate_config_enforces_verified_admission_invariants() -> Non
             future_audit_enabled=True,
             min_feedback_trust_for_replay=0.50,
         )
+    with pytest.raises(ValidationError, match="requires shadow candidate"):
+        EvolutionConfig(shadow_eprocess_enabled=True)
+    with pytest.raises(ValidationError, match="must exceed"):
+        EvolutionConfig(
+            shadow_candidate_enabled=True,
+            future_audit_enabled=True,
+            shadow_eprocess_enabled=True,
+            shadow_eprocess_null_match_probability=0.75,
+            shadow_eprocess_alternative_match_probability=0.25,
+        )
     with pytest.raises(ValidationError, match="supported only by evoshift"):
         EvoShiftConfig(
             algorithm=Algorithm.REFLEXION,

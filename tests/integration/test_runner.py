@@ -264,6 +264,10 @@ async def test_quarantined_feedback_can_only_reach_memory_through_verified_shado
                     "shadow_candidate_enabled": True,
                     "min_feedback_trust_for_shadow_candidate": 0.10,
                     "candidate_min_trusted_observations": 0,
+                    "shadow_eprocess_enabled": True,
+                    "shadow_eprocess_null_match_probability": 0.25,
+                    "shadow_eprocess_alternative_match_probability": 0.75,
+                    "shadow_eprocess_alpha": 0.05,
                 }
             ),
         }
@@ -277,6 +281,9 @@ async def test_quarantined_feedback_can_only_reach_memory_through_verified_shado
     assert evolution["shadow_candidate_observations"] > 0
     assert evolution["shadow_candidate_replay_attempts"] > 0
     assert evolution["shadow_candidate_probations"] > 0
+    assert evolution["shadow_eprocess_opportunities"] > 0
+    assert evolution["shadow_eprocess_crossings"] > 0
+    assert evolution["trusted_candidate_shadow_cooldown_bypasses"] >= 0
     assert evolution["shadow_candidate_activations"] <= result.metrics["future_audit"]["confirmed"]
 
     connection = sqlite3.connect(result.run_dir / "state.sqlite3")

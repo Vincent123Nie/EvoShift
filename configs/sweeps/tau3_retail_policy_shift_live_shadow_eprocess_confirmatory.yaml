@@ -1,0 +1,28 @@
+base_config: configs/experiments/tau3_retail_policy_shift_live.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - evoshift
+grid:
+  storage.cache_enabled: [true]
+  storage.cache_path: [data/llm_cache_shadow_eprocess_confirmatory.sqlite3]
+  benchmark.phase_size: [8]
+  benchmark.policy_schedule: [[v1, v2]]
+  benchmark.coverage_balanced: [true]
+  benchmark.coverage_min_per_slice: [2]
+  benchmark.feedback_noise_rate: [0.0]
+  benchmark.feedback_attack_burst_length: [0]
+variants:
+  current_full:
+    evolution.shadow_candidate_enabled: false
+    evolution.shadow_eprocess_enabled: false
+    evolution.candidate_min_trusted_observations: 1
+  shadow_eprocess:
+    evolution.shadow_candidate_enabled: true
+    evolution.min_feedback_trust_for_shadow_candidate: 0.10
+    evolution.candidate_min_trusted_observations: 0
+    evolution.shadow_eprocess_enabled: true
+    evolution.shadow_eprocess_null_match_probability: 0.25
+    evolution.shadow_eprocess_alternative_match_probability: 0.75
+    evolution.shadow_eprocess_alpha: 0.05
+# Common-response capability confirmation: 2 variants * 5 paired seeds = 10 runs.
+max_runs: 10

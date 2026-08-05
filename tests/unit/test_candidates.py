@@ -14,6 +14,18 @@ def _candidate(episode_id: str = "e1") -> MemoryItem:
     )
 
 
+def _different_candidate(episode_id: str = "e-other") -> MemoryItem:
+    return MemoryItem(
+        memory_id="",
+        trigger="Premium refund after day fourteen",
+        scope="customer_support/refund_policy",
+        directive="Approve premium refunds through day thirty.",
+        provenance_episode_ids=[episode_id],
+        source_domains=["customer_support/refund_policy"],
+        confidence=0.9,
+    )
+
+
 def test_candidate_pool_aggregates_evidence_and_enforces_cooldown() -> None:
     pool = CandidateEvidencePool(
         min_observations=2,
@@ -111,3 +123,76 @@ def test_candidate_pool_tracks_shadow_trust_and_can_require_trusted_evidence() -
     assert evidence.max_trust == 0.80
     assert evidence.mean_trust == 0.45
     assert pool.readiness(evidence, 2) == (True, "ready")
+
+
+def test_shadow_eprocess_excludes_discovery_then_crosses_and_resets() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=4,
+        shadow_eprocess_enabled=True,
+        shadow_eprocess_null_match_probability=0.25,
+        shadow_eprocess_alternative_match_probability=0.75,
+        shadow_eprocess_alpha=0.05,
+    )
+
+    evidence = pool.observe(_candidate("s1"), 1, trust=0.10, trusted=False)
+    assert evidence.shadow_e_value == 1.0
+    assert evidence.shadow_eprocess_opportunities_since_validation == 0
+    assert pool.readiness(evidence, 1, trusted=False) == (
+        False,
+        "shadow_eprocess_below_threshold",
+    )
+
+    pool.observe(_candidate("s2"), 2, trust=0.10, trusted=False)
+    assert evidence.shadow_e_value == 3.0
+    assert pool.readiness(evidence, 2, trusted=False) == (
+        False,
+        "shadow_eprocess_below_threshold",
+    )
+
+    pool.observe(_candidate("s3"), 3, trust=0.10, trusted=False)
+    assert evidence.shadow_e_value == 9.0
+    assert pool.readiness(evidence, 3, trusted=False) == (
+        False,
+        "shadow_eprocess_below_threshold",
+    )
+
+    pool.observe(_candidate("s4"), 4, trust=0.10, trusted=False)
+    assert evidence.shadow_e_value == 27.0
+    assert evidence.shadow_eprocess_crossings == 1
+    assert evidence.shadow_eprocess_ready is True
+    assert pool.shadow_eprocess_crossings == 1
+    assert pool.readiness(evidence, 4, trusted=False) == (True, "ready")
+
+    pool.observe(_different_candidate("before-validation"), 5, trust=0.10, trusted=False)
+    assert evidence.shadow_e_value == 27.0
+    assert evidence.shadow_eprocess_ready is True
+
+    pool.mark_validated(evidence, 5, trusted=False)
+    assert evidence.shadow_e_value == 1.0
+    assert evidence.shadow_eprocess_ready is False
+    assert evidence.shadow_eprocess_resets == 1
+    assert evidence.shadow_eprocess_opportunities_since_validation == 0
+
+    pool.observe(_different_candidate(), 6, trust=0.10, trusted=False)
+    assert evidence.shadow_e_value == 1.0 / 3.0
+
+
+def test_trusted_lane_bypasses_shadow_cooldown_and_uses_trusted_start_index() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=100,
+    )
+    evidence = pool.observe(_candidate("shadow"), 1, trust=0.10, trusted=False)
+    pool.mark_validated(evidence, 1, trusted=False)
+
+    evidence = pool.observe(_candidate("trusted"), 2, trust=0.80, trusted=True)
+
+    assert evidence.first_shadow_episode_index == 1
+    assert evidence.first_trusted_episode_index == 2
+    assert pool.shadow_cooldown_would_block(evidence, 2) is True
+    assert pool.readiness(evidence, 2, trusted=True) == (True, "ready")

@@ -90,6 +90,10 @@ class EvolutionConfig(ConfigModel):
     min_feedback_trust_for_candidate: float = Field(default=0.60, ge=0.0, le=1.0)
     shadow_candidate_enabled: bool = False
     min_feedback_trust_for_shadow_candidate: float = Field(default=0.10, ge=0.0, le=1.0)
+    shadow_eprocess_enabled: bool = False
+    shadow_eprocess_null_match_probability: float = Field(default=0.25, gt=0.0, lt=1.0)
+    shadow_eprocess_alternative_match_probability: float = Field(default=0.75, gt=0.0, lt=1.0)
+    shadow_eprocess_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     min_feedback_trust_for_replay: float = Field(default=0.60, ge=0.0, le=1.0)
     candidate_min_observations: int = Field(default=1, ge=1, le=1000)
     candidate_min_trusted_observations: int = Field(default=1, ge=0, le=1000)
@@ -142,6 +146,16 @@ class EvolutionConfig(ConfigModel):
             raise ValueError("shadow candidate admission requires paired replay")
         if self.shadow_candidate_enabled and not self.future_audit_enabled:
             raise ValueError("shadow candidate admission requires future audit")
+        if self.shadow_eprocess_enabled and not self.shadow_candidate_enabled:
+            raise ValueError("shadow e-process requires shadow candidate admission")
+        if (
+            self.shadow_eprocess_enabled
+            and self.shadow_eprocess_alternative_match_probability
+            <= self.shadow_eprocess_null_match_probability
+        ):
+            raise ValueError(
+                "shadow e-process alternative probability must exceed the null probability"
+            )
         if (
             self.shadow_candidate_enabled
             and self.min_feedback_trust_for_replay < self.min_feedback_trust_for_candidate

@@ -40,10 +40,14 @@ _AGGREGATE_FIELDS = {
     "shadow_failure_extractions": "shadow_failure_extractions",
     "shadow_candidate_observations": "shadow_candidate_observations",
     "shadow_candidate_replay_attempts": "shadow_candidate_replay_attempts",
+    "shadow_only_candidate_replay_attempts": "shadow_only_candidate_replay_attempts",
     "shadow_candidate_probations": "shadow_candidate_probations",
     "shadow_candidate_activations": "shadow_candidate_activations",
     "shadow_candidate_rejections": "shadow_candidate_rejections",
     "shadow_candidate_expirations": "shadow_candidate_expirations",
+    "shadow_eprocess_opportunities": "shadow_eprocess_opportunities",
+    "shadow_eprocess_crossings": "shadow_eprocess_crossings",
+    "trusted_candidate_shadow_cooldown_bypasses": ("trusted_candidate_shadow_cooldown_bypasses"),
     "promotion_precision": "promotion_precision",
     "replay_estimated_promotion_precision": "replay_estimated_promotion_precision",
     "realized_promotion_precision": "realized_promotion_precision",
@@ -240,10 +244,18 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "shadow_candidate_replay_attempts": evolution.get(
                     "shadow_candidate_replay_attempts"
                 ),
+                "shadow_only_candidate_replay_attempts": evolution.get(
+                    "shadow_only_candidate_replay_attempts"
+                ),
                 "shadow_candidate_probations": evolution.get("shadow_candidate_probations"),
                 "shadow_candidate_activations": evolution.get("shadow_candidate_activations"),
                 "shadow_candidate_rejections": evolution.get("shadow_candidate_rejections"),
                 "shadow_candidate_expirations": evolution.get("shadow_candidate_expirations"),
+                "shadow_eprocess_opportunities": evolution.get("shadow_eprocess_opportunities"),
+                "shadow_eprocess_crossings": evolution.get("shadow_eprocess_crossings"),
+                "trusted_candidate_shadow_cooldown_bypasses": evolution.get(
+                    "trusted_candidate_shadow_cooldown_bypasses"
+                ),
                 "promotion_precision": result.metrics.get("promotion_precision"),
                 "promotion_precision_basis": result.metrics.get("promotion_precision_basis"),
                 "replay_estimated_promotion_precision": result.metrics.get(
@@ -581,10 +593,14 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "shadow_failure_extractions",
         "shadow_candidate_observations",
         "shadow_candidate_replay_attempts",
+        "shadow_only_candidate_replay_attempts",
         "shadow_candidate_probations",
         "shadow_candidate_activations",
         "shadow_candidate_rejections",
         "shadow_candidate_expirations",
+        "shadow_eprocess_opportunities",
+        "shadow_eprocess_crossings",
+        "trusted_candidate_shadow_cooldown_bypasses",
         "promotion_precision",
         "promotion_precision_basis",
         "replay_estimated_promotion_precision",

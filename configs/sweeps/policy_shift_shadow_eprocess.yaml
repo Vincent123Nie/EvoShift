@@ -1,0 +1,22 @@
+base_config: configs/experiments/policy_shift_causal_memory_demo.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_burst_length: [0, 2]
+variants:
+  current_full:
+    evolution.shadow_candidate_enabled: false
+    evolution.shadow_eprocess_enabled: false
+    evolution.candidate_min_trusted_observations: 1
+  shadow_eprocess:
+    evolution.shadow_candidate_enabled: true
+    evolution.min_feedback_trust_for_shadow_candidate: 0.10
+    evolution.candidate_min_trusted_observations: 0
+    evolution.shadow_eprocess_enabled: true
+    evolution.shadow_eprocess_null_match_probability: 0.25
+    evolution.shadow_eprocess_alternative_match_probability: 0.75
+    evolution.shadow_eprocess_alpha: 0.05
+# 2 variants * 5 seeds * 2 noise levels * 2 burst lengths = 40 demo runs.
+max_runs: 40
