@@ -103,3 +103,31 @@ Pre-confirmation quality evidence: 162 tests passed with 85.09% branch-aware
 coverage; Ruff, formatting, strict mypy over 54 source files, and package build
 passed. These development results are encouraging but are not adoption
 evidence.
+
+## Held-out confirmation result
+
+The frozen 60-run confirmation completed at
+`runs/sweeps/20260805T112825Z` on seeds `[122, 133, 144, 155, 166]`.
+
+| Condition | Current | Bidirectional-15 | Lineage control | Lineage delta vs current |
+|---|---:|---:|---:|---:|
+| clean | 0.9306 | 0.9514 | 0.9514 | `+0.0208 [+0.0111, +0.0319]` |
+| attack burst | 0.9306 | 0.9514 | 0.9514 | `+0.0208 [+0.0111, +0.0319]` |
+| 10% noise | 0.9208 | 0.9194 | 0.9222 | `+0.0014 [-0.0222, +0.0208]` |
+| 10% noise + attack burst | 0.9069 | 0.9056 | 0.9083 | `+0.0014 [-0.0222, +0.0208]` |
+
+The lineage control preserved the clean gain and improved the prior candidate's
+noisy point estimates by `0.0028`. It also removed the diagnosed coarse-control
+loss whenever that pattern occurred. It did not solve the dominant held-out
+failure: noisy seeds 122 and 155 produced a false retirement followed by a
+false dormant revival. In those runs false-retirement rate reached `1/3`,
+revival precision was `0.0`, and invariant retention fell below the current
+baseline. The aggregate invariant delta was `-0.0092 [-0.0276, 0.0000]`.
+
+## Decision
+
+Reject the combined lineage candidate and do not merge it into `main`. It fails
+the noisy score-CI, protected/invariant, false-retirement, and false-revival
+gates. The mechanism is a useful isolated attribution improvement, but the next
+candidate must prevent a mistaken retirement from authorizing revival; further
+lineage or cooldown tuning would not address that causal chain.
