@@ -107,6 +107,8 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         feedback_shared_source: bool = False,
         feedback_shared_source_name: str = "customer_support_portal",
         feedback_attack_burst_length: int = 0,
+        feedback_warmup_attack_observations: int = 2,
+        feedback_warmup_attack_burst_length: int = 0,
         policy_schedule: Sequence[str] | None = None,
         shuffle_within_phase: bool = False,
         limit: int = 0,
@@ -125,6 +127,10 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
             raise DatasetError("feedback_shared_source_name must not be empty")
         if feedback_attack_burst_length < 0:
             raise DatasetError("feedback_attack_burst_length cannot be negative")
+        if feedback_warmup_attack_observations < 1:
+            raise DatasetError("feedback_warmup_attack_observations must be positive")
+        if feedback_warmup_attack_burst_length < 0:
+            raise DatasetError("feedback_warmup_attack_burst_length cannot be negative")
         schedule = tuple(policy_schedule or DEFAULT_POLICY_SCHEDULE)
         if not schedule:
             raise DatasetError("policy_shift policy_schedule must not be empty")
@@ -141,6 +147,8 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         self.feedback_shared_source = feedback_shared_source
         self.feedback_shared_source_name = feedback_shared_source_name.strip()
         self.feedback_attack_burst_length = feedback_attack_burst_length
+        self.feedback_warmup_attack_observations = feedback_warmup_attack_observations
+        self.feedback_warmup_attack_burst_length = feedback_warmup_attack_burst_length
         self.policy_schedule = schedule
         self.shuffle_within_phase = shuffle_within_phase
         self.limit = limit
@@ -290,7 +298,15 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         if (
             phase.version == "v1"
             and scenario.future_change_case
-            and position // 4 < self.feedback_attack_burst_length
+            and (
+                position // 4 < self.feedback_attack_burst_length
+                or self.feedback_warmup_attack_observations
+                <= position // 4
+                < (
+                    self.feedback_warmup_attack_observations
+                    + self.feedback_warmup_attack_burst_length
+                )
+            )
         ):
             return (
                 self._flip(oracle),

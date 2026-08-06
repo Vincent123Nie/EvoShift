@@ -470,6 +470,14 @@ def test_shadow_candidate_config_enforces_verified_admission_invariants() -> Non
         )
     with pytest.raises(ValidationError, match="requires shadow candidate"):
         EvolutionConfig(shadow_eprocess_enabled=True)
+    with pytest.raises(ValidationError, match="requires shadow candidate admission"):
+        EvolutionConfig(change_point_shadow_candidate_enabled=True)
+    with pytest.raises(ValidationError, match="requires change-point feedback"):
+        EvolutionConfig(
+            shadow_candidate_enabled=True,
+            future_audit_enabled=True,
+            change_point_shadow_candidate_enabled=True,
+        )
     with pytest.raises(ValidationError, match="must exceed"):
         EvolutionConfig(
             shadow_candidate_enabled=True,

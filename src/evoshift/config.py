@@ -98,6 +98,7 @@ class EvolutionConfig(ConfigModel):
     min_feedback_trust_for_memory_update: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_candidate: float = Field(default=0.60, ge=0.0, le=1.0)
     shadow_candidate_enabled: bool = False
+    change_point_shadow_candidate_enabled: bool = False
     min_feedback_trust_for_shadow_candidate: float = Field(default=0.10, ge=0.0, le=1.0)
     shadow_eprocess_enabled: bool = False
     shadow_eprocess_null_match_probability: float = Field(default=0.25, gt=0.0, lt=1.0)
@@ -215,6 +216,13 @@ class EvolutionConfig(ConfigModel):
             raise ValueError("shadow candidate admission requires paired replay")
         if self.shadow_candidate_enabled and not self.future_audit_enabled:
             raise ValueError("shadow candidate admission requires future audit")
+        if self.change_point_shadow_candidate_enabled and not self.shadow_candidate_enabled:
+            raise ValueError("posterior-gated shadow admission requires shadow candidate admission")
+        if (
+            self.change_point_shadow_candidate_enabled
+            and not self.dynamic_feedback_change_point_enabled
+        ):
+            raise ValueError("posterior-gated shadow admission requires change-point feedback")
         if self.shadow_eprocess_enabled and not self.shadow_candidate_enabled:
             raise ValueError("shadow e-process requires shadow candidate admission")
         if (
@@ -311,6 +319,8 @@ class BenchmarkConfig(ConfigModel):
     feedback_shared_source: bool = False
     feedback_shared_source_name: str = "customer_support_portal"
     feedback_attack_burst_length: int = Field(default=0, ge=0, le=1000)
+    feedback_warmup_attack_observations: int = Field(default=2, ge=1, le=1000)
+    feedback_warmup_attack_burst_length: int = Field(default=0, ge=0, le=1000)
     policy_schedule: List[str] = Field(default_factory=list)
     coverage_balanced: bool = False
     coverage_min_per_slice: int = Field(default=2, ge=1, le=100)

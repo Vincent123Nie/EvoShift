@@ -1529,6 +1529,10 @@ class EvoShiftRunner:
                     self.config.evolution.shadow_candidate_enabled
                     and assessment.trust
                     >= self.config.evolution.min_feedback_trust_for_shadow_candidate
+                    and (
+                        not self.config.evolution.change_point_shadow_candidate_enabled
+                        or assessment.change_point_crossed
+                    )
                 )
                 applied_ids = set(prediction.output.applied_memory_ids)
                 applied_active = [

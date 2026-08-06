@@ -170,6 +170,8 @@ def test_policy_shift_factory_uses_noise_configuration(tmp_path: Path) -> None:
         feedback_shared_source=True,
         feedback_shared_source_name="shared_portal",
         feedback_attack_burst_length=2,
+        feedback_warmup_attack_observations=3,
+        feedback_warmup_attack_burst_length=1,
         policy_schedule=["v1", "v2", "v1", "v2"],
     )
 
@@ -181,6 +183,8 @@ def test_policy_shift_factory_uses_noise_configuration(tmp_path: Path) -> None:
     assert adapter.feedback_shared_source is True
     assert adapter.feedback_shared_source_name == "shared_portal"
     assert adapter.feedback_attack_burst_length == 2
+    assert adapter.feedback_warmup_attack_observations == 3
+    assert adapter.feedback_warmup_attack_burst_length == 1
     assert adapter.policy_schedule == ("v1", "v2", "v1", "v2")
 
 
@@ -243,6 +247,31 @@ def test_policy_shift_shared_source_burst_creates_observable_contexts() -> None:
     )
     assert all(sample.metadata["future_change_case"] for sample in early_attacks)
     assert all(sample.metadata["feedback_context"] for sample in samples)
+
+
+def test_policy_shift_warmup_burst_occurs_after_stable_context_evidence() -> None:
+    samples = PolicyShiftBenchmark(
+        seed=7,
+        phase_size=24,
+        feedback_noise_rate=0.0,
+        feedback_attack_rate=0.0,
+        feedback_shared_source=True,
+        feedback_shared_source_name="shared_portal",
+        feedback_attack_burst_length=0,
+        feedback_warmup_attack_observations=2,
+        feedback_warmup_attack_burst_length=1,
+    ).load()
+
+    phase_zero = [sample for sample in samples if sample.phase == "phase_0"]
+    attacks = [
+        sample for sample in phase_zero if sample.metadata["feedback_kind"] == "attack"
+    ]
+    assert [sample.metadata["position_in_phase"] for sample in attacks] == [9, 10]
+    assert all(sample.metadata["feedback_attack_goal"] == "premature_update" for sample in attacks)
+    assert all(
+        phase_zero[position].metadata["feedback_kind"] == "clean"
+        for position in (1, 2, 5, 6)
+    )
 
 
 def _fake_tau_sources() -> tuple[bytes, bytes, dict[str, dict[str, Any]]]:

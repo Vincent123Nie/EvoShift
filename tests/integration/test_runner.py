@@ -831,6 +831,41 @@ async def test_quarantined_feedback_can_only_reach_memory_through_verified_shado
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_posterior_gate_limits_shadow_hypotheses_to_context_crossings(
+    tmp_path: Path,
+) -> None:
+    config = load_config(
+        Path("configs/experiments/policy_shift_causal_memory_demo.yaml"),
+        [
+            f"storage.runs_dir={tmp_path / 'runs'}",
+            "storage.cache_enabled=false",
+            "evaluation.seed=233",
+            "benchmark.feedback_noise_rate=0.0",
+            "benchmark.feedback_attack_burst_length=0",
+            "benchmark.feedback_warmup_attack_burst_length=1",
+            "evolution.dynamic_feedback_change_point_enabled=true",
+            "evolution.dynamic_feedback_change_hazard=0.15",
+            "evolution.shadow_candidate_enabled=true",
+            "evolution.change_point_shadow_candidate_enabled=true",
+            "evolution.min_feedback_trust_for_shadow_candidate=0.10",
+            "evolution.candidate_min_trusted_observations=0",
+        ],
+    )
+    adapter = create_benchmark(config.benchmark, root=Path.cwd(), seed=233)
+
+    result = await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
+
+    evolution = result.metrics["evolution"]
+    posterior = result.metrics["feedback_trust_model"]
+    assert posterior["posterior_crossings"] > 0
+    assert evolution["shadow_failure_extractions"] > 0
+    assert evolution["shadow_failure_extractions"] <= posterior["posterior_crossings"]
+    assert evolution["shadow_candidate_observations"] == evolution["shadow_failure_extractions"]
+    assert evolution["shadow_candidate_activations"] <= result.metrics["future_audit"]["confirmed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_frozen_audit_reuses_state_without_mutating_it(tmp_path: Path) -> None:
     source_config = load_config(Path("configs/experiments/offline_demo.yaml"))
     source_config = source_config.model_copy(
