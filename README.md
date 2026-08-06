@@ -270,6 +270,7 @@ dataset hash, and comparison artifact.
 - [Recurrence-aware causal rollback experiment](docs/experiment_recurrence_aware_rollback.md)
 - [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)
 - [Mature-feedback candidate admission](docs/experiment_mature_feedback_candidate_admission.md)
+- [Two-mature-feedback candidate admission](docs/experiment_two_mature_feedback_candidate_admission.md)
 
 ## Security
 
