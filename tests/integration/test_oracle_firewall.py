@@ -296,3 +296,73 @@ async def test_hidden_protected_labels_cannot_change_online_evolution(
             for event_type, _, payload in _canonical_event_rows(result)
             if event_type == "future_counterfactual_audit"
         ), mode
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_rerank_path_cannot_consume_hidden_protected_labels(tmp_path: Path) -> None:
+    base = load_config(Path("configs/experiments/policy_shift_hard_demo.yaml"))
+    base = base.model_copy(
+        update={
+            "benchmark": base.benchmark.model_copy(
+                update={
+                    "feedback_noise_rate": 0.0,
+                    "feedback_attack_burst_length": 0,
+                    "policy_prompt_style": "paraphrase",
+                }
+            ),
+            "evolution": base.evolution.model_copy(update={"conflict_supersession_enabled": False}),
+            "policy": base.policy.model_copy(
+                update={
+                    "top_k": 1,
+                    "llm_rerank_enabled": True,
+                    "llm_rerank_candidate_k": 4,
+                }
+            ),
+        }
+    )
+    samples = create_benchmark(
+        base.benchmark,
+        root=Path.cwd(),
+        seed=base.evaluation.seed,
+    ).load()
+    protected = [bool(sample.metadata.get("protected")) for sample in samples]
+    modes = {
+        "original": protected,
+        "complement": [not value for value in protected],
+    }
+    results: dict[str, ExperimentResult] = {}
+    for mode, labels in modes.items():
+        config = base.model_copy(
+            update={
+                "storage": base.storage.model_copy(
+                    update={
+                        "runs_dir": str(tmp_path / mode / "runs"),
+                        "cache_enabled": False,
+                    }
+                )
+            }
+        )
+        results[mode] = await EvoShiftRunner(
+            config,
+            _FixedSamplesAdapter(_with_protected_labels(samples, labels)),
+            workdir=Path.cwd(),
+        ).run()
+
+    baseline = results["original"]
+    assert baseline.metrics["retrieval"]["rerank_attempts"] > 0
+    baseline_decisions = [decision.model_dump(mode="json") for decision in baseline.decisions]
+    baseline_events = _canonical_event_rows(baseline)
+    baseline_state = _canonical_persistent_state(baseline)
+    baseline_metrics = _canonical_metrics(baseline.metrics)
+    for mode, result in results.items():
+        assert [decision.model_dump(mode="json") for decision in result.decisions] == (
+            baseline_decisions
+        ), mode
+        assert _canonical_event_rows(result) == baseline_events, mode
+        assert _canonical_persistent_state(result) == baseline_state, mode
+        assert _canonical_metrics(result.metrics) == baseline_metrics, mode
+        assert (
+            result.metrics["audit"]["semantic_final_state_hash"]
+            == baseline.metrics["audit"]["semantic_final_state_hash"]
+        ), mode

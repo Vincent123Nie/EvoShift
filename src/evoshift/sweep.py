@@ -54,6 +54,10 @@ _AGGREGATE_FIELDS = {
     "context_probation_forced_applications": "context_probation_forced_applications",
     "context_probation_expired": "context_probation_expired",
     "context_probation_retrieval_hit_bypasses": ("context_probation_retrieval_hit_bypasses"),
+    "rerank_attempts": "rerank_attempts",
+    "rerank_applied": "rerank_applied",
+    "rerank_fallbacks": "rerank_fallbacks",
+    "rerank_fallback_rate": "rerank_fallback_rate",
     "promotion_precision": "promotion_precision",
     "replay_estimated_promotion_precision": "replay_estimated_promotion_precision",
     "realized_promotion_precision": "realized_promotion_precision",
@@ -286,6 +290,7 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         budget = _read_total_budget(result.run_dir)
         policy_shift = result.metrics.get("policy_shift", {})
         feedback = result.metrics.get("feedback", {})
+        retrieval = result.metrics.get("retrieval", {})
         evolution = result.metrics.get("evolution", {})
         future_audit = result.metrics.get("future_audit", {})
         active_governance = result.metrics.get("active_memory_governance", {})
@@ -367,6 +372,10 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "context_probation_retrieval_hit_bypasses": evolution.get(
                     "context_probation_retrieval_hit_bypasses"
                 ),
+                "rerank_attempts": retrieval.get("rerank_attempts"),
+                "rerank_applied": retrieval.get("rerank_applied"),
+                "rerank_fallbacks": retrieval.get("rerank_fallbacks"),
+                "rerank_fallback_rate": retrieval.get("rerank_fallback_rate"),
                 "promotion_precision": result.metrics.get("promotion_precision"),
                 "promotion_precision_basis": result.metrics.get("promotion_precision_basis"),
                 "replay_estimated_promotion_precision": result.metrics.get(
@@ -952,6 +961,10 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "context_probation_forced_applications",
         "context_probation_expired",
         "context_probation_retrieval_hit_bypasses",
+        "rerank_attempts",
+        "rerank_applied",
+        "rerank_fallbacks",
+        "rerank_fallback_rate",
         "promotion_precision",
         "promotion_precision_basis",
         "replay_estimated_promotion_precision",

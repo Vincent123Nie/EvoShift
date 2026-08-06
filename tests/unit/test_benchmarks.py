@@ -220,6 +220,37 @@ def test_policy_shift_rejects_unknown_policy_versions() -> None:
         PolicyShiftBenchmark(policy_schedule=["v4"])
 
 
+def test_policy_shift_paraphrase_preserves_oracle_and_feedback_stream() -> None:
+    canonical = PolicyShiftBenchmark(
+        seed=91,
+        phase_size=8,
+        feedback_noise_rate=0.10,
+        prompt_style="canonical",
+    ).load()
+    paraphrase = PolicyShiftBenchmark(
+        seed=91,
+        phase_size=8,
+        feedback_noise_rate=0.10,
+        prompt_style="paraphrase",
+    ).load()
+
+    assert [sample.reference for sample in paraphrase] == [sample.reference for sample in canonical]
+    assert [sample.metadata["feedback_reference"] for sample in paraphrase] == [
+        sample.metadata["feedback_reference"] for sample in canonical
+    ]
+    assert [sample.metadata["feedback_context"] for sample in paraphrase] == [
+        sample.metadata["feedback_context"] for sample in canonical
+    ]
+    assert all(sample.metadata["prompt_style"] == "paraphrase" for sample in paraphrase)
+    assert all("money-back claim" in sample.prompt for sample in paraphrase)
+    assert [sample.prompt for sample in paraphrase] != [sample.prompt for sample in canonical]
+
+
+def test_policy_shift_rejects_unknown_prompt_style() -> None:
+    with pytest.raises(DatasetError, match="prompt_style must be"):
+        PolicyShiftBenchmark(prompt_style="oracle_revealing")
+
+
 def test_policy_shift_shared_source_burst_creates_observable_contexts() -> None:
     samples = PolicyShiftBenchmark(
         seed=7,

@@ -109,6 +109,7 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         feedback_attack_burst_length: int = 0,
         feedback_warmup_attack_observations: int = 2,
         feedback_warmup_attack_burst_length: int = 0,
+        prompt_style: str = "canonical",
         policy_schedule: Sequence[str] | None = None,
         shuffle_within_phase: bool = False,
         limit: int = 0,
@@ -131,6 +132,9 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
             raise DatasetError("feedback_warmup_attack_observations must be positive")
         if feedback_warmup_attack_burst_length < 0:
             raise DatasetError("feedback_warmup_attack_burst_length cannot be negative")
+        normalized_prompt_style = prompt_style.strip().lower()
+        if normalized_prompt_style not in {"canonical", "paraphrase", "mixed"}:
+            raise DatasetError("policy_shift prompt_style must be canonical, paraphrase, or mixed")
         schedule = tuple(policy_schedule or DEFAULT_POLICY_SCHEDULE)
         if not schedule:
             raise DatasetError("policy_shift policy_schedule must not be empty")
@@ -149,6 +153,7 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         self.feedback_attack_burst_length = feedback_attack_burst_length
         self.feedback_warmup_attack_observations = feedback_warmup_attack_observations
         self.feedback_warmup_attack_burst_length = feedback_warmup_attack_burst_length
+        self.prompt_style = normalized_prompt_style
         self.policy_schedule = schedule
         self.shuffle_within_phase = shuffle_within_phase
         self.limit = limit
@@ -239,10 +244,7 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
         )
         return BenchmarkSample(
             sample_id=f"policy_shift:{phase_index}:{position:04d}",
-            prompt=(
-                f"Refund case: customer_tier={tier.upper()}; request_day={request_day}. "
-                "Return APPROVE or DENY only."
-            ),
+            prompt=self._prompt(tier, request_day, position),
             reference=oracle,
             domain="customer_support/refund_policy",
             phase=phase.name,
@@ -263,6 +265,7 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
                 "customer_tier": tier,
                 "request_day": request_day,
                 "case_type": scenario.case_type,
+                "prompt_style": self._prompt_style_for(position),
                 "policy_changed_case": scenario.transition_case,
                 "transition_case": scenario.transition_case,
                 "protected": scenario.protected,
@@ -278,6 +281,23 @@ class PolicyShiftBenchmark(BenchmarkAdapter):
                     set().union(*VALID_MEMORY_TAGS.values()) - set(VALID_MEMORY_TAGS[phase.version])
                 ),
             },
+        )
+
+    def _prompt_style_for(self, position: int) -> str:
+        if self.prompt_style == "mixed":
+            return "paraphrase" if position % 2 else "canonical"
+        return self.prompt_style
+
+    def _prompt(self, tier: str, request_day: int, position: int) -> str:
+        if self._prompt_style_for(position) == "canonical":
+            return (
+                f"Refund case: customer_tier={tier.upper()}; request_day={request_day}. "
+                "Return APPROVE or DENY only."
+            )
+        customer = "VIP member" if tier == "premium" else "regular customer"
+        return (
+            f"A {customer} filed a money-back claim {request_day} days after purchase. "
+            "Decide eligibility and return APPROVE or DENY only."
         )
 
     @staticmethod

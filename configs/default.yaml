@@ -109,6 +109,7 @@ benchmark:
   limit: 0
   shuffle: false
   phase_size: 16
+  policy_prompt_style: canonical
   protected_phases:
     - phase_0_addition
 
@@ -129,6 +130,8 @@ policy:
   utility_weight: 0.28
   exploration_weight: 0.10
   mmr_lambda: 0.75
+  llm_rerank_enabled: false
+  llm_rerank_candidate_k: 8
   # Safety default: learned memories stay within their provenance domains.
   # Enable only as an explicit cross-domain-transfer ablation.
   allow_cross_domain_transfer: false

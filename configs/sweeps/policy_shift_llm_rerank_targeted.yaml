@@ -1,0 +1,21 @@
+base_config: configs/experiments/policy_shift_hard_demo.yaml
+seeds: [566, 577, 588, 599, 611]
+algorithms:
+  - evoshift
+grid:
+  benchmark.policy_prompt_style: [canonical, paraphrase, mixed]
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_rate: [0.0]
+  benchmark.feedback_attack_burst_length: [0]
+  benchmark.feedback_warmup_attack_burst_length: [0]
+  policy.top_k: [1]
+  evolution.conflict_supersession_enabled: [false]
+variants:
+  sparse_bm25:
+    policy.llm_rerank_enabled: false
+    policy.llm_rerank_candidate_k: 4
+  llm_rerank:
+    policy.llm_rerank_enabled: true
+    policy.llm_rerank_candidate_k: 4
+# 2 variants * 5 seeds * 3 prompt styles * 2 noise levels = 60 runs.
+max_runs: 60

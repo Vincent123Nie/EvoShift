@@ -202,9 +202,17 @@ def test_retrieval_metrics_separate_selection_from_solver_application() -> None:
         update={
             "selected_memory_ids": ["m1"],
             "output": SolverOutput(answer="answer", applied_memory_ids=["m1"]),
+            "rerank_attempted": True,
+            "rerank_applied": True,
         }
     )
-    second = _episode(1, 1.0, "stream").model_copy(update={"selected_memory_ids": ["m1", "m2"]})
+    second = _episode(1, 1.0, "stream").model_copy(
+        update={
+            "selected_memory_ids": ["m1", "m2"],
+            "rerank_attempted": True,
+            "rerank_fallback": True,
+        }
+    )
 
     metrics = retrieval_metrics([first, second])
 
@@ -214,6 +222,10 @@ def test_retrieval_metrics_separate_selection_from_solver_application() -> None:
         "selected_memories": 3,
         "episodes_with_applied_memory": 1,
         "applied_memory_episode_rate": 0.5,
+        "rerank_attempts": 2,
+        "rerank_applied": 1,
+        "rerank_fallbacks": 1,
+        "rerank_fallback_rate": 0.5,
     }
 
 

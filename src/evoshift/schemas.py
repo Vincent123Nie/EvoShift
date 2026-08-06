@@ -160,6 +160,9 @@ class AgentPrediction(StrictModel):
     retrieved: List[RetrievedMemory] = Field(default_factory=list)
     usage: LLMUsage = Field(default_factory=LLMUsage)
     raw_text: str = ""
+    rerank_attempted: bool = False
+    rerank_applied: bool = False
+    rerank_fallback: bool = False
 
 
 class PolicyGenome(StrictModel):
@@ -172,6 +175,8 @@ class PolicyGenome(StrictModel):
     utility_weight: float = Field(default=0.28, ge=0.0, le=2.0)
     exploration_weight: float = Field(default=0.10, ge=0.0, le=2.0)
     mmr_lambda: float = Field(default=0.75, ge=0.0, le=1.0)
+    llm_rerank_enabled: bool = False
+    llm_rerank_candidate_k: int = Field(default=8, ge=1, le=20)
     allow_cross_domain_transfer: bool = False
     write_confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
     dedup_similarity_threshold: float = Field(default=0.86, ge=0.0, le=1.0)
@@ -251,6 +256,9 @@ class Episode(StrictModel):
     feedback_eligible: bool = True
     feedback_trust_reason: str = "default_trust"
     selected_memory_ids: List[str] = Field(default_factory=list)
+    rerank_attempted: bool = False
+    rerank_applied: bool = False
+    rerank_fallback: bool = False
     policy_version: int = Field(default=1, ge=1)
     usage: LLMUsage = Field(default_factory=LLMUsage)
     shift: Optional[ShiftReport] = None

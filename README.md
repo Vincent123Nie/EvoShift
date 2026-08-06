@@ -63,6 +63,8 @@ validation decision, event, and rollback is persisted with provenance.
 - Provenance-domain-scoped BM25 retrieval with Beta posterior utility,
   UCB-style exploration, MMR diversity, token budgeting, versioning,
   deduplication, and rollback.
+- Optional allowlisted LLM memory reranking with bounded candidates, exact
+  sparse fallback, provenance isolation, and explicit usage metrics.
 - Dynamic same-source feedback trust using a Beta source posterior plus
   per-context committed/pending labels, with no hidden-oracle online access.
 - Per-domain post-alarm-reset drift detectors, candidate evidence scheduling,
@@ -267,6 +269,7 @@ dataset hash, and comparison artifact.
 - [Robust-feedback experiment](docs/experiment_robust_feedback_promotion.md)
 - [Dynamic-trust and future-audit experiment](docs/experiment_dynamic_trust_conflict_memory.md)
 - [Active-memory causal-governance experiment](docs/experiment_causal_memory_governance.md)
+- [Allowlisted LLM reranking experiment](docs/experiment_llm_rerank_paraphrase.md)
 - [Recurrence-aware causal rollback experiment](docs/experiment_recurrence_aware_rollback.md)
 - [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)
 

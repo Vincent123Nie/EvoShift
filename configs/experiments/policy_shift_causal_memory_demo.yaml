@@ -31,6 +31,7 @@ benchmark:
   feedback_attack_burst_length: 2
   feedback_warmup_attack_observations: 2
   feedback_warmup_attack_burst_length: 0
+  policy_prompt_style: canonical
 
 shift:
   enabled: true
@@ -125,6 +126,8 @@ evaluation:
 
 policy:
   top_k: 3
+  llm_rerank_enabled: false
+  llm_rerank_candidate_k: 8
   memory_token_budget: 700
   write_confidence_threshold: 0.50
   dedup_similarity_threshold: 0.82

@@ -370,15 +370,25 @@ def retrieval_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
             "selected_memories": 0,
             "episodes_with_applied_memory": 0,
             "applied_memory_episode_rate": 0.0,
+            "rerank_attempts": 0,
+            "rerank_applied": 0,
+            "rerank_fallbacks": 0,
+            "rerank_fallback_rate": 0.0,
         }
     retrieved = sum(bool(episode.selected_memory_ids) for episode in episodes)
     applied = sum(bool(episode.output.applied_memory_ids) for episode in episodes)
+    rerank_attempts = sum(episode.rerank_attempted for episode in episodes)
+    rerank_fallbacks = sum(episode.rerank_fallback for episode in episodes)
     return {
         "episodes_with_retrieval": retrieved,
         "retrieval_episode_rate": retrieved / len(episodes),
         "selected_memories": sum(len(episode.selected_memory_ids) for episode in episodes),
         "episodes_with_applied_memory": applied,
         "applied_memory_episode_rate": applied / len(episodes),
+        "rerank_attempts": rerank_attempts,
+        "rerank_applied": sum(episode.rerank_applied for episode in episodes),
+        "rerank_fallbacks": rerank_fallbacks,
+        "rerank_fallback_rate": (rerank_fallbacks / rerank_attempts if rerank_attempts else 0.0),
     }
 
 

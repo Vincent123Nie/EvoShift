@@ -5,7 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -309,6 +309,7 @@ class BenchmarkConfig(ConfigModel):
     feedback_attack_burst_length: int = Field(default=0, ge=0, le=1000)
     feedback_warmup_attack_observations: int = Field(default=2, ge=1, le=1000)
     feedback_warmup_attack_burst_length: int = Field(default=0, ge=0, le=1000)
+    policy_prompt_style: Literal["canonical", "paraphrase", "mixed"] = "canonical"
     policy_schedule: List[str] = Field(default_factory=list)
     coverage_balanced: bool = False
     coverage_min_per_slice: int = Field(default=2, ge=1, le=100)

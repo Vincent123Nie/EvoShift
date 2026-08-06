@@ -55,6 +55,7 @@ def create_benchmark(
             feedback_attack_burst_length=config.feedback_attack_burst_length,
             feedback_warmup_attack_observations=config.feedback_warmup_attack_observations,
             feedback_warmup_attack_burst_length=config.feedback_warmup_attack_burst_length,
+            prompt_style=config.policy_prompt_style,
             policy_schedule=config.policy_schedule or None,
             shuffle_within_phase=config.shuffle,
             limit=config.limit,

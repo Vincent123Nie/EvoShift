@@ -20,6 +20,10 @@ _REFUND = re.compile(
     r"customer_tier=(STANDARD|PREMIUM);\s*request_day=(\d+)",
     re.I,
 )
+_REFUND_PARAPHRASE = re.compile(
+    r"A\s+(VIP member|regular customer)\s+filed a money-back claim\s+(\d+)\s+days",
+    re.I,
+)
 
 _REFUND_V2_DIRECTIVE = (
     "For refund decisions, approve both standard and premium customers when "
@@ -105,6 +109,8 @@ class HeuristicDemoClient:
         purpose = str(request.metadata.get("purpose", ""))
         if purpose == "experience_critic" or self._has_marker(request, "<EVOSHIFT_CRITIQUE>"):
             output = self._critic_output(self._payload(request, "<EVOSHIFT_CRITIQUE>"))
+        elif purpose == "memory_rerank" or self._has_marker(request, "<EVOSHIFT_MEMORY_RERANK>"):
+            output = self._rerank_output(self._payload(request, "<EVOSHIFT_MEMORY_RERANK>"))
         elif purpose == "self_refine" or self._has_marker(request, "<EVOSHIFT_SELF_REFINE>"):
             output = self._solver_output(
                 self._payload(request, "<EVOSHIFT_SELF_REFINE>"),
@@ -148,12 +154,12 @@ class HeuristicDemoClient:
 
     def _solver_output(self, payload: Mapping[str, Any], *, force_correct: bool) -> dict[str, Any]:
         task = str(payload.get("task", ""))
-        refund = _REFUND.search(task)
-        if refund:
+        refund = self._parse_refund_task(task)
+        if refund is not None:
             return self._refund_solver_output(
                 payload,
-                tier=refund.group(1).lower(),
-                request_day=int(refund.group(2)),
+                tier=refund[0],
+                request_day=refund[1],
                 force_correct=force_correct,
             )
         rule_name, x, y = self._parse_task(task)
@@ -175,7 +181,7 @@ class HeuristicDemoClient:
 
     def _critic_output(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         task = str(payload.get("task", ""))
-        if _REFUND.search(task):
+        if self._parse_refund_task(task) is not None:
             return self._refund_critic_output(payload)
         rule_name, _, _ = self._parse_task(task)
         rule = _RULES[rule_name]
@@ -227,14 +233,13 @@ class HeuristicDemoClient:
             "applied_memory_ids": list(dict.fromkeys(applied)),
         }
 
-    @staticmethod
-    def _refund_critic_output(payload: Mapping[str, Any]) -> dict[str, Any]:
+    @classmethod
+    def _refund_critic_output(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
         task = str(payload.get("task", ""))
-        match = _REFUND.search(task)
-        if match is None:
+        parsed = cls._parse_refund_task(task)
+        if parsed is None:
             raise ProviderError("demo refund critic received an invalid refund task")
-        tier = match.group(1).lower()
-        request_day = int(match.group(2))
+        tier, request_day = parsed
         if tier == "premium" and request_day > 14:
             directive = _REFUND_V3_DIRECTIVE
             trigger = "A premium-customer refund request is made after day 14 but by day 30."
@@ -270,6 +275,47 @@ class HeuristicDemoClient:
                 "supersedes_memory_ids": supersedes,
             },
         }
+
+    @classmethod
+    def _rerank_output(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
+        candidates = [item for item in payload.get("candidates", []) if isinstance(item, Mapping)]
+        original_ids = [str(item.get("memory_id", "")) for item in candidates]
+        task = str(payload.get("task", ""))
+        parsed_refund = cls._parse_refund_task(task)
+        preferred_directive = ""
+        if parsed_refund is not None:
+            tier, request_day = parsed_refund
+            if tier == "premium" and 14 < request_day <= 30:
+                preferred_directive = _REFUND_V3_DIRECTIVE
+            elif 7 < request_day <= 14:
+                preferred_directive = _REFUND_V2_DIRECTIVE
+        else:
+            try:
+                rule_name, _, _ = cls._parse_task(task)
+            except ProviderError:
+                rule_name = ""
+            if rule_name in _RULES:
+                preferred_directive = _RULES[rule_name].directive
+        preferred = [
+            str(item.get("memory_id", ""))
+            for item in candidates
+            if preferred_directive
+            and preferred_directive.casefold() in str(item.get("directive", "")).casefold()
+        ]
+        ranked = list(dict.fromkeys([*preferred, *original_ids]))
+        max_results = max(0, int(payload.get("max_results", len(ranked))))
+        return {"ranked_memory_ids": ranked[:max_results]}
+
+    @staticmethod
+    def _parse_refund_task(task: str) -> tuple[str, int] | None:
+        canonical = _REFUND.search(task)
+        if canonical is not None:
+            return canonical.group(1).lower(), int(canonical.group(2))
+        paraphrase = _REFUND_PARAPHRASE.search(task)
+        if paraphrase is None:
+            return None
+        tier = "premium" if paraphrase.group(1).casefold() == "vip member" else "standard"
+        return tier, int(paraphrase.group(2))
 
     @staticmethod
     def _parse_task(task: str) -> tuple[str, int, int]:

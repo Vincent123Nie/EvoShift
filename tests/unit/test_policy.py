@@ -37,3 +37,18 @@ def test_policy_patch_rejects_code_and_stale_versions() -> None:
                 hypothesis="stale",
             ),
         )
+
+
+def test_policy_patch_cannot_enable_extra_model_calls() -> None:
+    with pytest.raises(ValidationError, match="non-evolvable policy fields"):
+        PolicyPatch(
+            patch_id="rerank-toggle",
+            base_version=1,
+            changes={"llm_rerank_enabled": True},
+            hypothesis="Try an additional model call during retrieval.",
+        )
+
+
+def test_rerank_candidate_count_respects_retrieval_bound() -> None:
+    with pytest.raises(ValidationError):
+        PolicyGenome(llm_rerank_candidate_k=21)
