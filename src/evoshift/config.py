@@ -128,6 +128,17 @@ class EvolutionConfig(ConfigModel):
     active_audit_reactivation_grace_episodes: int = Field(default=0, ge=0, le=10000)
     active_audit_retirement_probation_enabled: bool = False
     active_audit_retirement_probation_context_scoped: bool = False
+    active_audit_retirement_probation_fast_confirm_enabled: bool = False
+    active_audit_retirement_probation_fast_confirm_min_trust: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+    active_audit_retirement_probation_fast_revival_cooldown_episodes: int = Field(
+        default=0,
+        ge=0,
+        le=10000,
+    )
     active_audit_retirement_probation_max_age: int = Field(default=8, ge=1, le=10000)
     active_audit_retirement_probation_min_confirmations: int = Field(default=2, ge=1, le=100)
     active_audit_retirement_probation_min_evidence_span: int = Field(default=2, ge=0, le=10000)
@@ -251,6 +262,11 @@ class EvolutionConfig(ConfigModel):
             and not self.active_audit_retirement_probation_enabled
         ):
             raise ValueError("context-scoped retirement probation requires retirement probation")
+        if (
+            self.active_audit_retirement_probation_fast_confirm_enabled
+            and not self.active_audit_retirement_probation_enabled
+        ):
+            raise ValueError("fast retirement confirmation requires retirement probation")
         if (
             self.dormant_revival_enabled
             and self.dormant_revival_min_trust >= self.min_feedback_trust_for_active_audit

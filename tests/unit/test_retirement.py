@@ -2,6 +2,7 @@ import pytest
 
 from evoshift.config import EvolutionConfig
 from evoshift.evolution import RetirementProbation
+from evoshift.evolution.revival import DormantMemoryRevival
 from evoshift.schemas import MemoryItem, MemoryStatus
 
 
@@ -85,10 +86,67 @@ def test_retirement_probation_requires_later_exact_context_confirmation() -> Non
     assert probation.pending_memory_keys() == set()
 
 
-def test_context_scoped_probation_suppresses_only_the_matching_observable_key() -> None:
-    probation = RetirementProbation(
-        _config(active_audit_retirement_probation_context_scoped=True)
+def test_fast_retirement_revival_cooldown_is_additive_to_normal_dormant_age() -> None:
+    revival = DormantMemoryRevival(
+        _config(
+            dynamic_feedback_trust_enabled=True,
+            dormant_revival_enabled=True,
+            dormant_revival_min_retired_age=15,
+        )
     )
+
+    assert revival.retired_long_enough(retired_index=10, episode_index=25)
+    assert not revival.retired_long_enough(
+        retired_index=10,
+        episode_index=25,
+        extra_cooldown=1,
+    )
+    assert revival.retired_long_enough(
+        retired_index=10,
+        episode_index=28,
+        extra_cooldown=3,
+    )
+
+
+def test_fast_confirmation_can_require_high_trust() -> None:
+    probation = RetirementProbation(
+        _config(
+            active_audit_retirement_probation_fast_confirm_enabled=True,
+            active_audit_retirement_probation_fast_confirm_min_trust=0.9,
+        )
+    )
+    pending = probation.register(
+        source="portal",
+        context="context",
+        memory=_retired(),
+        active_snapshot=_active_snapshot(),
+        restored_predecessors=(),
+        episode_index=10,
+        mechanism="active_causal",
+        phase_index=1,
+        oracle_stale=True,
+        early_retirement=False,
+    )
+    assert pending is not None
+    matched = probation.match(
+        source="portal",
+        context="context",
+        episode_index=12,
+        available_memory_versions=[("retired", 2)],
+    )
+    assert matched is not None
+    decision = probation.observe(
+        matched,
+        episode_index=12,
+        trust=0.8,
+        old_memory_applied=True,
+        delta=1.0,
+    )
+    assert decision.outcome == "defer"
+
+
+def test_context_scoped_probation_suppresses_only_the_matching_observable_key() -> None:
+    probation = RetirementProbation(_config(active_audit_retirement_probation_context_scoped=True))
     active = _active_snapshot()
     pending = probation.register(
         source="portal",
@@ -124,19 +182,20 @@ def test_context_scoped_probation_suppresses_only_the_matching_observable_key() 
         )
         is None
     )
-    assert probation.match(
-        source="portal",
-        context="refund:any:days_8_14",
-        episode_index=11,
-        available_memory_versions=[("retired", 2)],
-    ) == pending
+    assert (
+        probation.match(
+            source="portal",
+            context="refund:any:days_8_14",
+            episode_index=11,
+            available_memory_versions=[("retired", 2)],
+        )
+        == pending
+    )
     assert probation.snapshot()["context_scoped"] is True
 
 
 def test_context_scoped_probation_quarantine_releases_on_change_point() -> None:
-    probation = RetirementProbation(
-        _config(active_audit_retirement_probation_context_scoped=True)
-    )
+    probation = RetirementProbation(_config(active_audit_retirement_probation_context_scoped=True))
     active = _active_snapshot()
     pending = probation.register(
         source="portal",
@@ -168,10 +227,13 @@ def test_context_scoped_probation_quarantine_releases_on_change_point() -> None:
         context="refund:any:days_8_14",
     )
     assert released == (pending,)
-    assert probation.suppressed_memory_versions(
-        source="portal",
-        context="refund:any:days_8_14",
-    ) == set()
+    assert (
+        probation.suppressed_memory_versions(
+            source="portal",
+            context="refund:any:days_8_14",
+        )
+        == set()
+    )
     assert probation.snapshot()["quarantine_releases"] == 1
 
 
@@ -357,3 +419,101 @@ def test_decisive_retirement_evidence_requires_temporally_separated_repetition(
     assert probation.snapshot()[counter] == 1
     assert probation.snapshot()["evidence_observations"] == 2
     assert probation.pending_memory_keys() == set()
+
+
+def test_fast_confirmation_is_blocked_by_low_trust_reverse_evidence() -> None:
+    probation = RetirementProbation(
+        _config(
+            active_audit_retirement_probation_fast_confirm_enabled=True,
+            active_audit_retirement_probation_min_confirmations=2,
+            active_audit_retirement_probation_min_evidence_span=2,
+        )
+    )
+    pending = probation.register(
+        source="portal",
+        context="refund:any:days_8_14",
+        memory=_retired(),
+        active_snapshot=_active_snapshot(),
+        restored_predecessors=(),
+        episode_index=10,
+        mechanism="active_causal",
+        phase_index=1,
+        oracle_stale=True,
+        early_retirement=False,
+    )
+    assert pending is not None
+    first = probation.match(
+        source="portal",
+        context="refund:any:days_8_14",
+        episode_index=11,
+        available_memory_versions=[("retired", 2)],
+    )
+    assert first is not None
+    warning = probation.observe(
+        first,
+        episode_index=11,
+        trust=0.10,
+        old_memory_applied=True,
+        delta=-0.80,
+    )
+    assert warning.outcome == "defer"
+    assert warning.evidence_recorded
+    assert warning.pending.contradiction_indices == (11,)
+
+    second = probation.match(
+        source="portal",
+        context="refund:any:days_8_14",
+        episode_index=13,
+        available_memory_versions=[("retired", 2)],
+    )
+    assert second is not None
+    confirmed = probation.observe(
+        second,
+        episode_index=13,
+        trust=1.0,
+        old_memory_applied=True,
+        delta=0.80,
+    )
+    assert confirmed.outcome == "defer"
+    assert not confirmed.fast_path
+    assert probation.snapshot()["fast_confirmations"] == 0
+
+
+def test_fast_confirmation_uses_one_clean_separated_observation() -> None:
+    probation = RetirementProbation(
+        _config(
+            active_audit_retirement_probation_fast_confirm_enabled=True,
+            active_audit_retirement_probation_min_confirmations=2,
+            active_audit_retirement_probation_min_evidence_span=2,
+        )
+    )
+    pending = probation.register(
+        source="portal",
+        context="refund:any:days_8_14",
+        memory=_retired(),
+        active_snapshot=_active_snapshot(),
+        restored_predecessors=(),
+        episode_index=10,
+        mechanism="active_causal",
+        phase_index=1,
+        oracle_stale=True,
+        early_retirement=False,
+    )
+    assert pending is not None
+    matched = probation.match(
+        source="portal",
+        context="refund:any:days_8_14",
+        episode_index=13,
+        available_memory_versions=[("retired", 2)],
+    )
+    assert matched is not None
+    confirmed = probation.observe(
+        matched,
+        episode_index=13,
+        trust=1.0,
+        old_memory_applied=True,
+        delta=0.80,
+    )
+    assert confirmed.outcome == "confirm"
+    assert confirmed.fast_path
+    assert probation.snapshot()["fast_confirmations"] == 1

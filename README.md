@@ -268,6 +268,7 @@ dataset hash, and comparison artifact.
 - [Dynamic-trust and future-audit experiment](docs/experiment_dynamic_trust_conflict_memory.md)
 - [Active-memory causal-governance experiment](docs/experiment_causal_memory_governance.md)
 - [Recurrence-aware causal rollback experiment](docs/experiment_recurrence_aware_rollback.md)
+- [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)
 
 ## Security
 

@@ -354,6 +354,7 @@ class EvoShiftRunner:
             retired_memory_indices: Dict[tuple[str, int], int] = {}
             retired_memory_contexts: Dict[tuple[str, int], tuple[str, str]] = {}
             retired_memory_generations: Dict[tuple[str, int], int] = {}
+            fast_confirmed_retirement_indices: Dict[tuple[str, int], int] = {}
             reactivated_memory_indices: Dict[tuple[str, int], int] = {}
             revival_confirmed_memory_indices: Dict[tuple[str, int], int] = {}
             reactivation_grace_audit_suppressions = 0
@@ -371,6 +372,9 @@ class EvoShiftRunner:
                 retired_memory_generations[memory_key] = generation
                 retired_memory_indices[memory_key] = episode_index
                 retired_memory_contexts[memory_key] = (source, context)
+                # A re-retirement starts a fresh lifecycle; the prior fast
+                # confirmation must not leak into its revival eligibility.
+                fast_confirmed_retirement_indices.pop(memory_key, None)
                 return generation
 
             def note_reacquisition(candidate: MemoryItem, activation_index: int) -> None:
@@ -379,6 +383,7 @@ class EvoShiftRunner:
                 candidate_key = (candidate.memory_id, candidate.version)
                 retired_memory_indices.pop(candidate_key, None)
                 retired_memory_contexts.pop(candidate_key, None)
+                fast_confirmed_retirement_indices.pop(candidate_key, None)
                 if candidate.version <= 1:
                     return
                 previous = store.get_memory(candidate.memory_id, version=candidate.version - 1)
@@ -416,10 +421,11 @@ class EvoShiftRunner:
                 )
 
             def note_reactivation(item: MemoryItem, episode_index: int) -> None:
-                retired_memory_contexts.pop((item.memory_id, item.version), None)
+                key = (item.memory_id, item.version)
+                retired_memory_contexts.pop(key, None)
+                fast_confirmed_retirement_indices.pop(key, None)
                 if self.config.evolution.active_audit_reactivation_grace_episodes <= 0:
                     return
-                key = (item.memory_id, item.version)
                 reactivated_memory_indices[key] = episode_index
                 if circuit_breaker is not None:
                     circuit_breaker.invalidate_memory_versions(
@@ -575,6 +581,7 @@ class EvoShiftRunner:
                 nonlocal active_audit_early_false_retirements
 
                 retired_memory_indices[(retired.memory_id, retired.version)] = episode_index
+                fast_confirmed_retirement_indices.pop((retired.memory_id, retired.version), None)
                 rollbacks += 1
                 candidate_pool.mark_memory_retired(retired)
                 for predecessor_id in retired.supersedes_memory_ids:
@@ -984,6 +991,7 @@ class EvoShiftRunner:
                 if restored is not None:
                     retired_memory_indices.pop(pending.memory_key, None)
                     retired_memory_contexts.pop(pending.memory_key, None)
+                    fast_confirmed_retirement_indices.pop(pending.memory_key, None)
                     for predecessor in pending.restored_predecessors:
                         reactivated_memory_indices.pop(
                             (predecessor.memory_id, predecessor.version),
@@ -1728,6 +1736,10 @@ class EvoShiftRunner:
                                 resolved_retirement.mechanism != "posterior_utility"
                             ),
                         )
+                        if evidence_decision.fast_path:
+                            fast_confirmed_retirement_indices[resolved_retirement.memory_key] = (
+                                index
+                            )
                         for restored_predecessor in commit_outcome.reactivated:
                             note_reactivation(restored_predecessor, index)
                             retired_memory_indices.pop(
@@ -1829,9 +1841,13 @@ class EvoShiftRunner:
                             "evidence_recorded": evidence_decision.evidence_recorded,
                             "confirmation_indices": list(resolved_retirement.confirmation_indices),
                             "veto_indices": list(resolved_retirement.veto_indices),
+                            "contradiction_indices": list(
+                                resolved_retirement.contradiction_indices
+                            ),
                             "confirmed": confirmed,
                             "vetoed": vetoed,
                             "deferred": deferred,
+                            "fast_confirmation": evidence_decision.fast_path,
                             "persistent_state_changed": confirmed
                             or restored_retirement is not None,
                             "lifecycle_state_changed": confirmed
@@ -1843,6 +1859,11 @@ class EvoShiftRunner:
                             "oracle_intervention_delta": (score.primary - old_memory_score.primary),
                             "oracle_stale_at_registration": (retirement_intervention.oracle_stale),
                             "oracle_stale_at_resolution": confirmation_oracle_stale,
+                            "fast_revival_cooldown_episodes": (
+                                self.config.evolution.active_audit_retirement_probation_fast_revival_cooldown_episodes
+                                if evidence_decision.fast_path
+                                else 0
+                            ),
                         },
                     )
 
@@ -2373,6 +2394,15 @@ class EvoShiftRunner:
                         and dormant_revival.retired_long_enough(
                             retired_index=retired_memory_indices[(item.memory_id, item.version)],
                             episode_index=index,
+                            extra_cooldown=(
+                                self.config.evolution.active_audit_retirement_probation_fast_revival_cooldown_episodes
+                                if (
+                                    (item.memory_id, item.version)
+                                    in fast_confirmed_retirement_indices
+                                    and item.supersedes_memory_ids
+                                )
+                                else 0
+                            ),
                         )
                     ]
                     revival_context_guard_opportunities += len(eligible_dormant_before_context)
@@ -3548,6 +3578,10 @@ class EvoShiftRunner:
                                     "pending": 0,
                                 }
                             ),
+                            "fast_revival_cooldown_episodes": (
+                                self.config.evolution.active_audit_retirement_probation_fast_revival_cooldown_episodes
+                            ),
+                            "fast_confirmed_retirements": len(fast_confirmed_retirement_indices),
                             "correct_registrations": retirement_probation_correct_registrations,
                             "false_registrations": retirement_probation_false_registrations,
                             "unknown_tag_registrations": (

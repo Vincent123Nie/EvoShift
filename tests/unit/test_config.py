@@ -39,6 +39,34 @@ def test_context_scoped_retirement_accepts_complete_dependency_chain() -> None:
     assert config.active_audit_retirement_probation_context_scoped
 
 
+def test_fast_retirement_confirmation_requires_probation() -> None:
+    with pytest.raises(
+        ValueError,
+        match="fast retirement confirmation requires retirement probation",
+    ):
+        EvolutionConfig(active_audit_retirement_probation_fast_confirm_enabled=True)
+
+
+def test_fast_revival_cooldown_is_a_nonnegative_evolution_setting() -> None:
+    config = EvolutionConfig(
+        active_audit_enabled=True,
+        active_audit_retirement_probation_enabled=True,
+        active_audit_retirement_probation_fast_revival_cooldown_episodes=13,
+    )
+
+    assert config.active_audit_retirement_probation_fast_revival_cooldown_episodes == 13
+
+
+def test_fast_confirmation_trust_floor_is_bounded() -> None:
+    config = EvolutionConfig(
+        active_audit_enabled=True,
+        active_audit_retirement_probation_enabled=True,
+        active_audit_retirement_probation_fast_confirm_min_trust=0.94,
+    )
+
+    assert config.active_audit_retirement_probation_fast_confirm_min_trust == 0.94
+
+
 def test_historical_replay_anchors_require_at_least_one_exact_quota_slot() -> None:
     with pytest.raises(ValueError, match="historical replay anchors require"):
         EvolutionConfig(

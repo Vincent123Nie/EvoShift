@@ -111,8 +111,22 @@ class DormantMemoryRevival:
     def trust_is_probe_eligible(self, trust: float) -> bool:
         return self.min_trust <= trust < self.ordinary_trust
 
-    def retired_long_enough(self, *, retired_index: int, episode_index: int) -> bool:
-        return episode_index - retired_index >= self.min_retired_age
+    def retired_long_enough(
+        self,
+        *,
+        retired_index: int,
+        episode_index: int,
+        extra_cooldown: int = 0,
+    ) -> bool:
+        """Require a longer dormant age when a caller marks a memory uncertain.
+
+        Fast retirement confirmation deliberately trades one sequential audit for
+        lower exposure.  Callers can compensate for that uncertainty without
+        changing the normal revival age of ordinary retirements.
+        """
+
+        required_age = self.min_retired_age + max(0, int(extra_cooldown))
+        return episode_index - retired_index >= required_age
 
     def qualifies(self, delta: float) -> bool:
         return float(delta) >= self.delta_threshold

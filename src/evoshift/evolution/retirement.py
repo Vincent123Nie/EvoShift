@@ -24,6 +24,7 @@ class PendingRetirement:
     causal_observation: ActiveAuditDecision | None = None
     confirmation_indices: tuple[int, ...] = ()
     veto_indices: tuple[int, ...] = ()
+    contradiction_indices: tuple[int, ...] = ()
 
     @property
     def observable_key(self) -> tuple[str, str]:
@@ -39,7 +40,7 @@ class PendingRetirement:
 
     @property
     def last_evidence_index(self) -> int | None:
-        indices = self.confirmation_indices + self.veto_indices
+        indices = self.confirmation_indices + self.veto_indices + self.contradiction_indices
         return max(indices) if indices else None
 
 
@@ -52,6 +53,7 @@ class RetirementEvidenceDecision:
     outcome: RetirementEvidenceOutcome
     reason: str
     evidence_recorded: bool = False
+    fast_path: bool = False
 
 
 class RetirementProbation:
@@ -64,6 +66,10 @@ class RetirementProbation:
         self.min_confirmations = config.active_audit_retirement_probation_min_confirmations
         self.min_evidence_span = config.active_audit_retirement_probation_min_evidence_span
         self.context_scoped = config.active_audit_retirement_probation_context_scoped
+        self.fast_confirm_enabled = config.active_audit_retirement_probation_fast_confirm_enabled
+        self.fast_confirm_min_trust = (
+            config.active_audit_retirement_probation_fast_confirm_min_trust
+        )
         self._pending: dict[tuple[str, str, str, int], PendingRetirement] = {}
         self._quarantined: dict[tuple[str, str, str, int], PendingRetirement] = {}
         self._invalidated: list[tuple[PendingRetirement, str]] = []
@@ -81,6 +87,8 @@ class RetirementProbation:
         self.invalidations = 0
         self.quarantines = 0
         self.quarantine_releases = 0
+        self.fast_confirmations = 0
+        self.contradiction_warnings = 0
 
     def qualifies(self, delta: float) -> bool:
         return float(delta) >= self.delta_threshold
@@ -212,6 +220,22 @@ class RetirementProbation:
         """Record one learner-visible paired observation and advance the transaction."""
 
         if trust < self.ordinary_trust:
+            if old_memory_applied and self.qualifies(-delta):
+                updated = replace(
+                    pending,
+                    contradiction_indices=(
+                        *pending.contradiction_indices,
+                        episode_index,
+                    ),
+                )
+                self.contradiction_warnings += 1
+                self.defer(updated)
+                return RetirementEvidenceDecision(
+                    updated,
+                    "defer",
+                    "low-trust old-memory evidence blocked fast confirmation",
+                    evidence_recorded=True,
+                )
             self.low_trust_deferrals += 1
             self.defer(pending)
             return RetirementEvidenceDecision(
@@ -255,13 +279,27 @@ class RetirementProbation:
                 pending,
                 confirmation_indices=(*pending.confirmation_indices, episode_index),
             )
-            if len(updated.confirmation_indices) >= self.min_confirmations:
+            fast_path = (
+                self.fast_confirm_enabled
+                and trust >= self.fast_confirm_min_trust
+                and len(updated.confirmation_indices) >= 1
+                and episode_index - updated.registered_index >= self.min_evidence_span
+                and not updated.veto_indices
+                and not updated.contradiction_indices
+            )
+            if len(updated.confirmation_indices) >= self.min_confirmations or fast_path:
                 self.resolve(updated, confirmed=True)
+                self.fast_confirmations += int(fast_path)
                 return RetirementEvidenceDecision(
                     updated,
                     "confirm",
-                    "temporally separated current-over-old evidence reached threshold",
+                    (
+                        "fast current-over-old evidence passed without contradiction"
+                        if fast_path
+                        else "temporally separated current-over-old evidence reached threshold"
+                    ),
                     evidence_recorded=True,
+                    fast_path=fast_path,
                 )
         else:
             updated = replace(
@@ -354,6 +392,8 @@ class RetirementProbation:
         return {
             "enabled": True,
             "context_scoped": self.context_scoped,
+            "fast_confirm_enabled": self.fast_confirm_enabled,
+            "fast_confirm_min_trust": self.fast_confirm_min_trust,
             "delta_threshold": self.delta_threshold,
             "ordinary_trust": self.ordinary_trust,
             "max_age": self.max_age,
@@ -376,6 +416,8 @@ class RetirementProbation:
             "quarantined": len(self._quarantined),
             "quarantines": self.quarantines,
             "quarantine_releases": self.quarantine_releases,
+            "fast_confirmations": self.fast_confirmations,
+            "contradiction_warnings": self.contradiction_warnings,
         }
 
 
