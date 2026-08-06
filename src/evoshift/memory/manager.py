@@ -39,6 +39,12 @@ class MemoryOutcome:
     # unrelated lineage when several memories are updated in one episode.
     retirement_predecessors: tuple[tuple[MemoryItem, ...], ...] = ()
     retirement_snapshots: tuple[MemoryItem, ...] = ()
+    # Context-scoped retirement probation keeps these exact versions active
+    # while it gathers evidence.  They are returned separately so legacy
+    # callers can retain the original globally-retired transaction semantics.
+    retirement_candidates: tuple[MemoryItem, ...] = ()
+    retirement_candidate_predecessors: tuple[tuple[MemoryItem, ...], ...] = ()
+    retirement_candidate_snapshots: tuple[MemoryItem, ...] = ()
 
 
 class MemoryManager:
@@ -216,12 +222,16 @@ class MemoryManager:
         policy: PolicyGenome,
         *,
         retirement_protected_versions: Iterable[tuple[str, int]] = (),
+        defer_retirements: bool = False,
     ) -> MemoryOutcome:
         rolled_back: List[MemoryItem] = []
         reactivated: List[MemoryItem] = []
         retirement_protected: List[MemoryItem] = []
         retirement_predecessors: List[tuple[MemoryItem, ...]] = []
         retirement_snapshots: List[MemoryItem] = []
+        retirement_candidates: List[MemoryItem] = []
+        retirement_candidate_predecessors: List[tuple[MemoryItem, ...]] = []
+        retirement_candidate_snapshots: List[MemoryItem] = []
         protected_versions = set(retirement_protected_versions)
         for memory_id in memory_ids:
             current = self._latest_status_memory(
@@ -249,6 +259,14 @@ class MemoryManager:
             ):
                 if (current.memory_id, current.version) in protected_versions:
                     retirement_protected.append(updated)
+                elif defer_retirements:
+                    retirement_candidates.append(updated)
+                    retirement_candidate_predecessors.append(
+                        tuple(self._restorable_predecessors(updated))
+                    )
+                    retirement_candidate_snapshots.append(current)
+                    self.store.save_memory(updated)
+                    continue
                 else:
                     retirement_snapshots.append(current)
                     updated = updated.model_copy(update={"status": MemoryStatus.RETIRED})
@@ -265,6 +283,9 @@ class MemoryManager:
             tuple(retirement_protected),
             tuple(retirement_predecessors),
             tuple(retirement_snapshots),
+            tuple(retirement_candidates),
+            tuple(retirement_candidate_predecessors),
+            tuple(retirement_candidate_snapshots),
         )
 
     def apply_active_audit(

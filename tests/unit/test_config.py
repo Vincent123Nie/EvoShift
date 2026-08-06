@@ -21,6 +21,24 @@ def test_retirement_context_bound_revival_accepts_complete_dependency_chain() ->
     assert config.dormant_revival_retirement_context_enabled
 
 
+def test_context_scoped_retirement_requires_probation() -> None:
+    with pytest.raises(
+        ValueError,
+        match="context-scoped retirement probation requires retirement probation",
+    ):
+        EvolutionConfig(active_audit_retirement_probation_context_scoped=True)
+
+
+def test_context_scoped_retirement_accepts_complete_dependency_chain() -> None:
+    config = EvolutionConfig(
+        active_audit_enabled=True,
+        active_audit_retirement_probation_enabled=True,
+        active_audit_retirement_probation_context_scoped=True,
+    )
+
+    assert config.active_audit_retirement_probation_context_scoped
+
+
 def test_historical_replay_anchors_require_at_least_one_exact_quota_slot() -> None:
     with pytest.raises(ValueError, match="historical replay anchors require"):
         EvolutionConfig(

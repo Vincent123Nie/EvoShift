@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Iterable, Literal
 
 from evoshift.config import EvolutionConfig
+from evoshift.evolution.active_audit import ActiveAuditDecision
 from evoshift.schemas import MemoryItem
 
 
@@ -20,6 +21,7 @@ class PendingRetirement:
     phase_index: int
     oracle_stale: bool
     early_retirement: bool
+    causal_observation: ActiveAuditDecision | None = None
     confirmation_indices: tuple[int, ...] = ()
     veto_indices: tuple[int, ...] = ()
 
@@ -53,7 +55,7 @@ class RetirementEvidenceDecision:
 
 
 class RetirementProbation:
-    """Two-phase, reversible confirmation for destructive memory retirement."""
+    """Sequential confirmation for destructive memory retirement."""
 
     def __init__(self, config: EvolutionConfig):
         self.delta_threshold = config.dormant_revival_delta
@@ -61,7 +63,9 @@ class RetirementProbation:
         self.max_age = config.active_audit_retirement_probation_max_age
         self.min_confirmations = config.active_audit_retirement_probation_min_confirmations
         self.min_evidence_span = config.active_audit_retirement_probation_min_evidence_span
+        self.context_scoped = config.active_audit_retirement_probation_context_scoped
         self._pending: dict[tuple[str, str, str, int], PendingRetirement] = {}
+        self._quarantined: dict[tuple[str, str, str, int], PendingRetirement] = {}
         self._invalidated: list[tuple[PendingRetirement, str]] = []
         self.registrations = 0
         self.interventions = 0
@@ -75,6 +79,8 @@ class RetirementProbation:
         self.neutral_deferrals = 0
         self.expirations = 0
         self.invalidations = 0
+        self.quarantines = 0
+        self.quarantine_releases = 0
 
     def qualifies(self, delta: float) -> bool:
         return float(delta) >= self.delta_threshold
@@ -92,6 +98,7 @@ class RetirementProbation:
         phase_index: int,
         oracle_stale: bool,
         early_retirement: bool,
+        causal_observation: ActiveAuditDecision | None = None,
     ) -> PendingRetirement | None:
         pending = PendingRetirement(
             source=source,
@@ -105,10 +112,13 @@ class RetirementProbation:
             phase_index=phase_index,
             oracle_stale=oracle_stale,
             early_retirement=early_retirement,
+            causal_observation=causal_observation,
         )
         existing = self._pending.get(pending.transaction_key)
         if existing is not None:
             return existing
+        if pending.transaction_key in self._quarantined:
+            return None
         self._pending[pending.transaction_key] = pending
         self.registrations += 1
         return pending
@@ -119,19 +129,19 @@ class RetirementProbation:
         source: str,
         context: str,
         episode_index: int,
-        retired_memory_versions: Iterable[tuple[str, int]],
+        available_memory_versions: Iterable[tuple[str, int]],
     ) -> PendingRetirement | None:
-        retired_versions = set(retired_memory_versions)
+        available_versions = set(available_memory_versions)
         candidates: list[PendingRetirement] = []
         for transaction_key, pending in tuple(self._pending.items()):
             if pending.observable_key != (source, context):
                 continue
-            if pending.memory_key not in retired_versions:
+            if pending.memory_key not in available_versions:
                 self._pending.pop(transaction_key, None)
                 self.cancellations += 1
                 self.invalidations += 1
                 self._invalidated.append(
-                    (pending, "exact retired memory version is no longer available")
+                    (pending, "exact probation memory version is no longer available")
                 )
                 continue
             if episode_index > pending.registered_index:
@@ -152,6 +162,35 @@ class RetirementProbation:
             self.confirmations += 1
         else:
             self.cancellations += 1
+
+    def quarantine(self, pending: PendingRetirement) -> None:
+        """Keep an unconfirmed exact version locally suppressed after a veto/expiry."""
+
+        if not self.context_scoped:
+            return
+        self._quarantined[pending.transaction_key] = pending
+        self.quarantines += 1
+
+    def release_context(self, *, source: str, context: str) -> tuple[PendingRetirement, ...]:
+        """Release local quarantines after a learner-visible change-point signal."""
+
+        observable_key = (source, context)
+        released = tuple(
+            pending
+            for pending in self._quarantined.values()
+            if pending.observable_key == observable_key
+        )
+        for pending in released:
+            self._quarantined.pop(pending.transaction_key, None)
+        self.quarantine_releases += len(released)
+        return released
+
+    def discard_memory(self, memory_key: tuple[str, int]) -> None:
+        """Drop local quarantines for a version that has globally changed lifecycle."""
+
+        for transaction_key, pending in tuple(self._quarantined.items()):
+            if pending.memory_key == memory_key:
+                self._quarantined.pop(transaction_key, None)
 
     def defer(self, pending: PendingRetirement) -> None:
         """Return an inconclusive intervention to its original bounded window."""
@@ -248,7 +287,41 @@ class RetirementProbation:
     def pending_memory_keys(self) -> set[tuple[str, int]]:
         """Return exact versions currently in a reversible retirement transaction."""
 
-        return {pending.memory_key for pending in self._pending.values()}
+        return {
+            pending.memory_key for pending in (*self._pending.values(), *self._quarantined.values())
+        }
+
+    def suppressed_memory_versions(
+        self,
+        *,
+        source: str,
+        context: str,
+    ) -> set[tuple[str, int]]:
+        """Return exact active versions shadow-retired in one observable context."""
+
+        if not self.context_scoped:
+            return set()
+        observable_key = (source, context)
+        return {
+            pending.memory_key
+            for pending in (*self._pending.values(), *self._quarantined.values())
+            if pending.observable_key == observable_key
+        }
+
+    def pending_items_for_context(
+        self,
+        *,
+        source: str,
+        context: str,
+    ) -> tuple[PendingRetirement, ...]:
+        """Return transactions whose local suppression affects this context."""
+
+        observable_key = (source, context)
+        return tuple(
+            pending
+            for pending in (*self._pending.values(), *self._quarantined.values())
+            if pending.observable_key == observable_key
+        )
 
     def pending_items(self) -> tuple[PendingRetirement, ...]:
         """Return a stable snapshot for post-hoc path metrics only."""
@@ -280,6 +353,7 @@ class RetirementProbation:
     def snapshot(self) -> dict[str, int | float | bool]:
         return {
             "enabled": True,
+            "context_scoped": self.context_scoped,
             "delta_threshold": self.delta_threshold,
             "ordinary_trust": self.ordinary_trust,
             "max_age": self.max_age,
@@ -299,6 +373,9 @@ class RetirementProbation:
             "invalidations": self.invalidations,
             "invalidated_awaiting_resolution": len(self._invalidated),
             "pending": len(self._pending),
+            "quarantined": len(self._quarantined),
+            "quarantines": self.quarantines,
+            "quarantine_releases": self.quarantine_releases,
         }
 
 

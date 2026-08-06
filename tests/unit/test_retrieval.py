@@ -104,6 +104,37 @@ def test_manager_rolls_back_harmful_memory(tmp_path: Path) -> None:
     store.close()
 
 
+def test_manager_defers_posterior_retirement_without_changing_lifecycle(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    policy = PolicyGenome(rollback_min_uses=2, rollback_utility_threshold=0.6)
+    item = _memory("bad", "all tasks", "Always answer zero.")
+    store.save_memory(item)
+
+    manager.record_outcome(
+        ["bad"],
+        success=False,
+        policy=policy,
+        defer_retirements=True,
+    )
+    outcome = manager.record_outcome(
+        ["bad"],
+        success=False,
+        policy=policy,
+        defer_retirements=True,
+    )
+
+    assert outcome.rolled_back == ()
+    assert [candidate.memory_id for candidate in outcome.retirement_candidates] == ["bad"]
+    current = store.get_memory("bad")
+    assert current is not None
+    assert current.status == MemoryStatus.ACTIVE
+    assert current.use_count == 2
+    store.close()
+
+
 def test_confirmed_successor_supersedes_and_rollback_restores_prior_rule(
     tmp_path: Path,
 ) -> None:

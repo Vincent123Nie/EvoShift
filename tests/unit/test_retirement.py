@@ -58,7 +58,7 @@ def test_retirement_probation_requires_later_exact_context_confirmation() -> Non
             source="portal",
             context="refund:any:days_8_14",
             episode_index=10,
-            retired_memory_versions=[("retired", 2)],
+            available_memory_versions=[("retired", 2)],
         )
         is None
     )
@@ -66,7 +66,7 @@ def test_retirement_probation_requires_later_exact_context_confirmation() -> Non
         source="portal",
         context="refund:any:days_8_14",
         episode_index=11,
-        retired_memory_versions=[("retired", 2)],
+        available_memory_versions=[("retired", 2)],
     )
     assert matched == pending
     probation.defer(matched)
@@ -75,7 +75,7 @@ def test_retirement_probation_requires_later_exact_context_confirmation() -> Non
         source="portal",
         context="refund:any:days_8_14",
         episode_index=12,
-        retired_memory_versions=[("retired", 2)],
+        available_memory_versions=[("retired", 2)],
     )
     assert matched == pending
     assert probation.qualifies(0.75)
@@ -83,6 +83,96 @@ def test_retirement_probation_requires_later_exact_context_confirmation() -> Non
     assert probation.snapshot()["confirmations"] == 1
     assert probation.snapshot()["deferrals"] == 1
     assert probation.pending_memory_keys() == set()
+
+
+def test_context_scoped_probation_suppresses_only_the_matching_observable_key() -> None:
+    probation = RetirementProbation(
+        _config(active_audit_retirement_probation_context_scoped=True)
+    )
+    active = _active_snapshot()
+    pending = probation.register(
+        source="portal",
+        context="refund:any:days_8_14",
+        memory=active,
+        active_snapshot=active,
+        restored_predecessors=(),
+        episode_index=10,
+        mechanism="active_causal",
+        phase_index=2,
+        oracle_stale=False,
+        early_retirement=False,
+    )
+
+    assert pending is not None
+    assert probation.suppressed_memory_versions(
+        source="portal",
+        context="refund:any:days_8_14",
+    ) == {("retired", 2)}
+    assert (
+        probation.suppressed_memory_versions(
+            source="portal",
+            context="refund:premium:days_15_30",
+        )
+        == set()
+    )
+    assert (
+        probation.match(
+            source="portal",
+            context="refund:premium:days_15_30",
+            episode_index=11,
+            available_memory_versions=[("retired", 2)],
+        )
+        is None
+    )
+    assert probation.match(
+        source="portal",
+        context="refund:any:days_8_14",
+        episode_index=11,
+        available_memory_versions=[("retired", 2)],
+    ) == pending
+    assert probation.snapshot()["context_scoped"] is True
+
+
+def test_context_scoped_probation_quarantine_releases_on_change_point() -> None:
+    probation = RetirementProbation(
+        _config(active_audit_retirement_probation_context_scoped=True)
+    )
+    active = _active_snapshot()
+    pending = probation.register(
+        source="portal",
+        context="refund:any:days_8_14",
+        memory=active,
+        active_snapshot=active,
+        restored_predecessors=(),
+        episode_index=10,
+        mechanism="active_causal",
+        phase_index=2,
+        oracle_stale=False,
+        early_retirement=False,
+    )
+    assert pending is not None
+    matched = probation.match(
+        source="portal",
+        context="refund:any:days_8_14",
+        episode_index=11,
+        available_memory_versions=[("retired", 2)],
+    )
+    assert matched == pending
+    probation.quarantine(matched)
+    assert probation.suppressed_memory_versions(
+        source="portal",
+        context="refund:any:days_8_14",
+    ) == {("retired", 2)}
+    released = probation.release_context(
+        source="portal",
+        context="refund:any:days_8_14",
+    )
+    assert released == (pending,)
+    assert probation.suppressed_memory_versions(
+        source="portal",
+        context="refund:any:days_8_14",
+    ) == set()
+    assert probation.snapshot()["quarantine_releases"] == 1
 
 
 def test_retirement_probation_invalidates_changed_version_and_expires() -> None:
@@ -105,7 +195,7 @@ def test_retirement_probation_invalidates_changed_version_and_expires() -> None:
             source="portal",
             context="context",
             episode_index=11,
-            retired_memory_versions=[("retired", 3)],
+            available_memory_versions=[("retired", 3)],
         )
         is None
     )
@@ -164,7 +254,7 @@ def test_same_context_matches_distinct_retirement_transactions_fifo() -> None:
         source="portal",
         context="refund:any:days_8_14",
         episode_index=12,
-        retired_memory_versions=[("first", 2), ("second", 2)],
+        available_memory_versions=[("first", 2), ("second", 2)],
     )
     assert matched_first == first
     probation.resolve(matched_first, confirmed=True)
@@ -173,7 +263,7 @@ def test_same_context_matches_distinct_retirement_transactions_fifo() -> None:
         source="portal",
         context="refund:any:days_8_14",
         episode_index=13,
-        retired_memory_versions=[("first", 2), ("second", 2)],
+        available_memory_versions=[("first", 2), ("second", 2)],
     )
     assert matched_second == second
 
@@ -214,7 +304,7 @@ def test_decisive_retirement_evidence_requires_temporally_separated_repetition(
         source="portal",
         context="refund:any:days_8_14",
         episode_index=11,
-        retired_memory_versions=[("retired", 2)],
+        available_memory_versions=[("retired", 2)],
     )
     assert first_match is not None
     first = probation.observe(
@@ -231,7 +321,7 @@ def test_decisive_retirement_evidence_requires_temporally_separated_repetition(
         source="portal",
         context="refund:any:days_8_14",
         episode_index=12,
-        retired_memory_versions=[("retired", 2)],
+        available_memory_versions=[("retired", 2)],
     )
     assert adjacent_match is not None
     adjacent = probation.observe(
@@ -251,7 +341,7 @@ def test_decisive_retirement_evidence_requires_temporally_separated_repetition(
         source="portal",
         context="refund:any:days_8_14",
         episode_index=13,
-        retired_memory_versions=[("retired", 2)],
+        available_memory_versions=[("retired", 2)],
     )
     assert separated_match is not None
     separated = probation.observe(
