@@ -325,6 +325,56 @@ def test_change_point_posterior_requires_dynamic_feedback_trust() -> None:
         EvolutionConfig(dynamic_feedback_change_point_enabled=True)
 
 
+def test_change_point_posterior_ignores_oracle_only_metadata() -> None:
+    config = EvolutionConfig(
+        feedback_default_trust=0.90,
+        dynamic_feedback_trust_enabled=True,
+        dynamic_feedback_change_point_enabled=True,
+        dynamic_feedback_change_hazard=0.15,
+    )
+    control = FeedbackTrustModel(config)
+    perturbed = FeedbackTrustModel(config)
+
+    for index, label in enumerate(("DENY", "DENY", "APPROVE", "DENY")):
+        observable = {
+            "feedback_source": "portal",
+            "feedback_context": "case",
+            "feedback_reference": label,
+        }
+        control_sample = BenchmarkSample(
+            sample_id=f"control-{index}",
+            prompt="case",
+            reference="hidden-control",
+            phase="control-phase",
+            metadata={
+                **observable,
+                "feedback_kind": "clean",
+                "feedback_corrupted": False,
+            },
+        )
+        perturbed_sample = BenchmarkSample(
+            sample_id=f"perturbed-{index}",
+            prompt="case",
+            reference="hidden-perturbed",
+            phase="perturbed-phase",
+            metadata={
+                **observable,
+                "feedback_kind": "attack",
+                "feedback_corrupted": True,
+                "feedback_attack_goal": "premature_update",
+                "policy_version": "oracle-only",
+                "valid_memory_tags": ["hidden-valid"],
+                "stale_memory_tags": ["hidden-stale"],
+            },
+        )
+
+        control_assessment = control.assess(control_sample, episode_index=index)
+        perturbed_assessment = perturbed.assess(perturbed_sample, episode_index=index)
+        assert control_assessment == perturbed_assessment
+
+    assert control.snapshot() == perturbed.snapshot()
+
+
 def test_dynamic_feedback_trust_bounds_context_state() -> None:
     model = FeedbackTrustModel(
         EvolutionConfig(
