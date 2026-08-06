@@ -106,3 +106,27 @@ Adoption gates are frozen as follows:
 
 Failure of any fresh gate is non-mergeable. Development gains may motivate a
 later candidate but may not be used to weaken these frozen confirmation gates.
+
+## Targeted rejection and next registered diagnostic
+
+The 16-run targeted check at `runs/sweeps/20260806T022727Z` rejected the
+no-probation candidate. Its score was no lower than `semantic_revival`, but
+three of four candidate runs had false-retirement rate `0.5`. The safety gate
+was not weakened.
+
+Event inspection of the sequential candidate showed a more specific latency
+problem. A retirement that remained uncertain could keep a valid memory
+provisionally offline for the full 24-episode transaction age. In the same
+targeted slice, every correct sequential confirmation completed within 15
+episodes of registration. The next inspected-seed diagnostic therefore keeps
+two temporally separated confirmations unchanged and tests one mechanism-
+derived bound only:
+
+- `active_audit_retirement_probation_max_age: 16`.
+
+The hypothesis is that a shorter unresolved transaction reduces provisional
+valid-memory exposure without preventing any previously observed correct
+confirmation. This TTL is not eligible for fresh confirmation unless it keeps
+false retirement and unconfirmed persistent transitions at zero while
+improving the 20-seed development score over the registered 24-episode
+candidate.
