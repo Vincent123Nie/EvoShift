@@ -125,6 +125,28 @@ def test_candidate_pool_tracks_shadow_trust_and_can_require_trusted_evidence() -
     assert pool.readiness(evidence, 2) == (True, "ready")
 
 
+def test_candidate_pool_can_require_mature_feedback_after_initial_consensus() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=1,
+        min_mature_observations=1,
+        min_new_observations=1,
+        cooldown_episodes=0,
+    )
+
+    provisional = pool.observe(_candidate("initial"), 1, mature=False)
+    assert provisional.mature_observation_count == 0
+    assert pool.readiness(provisional, 1) == (
+        False,
+        "insufficient_mature_feedback_evidence",
+    )
+
+    mature = pool.observe(_candidate("stable"), 2, mature=True)
+    assert mature is provisional
+    assert mature.mature_observation_count == 1
+    assert pool.readiness(mature, 2) == (True, "ready")
+
+
 def test_shadow_eprocess_excludes_discovery_then_crosses_and_resets() -> None:
     pool = CandidateEvidencePool(
         min_observations=1,

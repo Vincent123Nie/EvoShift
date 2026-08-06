@@ -208,6 +208,9 @@ class EvoShiftRunner:
             candidate_pool = CandidateEvidencePool(
                 min_observations=self.config.evolution.candidate_min_observations,
                 min_trusted_observations=(self.config.evolution.candidate_min_trusted_observations),
+                min_mature_observations=(
+                    self.config.evolution.candidate_min_mature_feedback_observations
+                ),
                 min_new_observations=(self.config.evolution.candidate_min_new_observations),
                 cooldown_episodes=self.config.evolution.candidate_cooldown_episodes,
                 shadow_eprocess_enabled=self.config.evolution.shadow_eprocess_enabled,
@@ -512,6 +515,7 @@ class EvoShiftRunner:
                             {
                                 "trusted_observations": evidence.trusted_observation_count,
                                 "shadow_observations": evidence.shadow_observation_count,
+                                "mature_observations": evidence.mature_observation_count,
                                 "mean": evidence.mean_trust,
                                 "min": evidence.min_trust,
                                 "max": evidence.max_trust,
@@ -2775,6 +2779,7 @@ class EvoShiftRunner:
                                 index,
                                 trust=assessment.trust,
                                 trusted=feedback_eligible,
+                                mature=assessment.candidate_evidence_mature,
                             )
                             shadow_candidate_observations += int(not feedback_eligible)
                             shadow_cooldown_active = (
@@ -2813,6 +2818,9 @@ class EvoShiftRunner:
                                         ),
                                         "shadow_observation_count": (
                                             evidence.shadow_observation_count
+                                        ),
+                                        "mature_observation_count": (
+                                            evidence.mature_observation_count
                                         ),
                                         "mean_evidence_trust": evidence.mean_trust,
                                         "evidence_lane": evidence_lane,
@@ -2854,6 +2862,9 @@ class EvoShiftRunner:
                                         {
                                             "reason": "insufficient_trusted_replay_buffer",
                                             "observation_count": evidence.observation_count,
+                                            "mature_observation_count": (
+                                                evidence.mature_observation_count
+                                            ),
                                             "replay_count": len(replay_buffer),
                                             "regime_start_index": regime_start,
                                             "evidence_lane": evidence_lane,
@@ -2873,6 +2884,9 @@ class EvoShiftRunner:
                                             "status": candidate.status.value,
                                             "candidate_signature": evidence.signature,
                                             "observation_count": evidence.observation_count,
+                                            "mature_observation_count": (
+                                                evidence.mature_observation_count
+                                            ),
                                             "evidence_lane": evidence_lane,
                                             "shadow_e_value": evidence.shadow_e_value,
                                             "shadow_eprocess_ready": (
@@ -2970,6 +2984,9 @@ class EvoShiftRunner:
                                                             ),
                                                             "shadow_observation_count": (
                                                                 evidence.shadow_observation_count
+                                                            ),
+                                                            "mature_observation_count": (
+                                                                evidence.mature_observation_count
                                                             ),
                                                             "mean_evidence_trust": (
                                                                 evidence.mean_trust

@@ -60,6 +60,7 @@ evolution:
   min_feedback_trust_for_replay: 0.60
   candidate_min_observations: 1
   candidate_min_new_observations: 1
+  candidate_min_mature_feedback_observations: 0
   candidate_cooldown_episodes: 4
   replay_current_regime_only: true
   replay_historical_context_anchors_enabled: false

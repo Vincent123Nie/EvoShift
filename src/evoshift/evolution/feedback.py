@@ -19,6 +19,7 @@ class FeedbackAssessment:
     source_posterior_mean: float
     context_observations: int
     pending_observations: int
+    candidate_evidence_mature: bool
 
 
 @dataclass
@@ -105,6 +106,7 @@ class FeedbackTrustModel:
                 source_posterior_mean=prior,
                 context_observations=0,
                 pending_observations=0,
+                candidate_evidence_mature=True,
             )
 
         context = observable_context
@@ -132,7 +134,14 @@ class FeedbackTrustModel:
             source_posterior_mean=source_state.mean,
             context_observations=context_state.total_observations,
             pending_observations=context_state.pending_observations,
+            candidate_evidence_mature=self._candidate_evidence_mature(reason),
         )
+
+    @staticmethod
+    def _candidate_evidence_mature(reason: str) -> bool:
+        """Return whether the observation follows a committed context regime."""
+
+        return reason in {"dynamic_consistent", "dynamic_confirmed_change"}
 
     def observable_key(self, sample: BenchmarkSample) -> tuple[str, str]:
         """Return the learner-visible provenance/context key without mutating trust state."""

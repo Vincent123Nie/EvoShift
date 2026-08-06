@@ -269,6 +269,7 @@ dataset hash, and comparison artifact.
 - [Active-memory causal-governance experiment](docs/experiment_causal_memory_governance.md)
 - [Recurrence-aware causal rollback experiment](docs/experiment_recurrence_aware_rollback.md)
 - [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)
+- [Mature-feedback candidate admission](docs/experiment_mature_feedback_candidate_admission.md)
 
 ## Security
 

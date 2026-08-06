@@ -38,7 +38,9 @@ def test_feedback_trust_uses_only_observable_source_provenance() -> None:
         }
     )
 
-    assert model.assess(clean).trust == 0.95
+    clean_assessment = model.assess(clean)
+    assert clean_assessment.trust == 0.95
+    assert clean_assessment.candidate_evidence_mature is True
     assert model.assess(corrupted).trust == 0.95
     assert (
         model.assess(clean.model_copy(update={"metadata": {"feedback_source": "untrusted"}})).trust
@@ -95,15 +97,19 @@ def test_dynamic_feedback_trust_quarantines_isolated_conflict_and_accepts_persis
 
     assert first.reason == "dynamic_cold_start"
     assert first.trust == 0.40
+    assert first.candidate_evidence_mature is False
     assert consensus.reason == "dynamic_initial_consensus"
     assert consensus.trust > 0.60
+    assert consensus.candidate_evidence_mature is False
     assert isolated.reason == "dynamic_pending_change"
     assert isolated.trust == 0.10
     assert recovered.reason == "dynamic_consistent"
     assert recovered.trust > 0.60
+    assert recovered.candidate_evidence_mature is True
     assert pending_shift.reason == "dynamic_pending_change"
     assert confirmed_shift.reason == "dynamic_confirmed_change"
     assert confirmed_shift.trust > 0.60
+    assert confirmed_shift.candidate_evidence_mature is True
     assert model.snapshot()["confirmed_context_changes"] == 1
 
 

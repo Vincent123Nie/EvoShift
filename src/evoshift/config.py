@@ -99,6 +99,7 @@ class EvolutionConfig(ConfigModel):
     min_feedback_trust_for_replay: float = Field(default=0.60, ge=0.0, le=1.0)
     candidate_min_observations: int = Field(default=1, ge=1, le=1000)
     candidate_min_trusted_observations: int = Field(default=1, ge=0, le=1000)
+    candidate_min_mature_feedback_observations: int = Field(default=0, ge=0, le=1000)
     candidate_min_new_observations: int = Field(default=1, ge=1, le=1000)
     candidate_cooldown_episodes: int = Field(default=4, ge=0, le=10000)
     replay_current_regime_only: bool = True
