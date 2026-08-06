@@ -1,0 +1,19 @@
+base_config: configs/experiments/policy_shift_hard_demo.yaml
+seeds: [122, 133, 144, 155, 166]
+algorithms:
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.0, 0.10]
+  benchmark.feedback_attack_burst_length: [0]
+  benchmark.feedback_warmup_attack_burst_length: [2]
+  policy.top_k: [0, 3]
+variants:
+  current_full:
+    evolution.context_local_probation_fast_path_enabled: false
+  context_local_probation_fast_path:
+    evolution.context_local_probation_fast_path_enabled: true
+    evolution.context_local_probation_fast_path_max_age: 12
+    evolution.context_local_probation_fast_path_max_uses: 2
+    evolution.context_local_probation_fast_path_min_trust: 0.10
+# 2 variants * 5 seeds * 2 noise levels * 2 retrieval budgets = 40 runs.
+max_runs: 40

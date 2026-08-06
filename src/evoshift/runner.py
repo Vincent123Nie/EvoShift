@@ -25,6 +25,8 @@ from evoshift.evolution import (
     ActiveMemoryAuditor,
     CandidateEvidencePool,
     CausalCircuitBreaker,
+    ContextLocalProbation,
+    ContextProbationLease,
     DormantMemoryRevival,
     ExperienceCritic,
     FeedbackTrustModel,
@@ -260,6 +262,16 @@ class EvoShiftRunner:
             context_scoped_retirement = bool(
                 retirement_probation is not None and retirement_probation.context_scoped
             )
+            context_local_probation = (
+                ContextLocalProbation(self.config.evolution)
+                if (
+                    self.config.evolution.context_local_probation_fast_path_enabled
+                    and future_auditor is not None
+                    and behavior.use_memory
+                    and not self.frozen_audit
+                )
+                else None
+            )
             episodes: List[Episode] = []
             failures: List[FailureRecord] = []
             decisions: List[PromotionDecision] = []
@@ -288,6 +300,12 @@ class EvoShiftRunner:
             future_audit_rolled_back = 0
             future_audit_expired = 0
             future_audit_outcomes: List[FutureAuditOutcome] = []
+            context_probation_interventions = 0
+            context_probation_paired_controls = 0
+            context_probation_forced_applications = 0
+            context_probation_expired = 0
+            context_probation_retrieval_hit_bypasses = 0
+            context_probation_low_trust_interventions = 0
             audit_evidence: Dict[str, CandidateEvidence] = {}
             active_audit_eligible = 0
             active_audit_observations = 0
@@ -465,6 +483,8 @@ class EvoShiftRunner:
                     version=outcome.audit.memory.version,
                 )
                 candidate = current or outcome.audit.memory
+                if context_local_probation is not None:
+                    context_local_probation.discard(candidate.memory_id)
                 evidence = audit_evidence.pop(candidate.memory_id, None)
                 shadow_derived = bool(evidence and evidence.has_shadow_evidence)
                 if outcome.completion_reason == "stream_end":
@@ -1231,6 +1251,8 @@ class EvoShiftRunner:
                             oracle_stale=expired_retirement.oracle_stale,
                             reason="retirement probation TTL expired",
                         )
+                if context_local_probation is not None:
+                    context_probation_expired += context_local_probation.expire(index)
                 active_before = memory.active()
                 active_before_keys = {(item.memory_id, item.version) for item in active_before}
                 grace_episodes = self.config.evolution.active_audit_reactivation_grace_episodes
@@ -1483,33 +1505,117 @@ class EvoShiftRunner:
                     if item.status == MemoryStatus.ACTIVE:
                         stale_active_memory_opportunities += 1
                         stale_pair_first_active_index.setdefault(pair, index)
-                prediction = await agent.solve(
-                    sample,
-                    policy,
-                    exclude_memory_versions=(
-                        list(
-                            probation_context_suppressed_versions
-                            | (
-                                {circuit_intervention.memory_key}
-                                if circuit_intervention is not None
-                                else set()
-                            )
-                        )
-                        or None
-                    ),
-                    extra_memories=(
-                        [circuit_intervention.control_memory]
-                        if circuit_intervention is not None
-                        and circuit_intervention.control_memory is not None
-                        else (
-                            [revival_intervention.memory]
-                            if revival_intervention is not None
-                            else None
-                        )
-                    ),
-                    use_memory=behavior.use_memory,
-                    self_refine=behavior.self_refine,
+                assessment = trust_model.assess(sample, episode_index=index)
+                context_probation_intervention: ContextProbationLease | None = None
+                context_probation_control_prediction: Any = None
+                context_probation_eligible = (
+                    context_local_probation is not None
+                    and assessment.trust >= context_local_probation.min_trust
+                    and circuit_intervention is None
+                    and retirement_intervention is None
+                    and revival_intervention is None
                 )
+                if context_probation_eligible:
+                    assert context_local_probation is not None
+                    context_probation_intervention = context_local_probation.match(
+                        source=observable_source,
+                        context=observable_context,
+                        signal=assessment.signal,
+                        episode_index=index,
+                    )
+                    if context_probation_intervention is not None:
+                        normally_retrieved, _, _ = memory.retrieve(
+                            sample.prompt,
+                            policy,
+                            domain=sample.domain,
+                        )
+                        normal_keys = {
+                            (result.item.memory_id, result.item.version)
+                            for result in normally_retrieved
+                        }
+                        if context_probation_intervention.memory_key in normal_keys:
+                            context_probation_retrieval_hit_bypasses += 1
+                            context_probation_intervention = None
+                if context_probation_intervention is not None:
+                    assert context_local_probation is not None
+                    context_probation_control_prediction = await agent.solve(
+                        sample,
+                        policy,
+                        use_memory=False,
+                        self_refine=behavior.self_refine,
+                    )
+                    prediction = await agent.solve(
+                        sample,
+                        policy,
+                        extra_memories=[context_probation_intervention.memory],
+                        use_memory=False,
+                        self_refine=behavior.self_refine,
+                    )
+                    context_local_probation.consume(context_probation_intervention)
+                    context_probation_interventions += 1
+                    context_probation_paired_controls += 1
+                    context_probation_low_trust_interventions += int(
+                        assessment.trust < self.config.evolution.min_feedback_trust_for_replay
+                    )
+                    context_probation_forced_applications += int(
+                        context_probation_intervention.memory.memory_id
+                        in prediction.output.applied_memory_ids
+                    )
+                    store.record_event(
+                        run_id,
+                        "context_local_probation_intervention",
+                        (
+                            f"{context_probation_intervention.memory.memory_id}"
+                            f"@v{context_probation_intervention.memory.version}"
+                        ),
+                        {
+                            "episode_index": index,
+                            "source": observable_source,
+                            "context": observable_context,
+                            "registered_index": (context_probation_intervention.registered_index),
+                            "expires_after_index": (
+                                context_probation_intervention.expires_after_index
+                            ),
+                            "use_number": context_probation_intervention.uses + 1,
+                            "max_uses": context_probation_intervention.max_uses,
+                            "feedback_trust": assessment.trust,
+                            "feedback_signal": assessment.signal,
+                            "paired_control": True,
+                            "candidate_only": True,
+                            "retrieval_miss_rescue": True,
+                            "persistent_state_changed": False,
+                            "online_decision_uses": "learner_visible_feedback_only",
+                            "oracle_metrics_are_post_hoc_only": True,
+                        },
+                    )
+                else:
+                    prediction = await agent.solve(
+                        sample,
+                        policy,
+                        exclude_memory_versions=(
+                            list(
+                                probation_context_suppressed_versions
+                                | (
+                                    {circuit_intervention.memory_key}
+                                    if circuit_intervention is not None
+                                    else set()
+                                )
+                            )
+                            or None
+                        ),
+                        extra_memories=(
+                            [circuit_intervention.control_memory]
+                            if circuit_intervention is not None
+                            and circuit_intervention.control_memory is not None
+                            else (
+                                [revival_intervention.memory]
+                                if revival_intervention is not None
+                                else None
+                            )
+                        ),
+                        use_memory=behavior.use_memory,
+                        self_refine=behavior.self_refine,
+                    )
                 score = score_sample(sample, prediction.output.answer)
                 feedback_score = score_feedback_sample(sample, prediction.output.answer)
                 retirement_probation_provisional_valid_failure_episodes += int(
@@ -1521,7 +1627,6 @@ class EvoShiftRunner:
                     if active_before and prediction.retrieved
                     else (1.0 if active_before else 0.0)
                 )
-                assessment = trust_model.assess(sample, episode_index=index)
                 feedback_eligible = (
                     assessment.trust >= self.config.evolution.min_feedback_trust_for_candidate
                 )
@@ -1628,12 +1733,20 @@ class EvoShiftRunner:
                     and assessment.trust >= self.config.evolution.min_feedback_trust_for_replay
                 ):
                     for audit in future_auditor.pending_for(prediction.output.applied_memory_ids):
-                        control_prediction = await agent.solve(
-                            sample,
-                            policy,
-                            exclude_memory_ids=[audit.memory.memory_id],
-                            use_memory=behavior.use_memory,
-                        )
+                        if (
+                            context_probation_intervention is not None
+                            and context_probation_control_prediction is not None
+                            and audit.memory.memory_id
+                            == context_probation_intervention.memory.memory_id
+                        ):
+                            control_prediction = context_probation_control_prediction
+                        else:
+                            control_prediction = await agent.solve(
+                                sample,
+                                policy,
+                                exclude_memory_ids=[audit.memory.memory_id],
+                                use_memory=behavior.use_memory,
+                            )
                         control_score = score_sample(
                             sample,
                             control_prediction.output.answer,
@@ -2939,6 +3052,17 @@ class EvoShiftRunner:
                                                         evidence_signature=evidence.signature,
                                                         start_index=index,
                                                     )
+                                                    context_lease = (
+                                                        context_local_probation.register(
+                                                            probationary,
+                                                            source=observable_source,
+                                                            context=observable_context,
+                                                            signal=assessment.signal,
+                                                            episode_index=index,
+                                                        )
+                                                        if context_local_probation is not None
+                                                        else None
+                                                    )
                                                     audit_evidence[probationary.memory_id] = (
                                                         evidence
                                                     )
@@ -2980,6 +3104,17 @@ class EvoShiftRunner:
                                                             ),
                                                             "shadow_eprocess_ready": (
                                                                 evidence.shadow_eprocess_ready
+                                                            ),
+                                                            "context_local_probation_registered": (
+                                                                context_lease is not None
+                                                            ),
+                                                            "context_local_probation_context": (
+                                                                [
+                                                                    observable_source,
+                                                                    observable_context,
+                                                                ]
+                                                                if context_lease is not None
+                                                                else None
                                                             ),
                                                         },
                                                     )
@@ -3121,6 +3256,9 @@ class EvoShiftRunner:
             if future_auditor is not None:
                 for outcome in future_auditor.finalize():
                     complete_future_audit(outcome)
+
+            if context_local_probation is not None:
+                context_probation_expired += context_local_probation.expire_all()
 
             final_memories = tuple(memory.active())
             final_state_hash = state_fingerprint(policy, final_memories)
@@ -3328,6 +3466,33 @@ class EvoShiftRunner:
                         "shadow_eprocess_crossings": (candidate_pool.shadow_eprocess_crossings),
                         "trusted_candidate_shadow_cooldown_bypasses": (
                             trusted_candidate_shadow_cooldown_bypasses
+                        ),
+                        "context_local_probation_fast_path": (
+                            context_local_probation.snapshot()
+                            if context_local_probation is not None
+                            else {
+                                "enabled": False,
+                                "registrations": 0,
+                                "interventions": 0,
+                                "paired_controls": 0,
+                                "forced_applications": 0,
+                                "retrieval_hit_bypasses": 0,
+                                "low_trust_interventions": 0,
+                                "expirations": 0,
+                                "pending": 0,
+                            }
+                        ),
+                        "context_probation_interventions": context_probation_interventions,
+                        "context_probation_paired_controls": context_probation_paired_controls,
+                        "context_probation_forced_applications": (
+                            context_probation_forced_applications
+                        ),
+                        "context_probation_expired": context_probation_expired,
+                        "context_probation_retrieval_hit_bypasses": (
+                            context_probation_retrieval_hit_bypasses
+                        ),
+                        "context_probation_low_trust_interventions": (
+                            context_probation_low_trust_interventions
                         ),
                         "feedback_quarantined": feedback_quarantined,
                         "detector_domains": len(detectors),

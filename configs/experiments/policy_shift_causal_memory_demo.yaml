@@ -29,6 +29,8 @@ benchmark:
   feedback_shared_source: true
   feedback_shared_source_name: customer_support_portal
   feedback_attack_burst_length: 2
+  feedback_warmup_attack_observations: 2
+  feedback_warmup_attack_burst_length: 0
 
 shift:
   enabled: true
@@ -80,6 +82,10 @@ evolution:
   future_audit_min_observations: 2
   future_audit_max_observations: 4
   future_audit_early_harm_observations: 1
+  context_local_probation_fast_path_enabled: false
+  context_local_probation_fast_path_max_age: 12
+  context_local_probation_fast_path_max_uses: 2
+  context_local_probation_fast_path_min_trust: 0.10
   active_audit_enabled: true
   active_audit_max_per_episode: 1
   active_audit_min_observations: 2

@@ -486,6 +486,10 @@ def policy_shift_metrics(episodes: Sequence[Episode]) -> dict[str, Any]:
         for episode in policy_episodes
         if bool(episode.sample.metadata.get("policy_changed_case"))
     ]
+    first_changed_by_phase: dict[str, Episode] = {}
+    for episode in changed:
+        first_changed_by_phase.setdefault(episode.sample.phase, episode)
+    first_changed = list(first_changed_by_phase.values())
     protected = [
         episode for episode in policy_episodes if bool(episode.sample.metadata.get("protected"))
     ]
@@ -553,6 +557,11 @@ def policy_shift_metrics(episodes: Sequence[Episode]) -> dict[str, Any]:
         "phase_slice_counts": phase_slice_counts,
         "changed_case_n": len(changed),
         "changed_case_success_rate": rate(changed, lambda item: item.score.success),
+        "first_changed_case_n": len(first_changed),
+        "first_changed_case_success_rate": rate(
+            first_changed,
+            lambda item: item.score.success,
+        ),
         "old_rule_leakage_rate": rate(changed, lambda item: not item.score.success),
         "invariant_n": len(protected),
         "invariant_retention_rate": rate(protected, lambda item: item.score.success),

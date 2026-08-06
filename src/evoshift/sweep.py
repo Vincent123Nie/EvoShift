@@ -23,6 +23,7 @@ _AGGREGATE_FIELDS = {
     "auac": "auac",
     "cumulative_regret": "cumulative_regret",
     "changed_case_success_rate": "changed_case_success",
+    "first_changed_case_success_rate": "first_changed_case_success",
     "old_rule_leakage_rate": "old_rule_leakage",
     "invariant_retention_rate": "invariant_retention",
     "future_change_case_success_rate": "future_change_success",
@@ -48,6 +49,11 @@ _AGGREGATE_FIELDS = {
     "shadow_eprocess_opportunities": "shadow_eprocess_opportunities",
     "shadow_eprocess_crossings": "shadow_eprocess_crossings",
     "trusted_candidate_shadow_cooldown_bypasses": ("trusted_candidate_shadow_cooldown_bypasses"),
+    "context_probation_interventions": "context_probation_interventions",
+    "context_probation_paired_controls": "context_probation_paired_controls",
+    "context_probation_forced_applications": "context_probation_forced_applications",
+    "context_probation_expired": "context_probation_expired",
+    "context_probation_retrieval_hit_bypasses": ("context_probation_retrieval_hit_bypasses"),
     "promotion_precision": "promotion_precision",
     "replay_estimated_promotion_precision": "replay_estimated_promotion_precision",
     "realized_promotion_precision": "realized_promotion_precision",
@@ -308,6 +314,9 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "total_requests": budget["requests"],
                 "cost_usd": budget["cost_usd"],
                 "changed_case_success_rate": policy_shift.get("changed_case_success_rate"),
+                "first_changed_case_success_rate": policy_shift.get(
+                    "first_changed_case_success_rate"
+                ),
                 "old_rule_leakage_rate": policy_shift.get("old_rule_leakage_rate"),
                 "invariant_retention_rate": policy_shift.get("invariant_retention_rate"),
                 "future_change_case_success_rate": policy_shift.get(
@@ -346,6 +355,17 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "shadow_eprocess_crossings": evolution.get("shadow_eprocess_crossings"),
                 "trusted_candidate_shadow_cooldown_bypasses": evolution.get(
                     "trusted_candidate_shadow_cooldown_bypasses"
+                ),
+                "context_probation_interventions": evolution.get("context_probation_interventions"),
+                "context_probation_paired_controls": evolution.get(
+                    "context_probation_paired_controls"
+                ),
+                "context_probation_forced_applications": evolution.get(
+                    "context_probation_forced_applications"
+                ),
+                "context_probation_expired": evolution.get("context_probation_expired"),
+                "context_probation_retrieval_hit_bypasses": evolution.get(
+                    "context_probation_retrieval_hit_bypasses"
                 ),
                 "promotion_precision": result.metrics.get("promotion_precision"),
                 "promotion_precision_basis": result.metrics.get("promotion_precision_basis"),
@@ -899,6 +919,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "total_requests",
         "cost_usd",
         "changed_case_success_rate",
+        "first_changed_case_success_rate",
         "old_rule_leakage_rate",
         "invariant_retention_rate",
         "future_change_case_success_rate",
@@ -926,6 +947,11 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "shadow_eprocess_opportunities",
         "shadow_eprocess_crossings",
         "trusted_candidate_shadow_cooldown_bypasses",
+        "context_probation_interventions",
+        "context_probation_paired_controls",
+        "context_probation_forced_applications",
+        "context_probation_expired",
+        "context_probation_retrieval_hit_bypasses",
         "promotion_precision",
         "promotion_precision_basis",
         "replay_estimated_promotion_precision",

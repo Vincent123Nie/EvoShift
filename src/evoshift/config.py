@@ -117,6 +117,14 @@ class EvolutionConfig(ConfigModel):
     future_audit_min_observations: int = Field(default=4, ge=1, le=100)
     future_audit_max_observations: int = Field(default=8, ge=1, le=1000)
     future_audit_early_harm_observations: int = Field(default=0, ge=0, le=100)
+    context_local_probation_fast_path_enabled: bool = False
+    context_local_probation_fast_path_max_age: int = Field(default=8, ge=1, le=10000)
+    context_local_probation_fast_path_max_uses: int = Field(default=2, ge=1, le=100)
+    context_local_probation_fast_path_min_trust: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+    )
     active_audit_enabled: bool = False
     active_audit_max_per_episode: int = Field(default=1, ge=1, le=20)
     active_audit_min_observations: int = Field(default=2, ge=1, le=100)
@@ -224,6 +232,11 @@ class EvolutionConfig(ConfigModel):
             raise ValueError(
                 "future_audit_early_harm_observations must not exceed future_audit_max_observations"
             )
+        if self.context_local_probation_fast_path_enabled:
+            if not self.future_audit_enabled:
+                raise ValueError("context-local probation fast path requires future audit")
+            if not self.paired_replay:
+                raise ValueError("context-local probation fast path requires paired replay")
         if self.active_audit_min_negative_observations > self.active_audit_min_observations:
             raise ValueError(
                 "active_audit_min_negative_observations must not exceed "
@@ -294,6 +307,8 @@ class BenchmarkConfig(ConfigModel):
     feedback_shared_source: bool = False
     feedback_shared_source_name: str = "customer_support_portal"
     feedback_attack_burst_length: int = Field(default=0, ge=0, le=1000)
+    feedback_warmup_attack_observations: int = Field(default=2, ge=1, le=1000)
+    feedback_warmup_attack_burst_length: int = Field(default=0, ge=0, le=1000)
     policy_schedule: List[str] = Field(default_factory=list)
     coverage_balanced: bool = False
     coverage_min_per_slice: int = Field(default=2, ge=1, le=100)

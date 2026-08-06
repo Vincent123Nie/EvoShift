@@ -1,6 +1,11 @@
 from evoshift.evolution.active_audit import ActiveAuditDecision, ActiveMemoryAuditor
 from evoshift.evolution.candidates import CandidateEvidencePool, candidate_signature
 from evoshift.evolution.circuit_breaker import CausalCircuitBreaker, PendingCausalCanary
+from evoshift.evolution.context_probation import (
+    ContextLocalProbation,
+    ContextProbationLease,
+    ObservableContext,
+)
 from evoshift.evolution.critic import ExperienceCritic
 from evoshift.evolution.drift import PageHinkleyShiftDetector
 from evoshift.evolution.feedback import FeedbackAssessment, FeedbackTrustModel
@@ -26,12 +31,15 @@ __all__ = [
     "ActiveMemoryAuditor",
     "CandidateEvidencePool",
     "CausalCircuitBreaker",
+    "ContextLocalProbation",
+    "ContextProbationLease",
     "DormantMemoryRevival",
     "ExperienceCritic",
     "FeedbackAssessment",
     "FeedbackTrustModel",
     "FutureAuditOutcome",
     "FutureCounterfactualAuditor",
+    "ObservableContext",
     "PageHinkleyShiftDetector",
     "PendingCausalCanary",
     "PendingFutureAudit",
