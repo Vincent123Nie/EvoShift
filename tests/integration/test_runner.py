@@ -6,9 +6,26 @@ import pytest
 
 from evoshift.audit import load_evolved_state
 from evoshift.benchmarks import create_benchmark
-from evoshift.benchmarks.base import sample_fingerprint
+from evoshift.benchmarks.base import BenchmarkAdapter, sample_fingerprint
 from evoshift.config import load_config
 from evoshift.runner import EvoShiftRunner
+from evoshift.schemas import BenchmarkSample
+
+
+class _MissingFeedbackReferenceAdapter(BenchmarkAdapter):
+    def __init__(self, wrapped: BenchmarkAdapter, *, missing_indices: set[int]):
+        self.wrapped = wrapped
+        self.missing_indices = missing_indices
+
+    def load(self) -> list[BenchmarkSample]:
+        samples: list[BenchmarkSample] = []
+        for index, sample in enumerate(self.wrapped.load()):
+            if index in self.missing_indices:
+                metadata = dict(sample.metadata)
+                metadata.pop("feedback_reference", None)
+                sample = sample.model_copy(update={"metadata": metadata})
+            samples.append(sample)
+        return samples
 
 
 @pytest.mark.asyncio
@@ -161,13 +178,31 @@ async def test_policy_shift_hard_rolls_back_poison_and_relearns_real_change(
         evolution["candidates_promoted"] + evolution["candidates_rejected"]
         == evolution["candidates_evaluated"]
     )
-    assert evolution["memory_candidates_evaluated"] == 6
+    assert evolution["memory_candidates_evaluated"] == 5
     assert evolution["memory_replay_gates_passed"] == 3
     assert evolution["memory_candidates_promoted"] == 2
-    assert evolution["memory_candidates_rejected"] == 4
+    assert evolution["memory_candidates_rejected"] == 3
     assert policy_shift["premature_update_rate"] == 0.125
     assert policy_shift["poison_persistence_error_rate"] == pytest.approx(2.0 / 7.0)
     assert policy_shift["invariant_retention_rate"] == 1.0
+
+    connection = sqlite3.connect(result.run_dir / "state.sqlite3")
+    try:
+        future_audit_payloads = [
+            json.loads(payload)
+            for (payload,) in connection.execute(
+                "SELECT payload_json FROM evolution_events "
+                "WHERE event_type='future_counterfactual_audit'"
+            )
+        ]
+    finally:
+        connection.close()
+    assert future_audit_payloads
+    assert all(
+        payload["configured_protected_observations"] == 0
+        and payload["protection_basis"] == "configured_benchmark_protected_phases"
+        for payload in future_audit_payloads
+    )
 
     audits = [
         decision
@@ -249,6 +284,474 @@ async def test_causal_memory_governance_forgets_stale_and_reacquires_recurring_r
     assert (
         causal.metrics["policy_shift"]["invariant_retention_rate"]
         >= baseline.metrics["policy_shift"]["invariant_retention_rate"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_recurrence_circuit_breaker_improves_score_and_cancels_noise_safely(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 11}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.0, "feedback_attack_burst_length": 0}
+            ),
+        }
+    )
+    current_config = config.model_copy(
+        update={
+            "evolution": config.evolution.model_copy(
+                update={"active_audit_circuit_breaker_enabled": False}
+            )
+        }
+    )
+    circuit_config = config.model_copy(
+        update={
+            "evolution": config.evolution.model_copy(
+                update={"active_audit_circuit_breaker_enabled": True}
+            )
+        }
+    )
+    current = await EvoShiftRunner(
+        current_config,
+        create_benchmark(current_config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+    circuit = await EvoShiftRunner(
+        circuit_config,
+        create_benchmark(circuit_config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+
+    governance = circuit.metrics["active_memory_governance"]
+    circuit_metrics = governance["circuit_breaker"]
+    assert circuit.metrics["overall"]["mean_score"] > current.metrics["overall"]["mean_score"]
+    assert (
+        circuit.metrics["policy_shift"]["changed_case_success_rate"]
+        > current.metrics["policy_shift"]["changed_case_success_rate"]
+    )
+    assert circuit_metrics["confirmations"] >= 2
+    assert circuit_metrics["confirmation_precision"] == 1.0
+    assert circuit_metrics["unconfirmed_persistent_transitions"] == 0
+    assert governance["false_retirement_rate"] == 0.0
+
+    noisy_config = circuit_config.model_copy(
+        update={
+            "benchmark": circuit_config.benchmark.model_copy(update={"feedback_noise_rate": 0.10})
+        }
+    )
+    noisy = await EvoShiftRunner(
+        noisy_config,
+        create_benchmark(noisy_config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+    noisy_governance = noisy.metrics["active_memory_governance"]
+    noisy_circuit = noisy_governance["circuit_breaker"]
+    assert noisy_circuit["cancellations"] >= 1
+    assert noisy_circuit["unconfirmed_persistent_transitions"] == 0
+    assert noisy_governance["false_retirement_rate"] == 0.0
+    assert noisy.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_cooldown_dormant_revival_adds_recurrent_gain_without_false_revival(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 11}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.0, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={"active_audit_circuit_breaker_enabled": True}
+            ),
+        }
+    )
+    combined_config = config.model_copy(
+        update={"evolution": config.evolution.model_copy(update={"dormant_revival_enabled": True})}
+    )
+    recurrence = await EvoShiftRunner(
+        config,
+        create_benchmark(config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+    combined = await EvoShiftRunner(
+        combined_config,
+        create_benchmark(combined_config.benchmark, root=Path.cwd(), seed=11),
+        workdir=Path.cwd(),
+    ).run()
+
+    revival = combined.metrics["active_memory_governance"]["dormant_revival"]
+    assert combined.metrics["overall"]["mean_score"] > recurrence.metrics["overall"]["mean_score"]
+    assert revival["confirmations"] == 1
+    assert revival["confirmation_precision"] == 1.0
+    assert revival["unconfirmed_persistent_transitions"] == 0
+    assert combined.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+    noisy_recurrence_config = config.model_copy(
+        update={
+            "evaluation": config.evaluation.model_copy(update={"seed": 33}),
+            "benchmark": config.benchmark.model_copy(update={"feedback_noise_rate": 0.10}),
+        }
+    )
+    noisy_combined_config = noisy_recurrence_config.model_copy(
+        update={
+            "evolution": noisy_recurrence_config.evolution.model_copy(
+                update={"dormant_revival_enabled": True}
+            )
+        }
+    )
+    noisy_recurrence = await EvoShiftRunner(
+        noisy_recurrence_config,
+        create_benchmark(noisy_recurrence_config.benchmark, root=Path.cwd(), seed=33),
+        workdir=Path.cwd(),
+    ).run()
+    noisy_combined = await EvoShiftRunner(
+        noisy_combined_config,
+        create_benchmark(noisy_combined_config.benchmark, root=Path.cwd(), seed=33),
+        workdir=Path.cwd(),
+    ).run()
+
+    noisy_revival = noisy_combined.metrics["active_memory_governance"]["dormant_revival"]
+    assert (
+        noisy_combined.metrics["overall"]["mean_score"]
+        > noisy_recurrence.metrics["overall"]["mean_score"]
+    )
+    assert noisy_revival["confirmation_precision"] == 1.0
+    assert noisy_revival["false_confirmation_rate"] == 0.0
+    assert noisy_combined.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_context_bound_retirement_uses_observable_key_without_feedback_reference(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    seed = 233
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": seed}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.10, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "active_audit_circuit_breaker_enabled": True,
+                    "active_audit_lineage_control_enabled": True,
+                    "dormant_revival_enabled": True,
+                    "dormant_revival_min_trust": 0.10,
+                    "dormant_revival_delta": 0.75,
+                    "dormant_revival_max_age": 8,
+                    "dormant_revival_min_retired_age": 15,
+                    "dormant_revival_status_index_enabled": True,
+                    "dormant_revival_semantic_index_enabled": True,
+                    "dormant_revival_retirement_context_enabled": True,
+                    "active_audit_reactivation_grace_episodes": 8,
+                    "active_audit_retirement_probation_enabled": True,
+                    "active_audit_retirement_probation_max_age": 24,
+                    "active_audit_retirement_probation_min_confirmations": 2,
+                    "active_audit_retirement_probation_min_evidence_span": 2,
+                    "dynamic_feedback_change_min_span": 0,
+                    "replay_historical_context_anchors_enabled": False,
+                }
+            ),
+        }
+    )
+    source = create_benchmark(config.benchmark, root=Path.cwd(), seed=seed)
+    adapter = _MissingFeedbackReferenceAdapter(source, missing_indices={87})
+
+    result = await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
+
+    connection = sqlite3.connect(result.run_dir / "state.sqlite3")
+    try:
+        lifecycle_events = [
+            (event_type, entity_id, json.loads(payload))
+            for event_type, entity_id, payload in connection.execute(
+                "SELECT event_type, entity_id, payload_json FROM evolution_events "
+                "WHERE event_type IN "
+                "('memory_retirement_probation_started', "
+                "'memory_retirement_probation_intervention', "
+                "'dormant_memory_revival_context_excluded', "
+                "'dormant_memory_revival_probe', "
+                "'dormant_memory_revival_registered', "
+                "'dormant_memory_revival_resolved')"
+            )
+        ]
+    finally:
+        connection.close()
+
+    mismatched_key = "mem-61294fcf3a594201@v1"
+    retirement = next(
+        payload
+        for event_type, entity_id, payload in lifecycle_events
+        if event_type == "memory_retirement_probation_started"
+        and entity_id == mismatched_key
+        and payload["episode_index"] == 87
+    )
+    assert retirement["source"] == "customer_support_portal"
+    assert retirement["context"] == "refund:premium:days_15_30"
+    retirement_interventions = [
+        payload
+        for event_type, entity_id, payload in lifecycle_events
+        if event_type == "memory_retirement_probation_intervention" and entity_id == mismatched_key
+    ]
+    assert retirement_interventions
+    assert all(
+        payload["source"] == "customer_support_portal"
+        and payload["context"] == "refund:premium:days_15_30"
+        for payload in retirement_interventions
+    )
+    mismatched_model_events = [
+        event_type
+        for event_type, entity_id, _ in lifecycle_events
+        if entity_id == mismatched_key
+        and event_type
+        in {
+            "dormant_memory_revival_probe",
+            "dormant_memory_revival_registered",
+            "dormant_memory_revival_resolved",
+        }
+    ]
+    assert mismatched_model_events == []
+    revival = result.metrics["active_memory_governance"]["dormant_revival"]
+    assert revival["context_mismatch_confirmations"] == 0
+    assert revival["post_confirmation_tag_associated_harmful_exposure_n"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_lineage_counterfactual_control_removes_coarse_memory_off_loss(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 111}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.10, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "active_audit_circuit_breaker_enabled": True,
+                    "dormant_revival_enabled": True,
+                    "dormant_revival_min_retired_age": 15,
+                }
+            ),
+        }
+    )
+    lineage_config = config.model_copy(
+        update={
+            "evolution": config.evolution.model_copy(
+                update={"active_audit_lineage_control_enabled": True}
+            )
+        }
+    )
+
+    memory_off = await EvoShiftRunner(
+        config,
+        create_benchmark(config.benchmark, root=Path.cwd(), seed=111),
+        workdir=Path.cwd(),
+    ).run()
+    lineage = await EvoShiftRunner(
+        lineage_config,
+        create_benchmark(lineage_config.benchmark, root=Path.cwd(), seed=111),
+        workdir=Path.cwd(),
+    ).run()
+
+    circuit = lineage.metrics["active_memory_governance"]["circuit_breaker"]
+    assert lineage.metrics["overall"]["mean_score"] > memory_off.metrics["overall"]["mean_score"]
+    assert circuit["lineage_probes"] >= 1
+    assert circuit["lineage_registrations"] >= 1
+    assert circuit["lineage_interventions"] >= 1
+    assert circuit["confirmation_precision"] in {None, 1.0}
+    assert circuit["unconfirmed_persistent_transitions"] == 0
+    assert lineage.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+
+    connection = sqlite3.connect(lineage.run_dir / "state.sqlite3")
+    try:
+        intervention_payloads = [
+            json.loads(row[0])
+            for row in connection.execute(
+                "SELECT payload_json FROM evolution_events "
+                "WHERE event_type='causal_circuit_breaker_intervention'"
+            )
+        ]
+    finally:
+        connection.close()
+    lineage_interventions = [
+        payload
+        for payload in intervention_payloads
+        if payload.get("control_memory_key") is not None
+    ]
+    assert lineage_interventions
+    assert all(
+        payload["action"] == "temporarily_replace_with_exact_direct_predecessor"
+        for payload in lineage_interventions
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_temporally_diverse_recurrence_blocks_adjacent_noise_failure_chain(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    lineage_config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 122}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.10, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "active_audit_circuit_breaker_enabled": True,
+                    "active_audit_lineage_control_enabled": True,
+                    "dormant_revival_enabled": True,
+                    "dormant_revival_min_retired_age": 15,
+                }
+            ),
+        }
+    )
+    chain_safe_config = lineage_config.model_copy(
+        update={
+            "evolution": lineage_config.evolution.model_copy(
+                update={
+                    "dynamic_feedback_change_min_span": 2,
+                    "dormant_revival_status_index_enabled": True,
+                }
+            )
+        }
+    )
+
+    lineage = await EvoShiftRunner(
+        lineage_config,
+        create_benchmark(lineage_config.benchmark, root=Path.cwd(), seed=122),
+        workdir=Path.cwd(),
+    ).run()
+    chain_safe = await EvoShiftRunner(
+        chain_safe_config,
+        create_benchmark(chain_safe_config.benchmark, root=Path.cwd(), seed=122),
+        workdir=Path.cwd(),
+    ).run()
+
+    governance = chain_safe.metrics["active_memory_governance"]
+    circuit = governance["circuit_breaker"]
+    revival = governance["dormant_revival"]
+    assert chain_safe.metrics["overall"]["mean_score"] > lineage.metrics["overall"]["mean_score"]
+    assert chain_safe.metrics["feedback_trust_model"]["temporally_deferred_changes"] >= 1
+    assert chain_safe.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+    assert governance["false_retirement_rate"] == 0.0
+    assert circuit["confirmation_precision"] == 1.0
+    assert revival["false_confirmation_rate"] == 0.0
+
+    connection = sqlite3.connect(chain_safe.run_dir / "state.sqlite3")
+    try:
+        quarantined_reasons = [
+            json.loads(row[0])["reason"]
+            for row in connection.execute(
+                "SELECT payload_json FROM evolution_events WHERE event_type='feedback_quarantined'"
+            )
+        ]
+    finally:
+        connection.close()
+    assert "dynamic_pending_change_span" in quarantined_reasons
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_reactivation_grace_blocks_destructive_noise_without_slowing_clean_changes(
+    tmp_path: Path,
+) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
+    unguarded_config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evaluation": config.evaluation.model_copy(update={"seed": 177}),
+            "benchmark": config.benchmark.model_copy(
+                update={"feedback_noise_rate": 0.10, "feedback_attack_burst_length": 0}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "active_audit_circuit_breaker_enabled": True,
+                    "active_audit_lineage_control_enabled": True,
+                    "dormant_revival_enabled": True,
+                    "dormant_revival_min_retired_age": 15,
+                    "dormant_revival_status_index_enabled": True,
+                    "dynamic_feedback_change_min_span": 0,
+                }
+            ),
+        }
+    )
+    guarded_config = unguarded_config.model_copy(
+        update={
+            "evolution": unguarded_config.evolution.model_copy(
+                update={"active_audit_reactivation_grace_episodes": 8}
+            )
+        }
+    )
+
+    unguarded = await EvoShiftRunner(
+        unguarded_config,
+        create_benchmark(unguarded_config.benchmark, root=Path.cwd(), seed=177),
+        workdir=Path.cwd(),
+    ).run()
+    guarded = await EvoShiftRunner(
+        guarded_config,
+        create_benchmark(guarded_config.benchmark, root=Path.cwd(), seed=177),
+        workdir=Path.cwd(),
+    ).run()
+
+    unguarded_governance = unguarded.metrics["active_memory_governance"]
+    guarded_governance = guarded.metrics["active_memory_governance"]
+    assert guarded.metrics["overall"]["mean_score"] > unguarded.metrics["overall"]["mean_score"]
+    assert guarded_governance["false_retirement_rate"] == 0.0
+    assert unguarded_governance["false_retirement_rate"] > 0.0
+    assert guarded_governance["reactivation_grace_audit_suppressions"] >= 1
+    assert guarded.metrics["policy_shift"]["invariant_retention_rate"] == 1.0
+    assert guarded_governance["circuit_breaker"]["confirmation_precision"] == 1.0
+    assert guarded_governance["dormant_revival"]["confirmation_precision"] == 1.0
+
+    connection = sqlite3.connect(guarded.run_dir / "state.sqlite3")
+    try:
+        suppressions = [
+            (entity_id, json.loads(payload))
+            for entity_id, payload in connection.execute(
+                "SELECT entity_id, payload_json FROM evolution_events "
+                "WHERE event_type='active_memory_audit_suppressed'"
+            )
+        ]
+    finally:
+        connection.close()
+    assert suppressions
+    assert all("@v" in entity_id for entity_id, _ in suppressions)
+    assert all(payload["reactivation_age"] <= 8 for _, payload in suppressions)
+    assert all(
+        payload["online_decision_uses"] == "learner_visible_memory_lifecycle_only"
+        for _, payload in suppressions
     )
 
 

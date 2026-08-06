@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from evoshift.audit import load_evolved_state, require_same_model, state_fingerprint
+from evoshift.audit import (
+    load_evolved_state,
+    require_same_model,
+    semantic_state_fingerprint,
+    state_fingerprint,
+)
 from evoshift.schemas import (
     Algorithm,
     MemoryItem,
@@ -92,3 +97,67 @@ def test_load_evolved_state_backfills_legacy_memory_domains_from_traces(tmp_path
     state = load_evolved_state(run_dir)
 
     assert state.memories[0].source_domains == ["causal_judgement"]
+
+
+def test_semantic_state_fingerprint_ignores_run_local_time_and_episode_ids() -> None:
+    policy = PolicyGenome(version=2)
+    first = MemoryItem(
+        memory_id="memory-1",
+        version=2,
+        status=MemoryStatus.ACTIVE,
+        trigger="premium refund after day 14",
+        directive="Approve premium refunds through day 30.",
+        tags=["premium", "refund"],
+        provenance_episode_ids=["episode-a"],
+        valid_from_episode_id="episode-a",
+        created_at="2026-08-05T00:00:00Z",
+        updated_at="2026-08-05T00:00:01Z",
+    )
+    equivalent = first.model_copy(
+        update={
+            "tags": ["refund", "premium"],
+            "provenance_episode_ids": ["episode-b"],
+            "valid_from_episode_id": "episode-b",
+            "created_at": "2026-08-06T00:00:00Z",
+            "updated_at": "2026-08-06T00:00:01Z",
+        }
+    )
+
+    first_hash = semantic_state_fingerprint(
+        policy,
+        (first,),
+        episode_identity_by_id={"episode-a": "24:policy_shift:1:0000"},
+    )
+    equivalent_hash = semantic_state_fingerprint(
+        policy,
+        (equivalent,),
+        episode_identity_by_id={"episode-b": "24:policy_shift:1:0000"},
+    )
+
+    assert first_hash == equivalent_hash
+    changed = equivalent.model_copy(update={"directive": "Deny all premium refunds."})
+    assert (
+        semantic_state_fingerprint(
+            policy,
+            (changed,),
+            episode_identity_by_id={"episode-b": "24:policy_shift:1:0000"},
+        )
+        != first_hash
+    )
+
+
+def test_semantic_state_fingerprint_requires_complete_provenance_mapping() -> None:
+    memory = MemoryItem(
+        memory_id="memory-1",
+        status=MemoryStatus.ACTIVE,
+        trigger="refund",
+        directive="Approve.",
+        provenance_episode_ids=["episode-a"],
+    )
+
+    with pytest.raises(ValueError, match="missing stable identity"):
+        semantic_state_fingerprint(
+            PolicyGenome(),
+            (memory,),
+            episode_identity_by_id={},
+        )

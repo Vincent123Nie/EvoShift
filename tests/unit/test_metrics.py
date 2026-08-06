@@ -366,6 +366,11 @@ def test_stream_report_aligns_baseline_by_sample_id_and_serializes() -> None:
         recovery_window=1,
         performance_matrix=[[0.8, None], [0.7, 0.9]],
     )
+    report["active_memory_governance"] = {
+        "enabled": True,
+        "retirement_probation": {"registration_precision": 1.0},
+        "dormant_revival": {"context_mismatch_exclusions": 2},
+    }
     assert report["shift_indices"] == [2]
     assert report["post_shift_gain"] == 1.0
     assert report["continual_learning"]["backward_transfer"] == pytest.approx(-0.1)
@@ -376,3 +381,5 @@ def test_stream_report_aligns_baseline_by_sample_id_and_serializes() -> None:
     assert "# Test Run" in markdown
     assert "Performance by phase" in markdown
     assert "latency p95 ms" in markdown
+    assert "Retirement probation" in markdown
+    assert "context mismatch exclusions" in markdown

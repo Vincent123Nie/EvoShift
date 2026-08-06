@@ -85,6 +85,7 @@ class ActiveMemoryAuditor:
         feedback_control: float,
         feedback_candidate: float,
         shift_detected: bool = False,
+        retirement_enabled: bool = True,
     ) -> ActiveAuditDecision:
         if memory.status != MemoryStatus.ACTIVE:
             raise ValueError("active memory audit requires an active memory")
@@ -109,9 +110,10 @@ class ActiveMemoryAuditor:
         early_retire = (
             self.early_retire_enabled and shift_detected and delta <= self.early_retire_delta
         )
-        retire = early_retire or (
+        retirement_evidence = early_retire or (
             enough_evidence and updated.causal_mean_delta <= self.retire_mean_delta
         )
+        retire = retirement_enabled and retirement_evidence
         if retire:
             if early_retire:
                 reason = (
@@ -124,6 +126,8 @@ class ActiveMemoryAuditor:
                     f"{updated.causal_mean_delta:.3f} <= {self.retire_mean_delta:.3f} "
                     f"after {updated.causal_audit_count} audits"
                 )
+        elif retirement_evidence:
+            reason = "keep active: retirement disabled for reversible causal canary"
         elif not enough_evidence:
             reason = "keep active: insufficient learner-visible causal evidence"
         else:
@@ -140,6 +144,65 @@ class ActiveMemoryAuditor:
             delta=delta,
             retire=retire,
             reason=reason,
+        )
+
+    @staticmethod
+    def observation_is_present(
+        memory: MemoryItem,
+        observation: ActiveAuditDecision,
+    ) -> bool:
+        """Return whether an aggregate ledger still contains a provisional observation."""
+
+        before = observation.memory_before
+        after = observation.memory_after
+        if (memory.memory_id, memory.version) != (before.memory_id, before.version):
+            return False
+        positive = after.causal_positive_count - before.causal_positive_count
+        negative = after.causal_negative_count - before.causal_negative_count
+        neutral = after.causal_neutral_count - before.causal_neutral_count
+        if (positive, negative, neutral).count(1) != 1 or any(
+            value not in {0, 1} for value in (positive, negative, neutral)
+        ):
+            return False
+        return (
+            memory.causal_audit_count >= after.causal_audit_count
+            and memory.causal_positive_count >= after.causal_positive_count
+            and memory.causal_negative_count >= after.causal_negative_count
+            and memory.causal_neutral_count >= after.causal_neutral_count
+        )
+
+    @staticmethod
+    def revert_observation(memory: MemoryItem, observation: ActiveAuditDecision) -> MemoryItem:
+        """Remove one provisional audit observation while preserving later evidence."""
+
+        before = observation.memory_before
+        after = observation.memory_after
+        if (memory.memory_id, memory.version) != (before.memory_id, before.version):
+            raise ValueError("cannot revert a causal observation from another memory version")
+        positive = after.causal_positive_count - before.causal_positive_count
+        negative = after.causal_negative_count - before.causal_negative_count
+        neutral = after.causal_neutral_count - before.causal_neutral_count
+        if (positive, negative, neutral).count(1) != 1 or any(
+            value not in {0, 1} for value in (positive, negative, neutral)
+        ):
+            raise ValueError("invalid provisional causal observation")
+        if not ActiveMemoryAuditor.observation_is_present(memory, observation):
+            raise ValueError("cannot revert a causal observation absent from the ledger")
+        audit_count = memory.causal_audit_count - 1
+        last_index = memory.causal_last_audit_index
+        if last_index == observation.episode_index:
+            last_index = before.causal_last_audit_index
+        if audit_count == 0:
+            last_index = None
+        return memory.model_copy(
+            update={
+                "causal_audit_count": audit_count,
+                "causal_positive_count": memory.causal_positive_count - positive,
+                "causal_negative_count": memory.causal_negative_count - negative,
+                "causal_neutral_count": memory.causal_neutral_count - neutral,
+                "causal_delta_sum": memory.causal_delta_sum - observation.delta,
+                "causal_last_audit_index": last_index,
+            }
         )
 
 

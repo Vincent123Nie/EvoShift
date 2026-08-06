@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -81,6 +82,7 @@ class EvolutionConfig(ConfigModel):
     dynamic_feedback_trust_enabled: bool = False
     dynamic_feedback_context_field: str = "feedback_context"
     dynamic_feedback_min_consistent_observations: int = Field(default=2, ge=2, le=100)
+    dynamic_feedback_change_min_span: int = Field(default=0, ge=0, le=10000)
     dynamic_feedback_cold_start_trust: float = Field(default=0.40, ge=0.0, le=1.0)
     dynamic_feedback_conflict_trust: float = Field(default=0.10, ge=0.0, le=1.0)
     dynamic_feedback_prior_strength: float = Field(default=8.0, ge=0.0, le=1000.0)
@@ -100,6 +102,12 @@ class EvolutionConfig(ConfigModel):
     candidate_min_new_observations: int = Field(default=1, ge=1, le=1000)
     candidate_cooldown_episodes: int = Field(default=4, ge=0, le=10000)
     replay_current_regime_only: bool = True
+    replay_historical_context_anchors_enabled: bool = False
+    replay_historical_context_anchor_fraction: float = Field(
+        default=1.0 / 3.0,
+        gt=0.0,
+        le=0.5,
+    )
     candidate_replay_since_first_evidence: bool = False
     max_candidates_per_round: int = Field(default=1, ge=1, le=8)
     policy_evolution_enabled: bool = True
@@ -117,8 +125,38 @@ class EvolutionConfig(ConfigModel):
     active_audit_early_retire_enabled: bool = False
     active_audit_early_retire_delta: float = Field(default=-0.75, ge=-1.0, le=0.0)
     active_audit_cooldown_episodes: int = Field(default=0, ge=0, le=10000)
+    active_audit_reactivation_grace_episodes: int = Field(default=0, ge=0, le=10000)
+    active_audit_retirement_probation_enabled: bool = False
+    active_audit_retirement_probation_context_scoped: bool = False
+    active_audit_retirement_probation_fast_confirm_enabled: bool = False
+    active_audit_retirement_probation_fast_confirm_min_trust: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+    active_audit_retirement_probation_fast_revival_cooldown_episodes: int = Field(
+        default=0,
+        ge=0,
+        le=10000,
+    )
+    active_audit_retirement_probation_max_age: int = Field(default=8, ge=1, le=10000)
+    active_audit_retirement_probation_min_confirmations: int = Field(default=2, ge=1, le=100)
+    active_audit_retirement_probation_min_evidence_span: int = Field(default=2, ge=0, le=10000)
     active_audit_restore_predecessors: bool = False
     min_feedback_trust_for_active_audit: float = Field(default=0.60, ge=0.0, le=1.0)
+    active_audit_circuit_breaker_enabled: bool = False
+    active_audit_circuit_breaker_min_trust: float = Field(default=0.10, ge=0.0, le=1.0)
+    active_audit_circuit_breaker_delta: float = Field(default=-0.75, ge=-1.0, le=0.0)
+    active_audit_circuit_breaker_max_age: int = Field(default=8, ge=1, le=10000)
+    active_audit_lineage_control_enabled: bool = False
+    dormant_revival_enabled: bool = False
+    dormant_revival_min_trust: float = Field(default=0.10, ge=0.0, le=1.0)
+    dormant_revival_delta: float = Field(default=0.75, ge=0.0, le=1.0)
+    dormant_revival_max_age: int = Field(default=8, ge=1, le=10000)
+    dormant_revival_min_retired_age: int = Field(default=18, ge=1, le=10000)
+    dormant_revival_status_index_enabled: bool = False
+    dormant_revival_semantic_index_enabled: bool = False
+    dormant_revival_retirement_context_enabled: bool = False
     conflict_supersession_enabled: bool = True
 
     @model_validator(mode="after")
@@ -135,8 +173,20 @@ class EvolutionConfig(ConfigModel):
                 "feedback_source_trust requires non-empty sources and values in [0, 1]: "
                 + ", ".join(invalid_sources)
             )
-        if not self.dynamic_feedback_context_field.strip():
-            raise ValueError("dynamic_feedback_context_field must not be empty")
+        if self.dynamic_feedback_context_field != "feedback_context":
+            raise ValueError(
+                "dynamic_feedback_context_field must use the typed learner-visible "
+                "feedback_context field"
+            )
+        if (
+            self.replay_historical_context_anchors_enabled
+            and math.floor(self.validation_window * self.replay_historical_context_anchor_fraction)
+            < 1
+        ):
+            raise ValueError(
+                "historical replay anchors require validation_window * "
+                "replay_historical_context_anchor_fraction >= 1"
+            )
         if (
             self.shadow_candidate_enabled
             and self.min_feedback_trust_for_shadow_candidate > self.min_feedback_trust_for_candidate
@@ -178,6 +228,52 @@ class EvolutionConfig(ConfigModel):
             raise ValueError(
                 "active_audit_min_negative_observations must not exceed "
                 "active_audit_min_observations"
+            )
+        if self.active_audit_circuit_breaker_enabled and not self.active_audit_enabled:
+            raise ValueError("active audit circuit breaker requires active audit")
+        if self.active_audit_circuit_breaker_enabled and not self.dynamic_feedback_trust_enabled:
+            raise ValueError("active audit circuit breaker requires dynamic feedback trust")
+        if (
+            self.active_audit_circuit_breaker_enabled
+            and self.active_audit_circuit_breaker_min_trust
+            >= self.min_feedback_trust_for_active_audit
+        ):
+            raise ValueError(
+                "active audit circuit breaker trust floor must be below the ordinary "
+                "active audit threshold"
+            )
+        if (
+            self.active_audit_lineage_control_enabled
+            and not self.active_audit_circuit_breaker_enabled
+        ):
+            raise ValueError("lineage control requires the active audit circuit breaker")
+        if self.dormant_revival_enabled and not self.dynamic_feedback_trust_enabled:
+            raise ValueError("dormant memory revival requires dynamic feedback trust")
+        if self.dormant_revival_status_index_enabled and not self.dormant_revival_enabled:
+            raise ValueError("status-indexed revival requires dormant memory revival")
+        if self.dormant_revival_semantic_index_enabled and not self.dormant_revival_enabled:
+            raise ValueError("semantic dormant view requires dormant memory revival")
+        if self.dormant_revival_retirement_context_enabled and not self.dormant_revival_enabled:
+            raise ValueError("retirement-context-bound revival requires dormant memory revival")
+        if self.active_audit_retirement_probation_enabled and not self.active_audit_enabled:
+            raise ValueError("retirement probation requires active audit")
+        if (
+            self.active_audit_retirement_probation_context_scoped
+            and not self.active_audit_retirement_probation_enabled
+        ):
+            raise ValueError("context-scoped retirement probation requires retirement probation")
+        if (
+            self.active_audit_retirement_probation_fast_confirm_enabled
+            and not self.active_audit_retirement_probation_enabled
+        ):
+            raise ValueError("fast retirement confirmation requires retirement probation")
+        if (
+            self.dormant_revival_enabled
+            and self.dormant_revival_min_trust >= self.min_feedback_trust_for_active_audit
+        ):
+            raise ValueError(
+                "dormant memory revival trust floor must be below the ordinary "
+                "active audit threshold"
             )
         return self
 

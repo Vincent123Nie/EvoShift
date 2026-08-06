@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from evoshift.schemas import MemoryItem, MemoryStatus, PolicyGenome, RunManifest, RunMode
 
@@ -95,6 +95,60 @@ def state_fingerprint(policy: PolicyGenome, memories: tuple[MemoryItem, ...]) ->
     return hashlib.sha256(encoded).hexdigest()
 
 
+def semantic_state_fingerprint(
+    policy: PolicyGenome,
+    memories: tuple[MemoryItem, ...],
+    *,
+    episode_identity_by_id: Mapping[str, str],
+) -> str:
+    """Hash learned semantics while excluding run-local clocks and episode UUIDs.
+
+    ``state_fingerprint`` intentionally preserves the exact snapshot for immutable
+    frozen-audit checks. This companion fingerprint is for cross-run metamorphic
+    tests and adoption gates where equivalent runs have different UUIDs and wall
+    clock timestamps. Every referenced episode must be mapped to a stable audit
+    identity, normally ``"{episode_index}:{sample_id}"``. This mapping is post-hoc
+    provenance and is never supplied to the online agent.
+    """
+
+    def stable_episode_identity(episode_id: str) -> str:
+        if not episode_id:
+            return ""
+        try:
+            return episode_identity_by_id[episode_id]
+        except KeyError:
+            raise ValueError(
+                f"missing stable identity for provenance episode {episode_id!r}"
+            ) from None
+
+    ordered = sorted(memories, key=lambda item: (item.memory_id, item.version))
+    canonical_memories: list[dict[str, Any]] = []
+    for item in ordered:
+        payload = item.model_dump(mode="json")
+        payload.pop("created_at", None)
+        payload.pop("updated_at", None)
+        payload["tags"] = sorted(set(payload["tags"]))
+        payload["source_domains"] = sorted(set(payload["source_domains"]))
+        payload["supersedes_memory_ids"] = sorted(set(payload["supersedes_memory_ids"]))
+        payload["provenance_episode_ids"] = sorted(
+            {stable_episode_identity(episode_id) for episode_id in item.provenance_episode_ids}
+        )
+        payload["valid_from_episode_id"] = stable_episode_identity(item.valid_from_episode_id)
+        canonical_memories.append(payload)
+
+    payload = {
+        "policy": policy.model_dump(mode="json"),
+        "active_memories": canonical_memories,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def load_evolved_state(run_dir: Path) -> EvolvedState:
     """Validate and load the frozen state exported by ``EvoShiftRunner``."""
 
@@ -147,5 +201,6 @@ __all__ = [
     "EvolvedState",
     "load_evolved_state",
     "require_same_model",
+    "semantic_state_fingerprint",
     "state_fingerprint",
 ]

@@ -104,6 +104,37 @@ def test_manager_rolls_back_harmful_memory(tmp_path: Path) -> None:
     store.close()
 
 
+def test_manager_defers_posterior_retirement_without_changing_lifecycle(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    policy = PolicyGenome(rollback_min_uses=2, rollback_utility_threshold=0.6)
+    item = _memory("bad", "all tasks", "Always answer zero.")
+    store.save_memory(item)
+
+    manager.record_outcome(
+        ["bad"],
+        success=False,
+        policy=policy,
+        defer_retirements=True,
+    )
+    outcome = manager.record_outcome(
+        ["bad"],
+        success=False,
+        policy=policy,
+        defer_retirements=True,
+    )
+
+    assert outcome.rolled_back == ()
+    assert [candidate.memory_id for candidate in outcome.retirement_candidates] == ["bad"]
+    current = store.get_memory("bad")
+    assert current is not None
+    assert current.status == MemoryStatus.ACTIVE
+    assert current.use_count == 2
+    store.close()
+
+
 def test_confirmed_successor_supersedes_and_rollback_restores_prior_rule(
     tmp_path: Path,
 ) -> None:
@@ -127,6 +158,38 @@ def test_confirmed_successor_supersedes_and_rollback_restores_prior_rule(
     assert [item.memory_id for item in outcome.rolled_back] == ["successor"]
     assert [item.memory_id for item in outcome.reactivated] == ["prior"]
     assert store.get_memory("prior").status == MemoryStatus.ACTIVE  # type: ignore[union-attr]
+    store.close()
+
+
+def test_direct_predecessor_control_uses_latest_superseded_exact_version(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    prior = _memory("prior", "refund policy", "Use the 14 day rule.").model_copy(
+        update={"scope": "refund"}
+    )
+    successor = _memory(
+        "successor",
+        "refund policy",
+        "Use the premium 30 day rule.",
+    ).model_copy(update={"scope": "refund", "supersedes_memory_ids": ["prior"]})
+    store.save_memory(prior)
+    manager.activate(successor, 0.2, 0.1, 0.0)
+    store.save_memory(
+        prior.model_copy(
+            update={
+                "version": 2,
+                "status": MemoryStatus.REJECTED,
+                "directive": "Unverified later draft.",
+            }
+        )
+    )
+
+    controls = manager.direct_superseded_predecessors(successor)
+
+    assert [(item.memory_id, item.version) for item in controls] == [("prior", 1)]
+    assert controls[0].status == MemoryStatus.SUPERSEDED
     store.close()
 
 
@@ -178,6 +241,249 @@ def test_active_causal_retirement_does_not_eagerly_restore_predecessor_by_defaul
 
     assert outcome.reactivated == ()
     assert store.get_memory("prior").status == MemoryStatus.SUPERSEDED  # type: ignore[union-attr]
+    store.close()
+
+
+def test_confirmed_dormant_revival_resets_regime_specific_causal_ledger(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    retired = _memory("rule", "refund policy", "Use the recurring rule.").model_copy(
+        update={
+            "status": MemoryStatus.RETIRED,
+            "causal_audit_count": 2,
+            "causal_negative_count": 2,
+            "causal_delta_sum": -2.0,
+            "causal_last_audit_index": 20,
+        }
+    )
+    store.save_memory(retired)
+
+    reactivated = manager.reactivate_retired(retired)
+
+    assert reactivated is not None
+    assert reactivated.status == MemoryStatus.ACTIVE
+    assert reactivated.causal_audit_count == 0
+    assert reactivated.causal_negative_count == 0
+    assert reactivated.causal_delta_sum == 0.0
+    assert reactivated.causal_last_audit_index is None
+    store.close()
+
+
+def test_dormant_revival_rejects_non_latest_retired_version(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    retired = _memory("rule", "refund policy", "Use the recurring rule.").model_copy(
+        update={"status": MemoryStatus.RETIRED}
+    )
+    store.save_memory(retired)
+    store.save_memory(
+        retired.model_copy(
+            update={
+                "version": 2,
+                "status": MemoryStatus.REJECTED,
+                "directive": "Rejected newer draft.",
+            }
+        )
+    )
+
+    assert manager.reactivate_retired(retired) is None
+    assert store.get_memory("rule", version=1).status == MemoryStatus.RETIRED  # type: ignore[union-attr]
+    store.close()
+
+
+def test_status_indexed_revival_survives_newer_rejected_draft(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store, status_indexed_revival=True)
+    retired = _memory("rule", "refund policy", "Use the recurring rule.").model_copy(
+        update={"status": MemoryStatus.RETIRED}
+    )
+    store.save_memory(retired)
+    store.save_memory(
+        retired.model_copy(
+            update={
+                "version": 2,
+                "status": MemoryStatus.REJECTED,
+                "directive": "Rejected newer draft.",
+            }
+        )
+    )
+
+    reactivated = manager.reactivate_retired(retired)
+
+    assert reactivated is not None
+    assert reactivated.version == 1
+    assert manager.active() == [reactivated]
+    assert store.get_memory("rule").status == MemoryStatus.REJECTED  # type: ignore[union-attr]
+
+    manager.record_outcome(["rule"], success=True, policy=PolicyGenome())
+    updated = store.get_memory("rule", version=1)
+    assert updated is not None
+    assert updated.use_count == reactivated.use_count + 1
+    retired_again = manager.apply_active_audit(updated, retire=True)
+    assert [(item.memory_id, item.version) for item in retired_again.rolled_back] == [("rule", 1)]
+    store.close()
+
+
+def test_status_indexed_revival_requires_latest_exact_retired_version(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store, status_indexed_revival=True)
+    retired_v1 = _memory("rule", "refund policy", "Use rule one.").model_copy(
+        update={"status": MemoryStatus.RETIRED}
+    )
+    retired_v2 = retired_v1.model_copy(update={"version": 2, "directive": "Use rule two."})
+    rejected_v3 = retired_v2.model_copy(update={"version": 3, "status": MemoryStatus.REJECTED})
+    store.save_memory(retired_v1)
+    store.save_memory(retired_v2)
+    store.save_memory(rejected_v3)
+
+    assert manager.reactivate_retired(retired_v1) is None
+    assert manager.reactivate_retired(retired_v2) is not None
+    store.close()
+
+
+def test_pending_v1_cannot_replace_active_v2_during_rollback_or_revival(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store, status_indexed_revival=True)
+    active_snapshot_v1 = _memory("rule", "refund policy", "Use rule one.")
+    retired_v1 = active_snapshot_v1.model_copy(update={"status": MemoryStatus.RETIRED})
+    active_v2 = active_snapshot_v1.model_copy(
+        update={
+            "version": 2,
+            "status": MemoryStatus.ACTIVE,
+            "directive": "Use rule two.",
+        }
+    )
+    store.save_memory(retired_v1)
+    store.save_memory(active_v2)
+
+    assert manager.rollback_retirement(retired_v1, (), active_snapshot_v1) is None
+    assert manager.reactivate_retired(retired_v1) is None
+    persisted_v1 = store.get_memory("rule", version=1)
+    persisted_v2 = store.get_memory("rule", version=2)
+    assert persisted_v1 is not None
+    assert persisted_v2 is not None
+    assert persisted_v1.status == MemoryStatus.RETIRED
+    assert persisted_v2.status == MemoryStatus.ACTIVE
+    assert persisted_v2.directive == "Use rule two."
+    store.close()
+
+
+def test_active_lifecycle_is_not_hidden_by_newer_shadow_draft(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    active = _memory("rule", "refund policy", "Use the active rule.")
+    shadow = active.model_copy(
+        update={
+            "version": 2,
+            "status": MemoryStatus.SHADOW,
+            "directive": "Unverified newer draft.",
+        }
+    )
+    store.save_memory(active)
+    store.save_memory(shadow)
+
+    manager.record_outcome(["rule"], success=True, policy=PolicyGenome())
+    updated = store.get_memory("rule", version=1)
+    assert updated is not None
+    assert updated.use_count == 1
+
+    audited = updated.model_copy(
+        update={
+            "causal_audit_count": 1,
+            "causal_negative_count": 1,
+            "causal_delta_sum": -1.0,
+        }
+    )
+    manager.apply_active_audit(audited, retire=False)
+    persisted = store.get_memory("rule", version=1)
+    assert persisted is not None
+    assert persisted.causal_audit_count == 1
+    assert store.get_memory("rule").status == MemoryStatus.SHADOW  # type: ignore[union-attr]
+    store.close()
+
+
+def test_reactivation_grace_updates_utility_without_posterior_retirement(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    active = _memory("rule", "refund policy", "Use the restored rule.").model_copy(
+        update={
+            "alpha": 1.0,
+            "beta": 9.0,
+            "use_count": 5,
+            "success_count": 0,
+        }
+    )
+    store.save_memory(active)
+    policy = PolicyGenome(rollback_min_uses=6, rollback_utility_threshold=0.30)
+
+    outcome = manager.record_outcome(
+        ["rule"],
+        success=False,
+        policy=policy,
+        retirement_protected_versions=[("rule", 1)],
+    )
+
+    persisted = store.get_memory("rule", version=1)
+    assert persisted is not None
+    assert persisted.status == MemoryStatus.ACTIVE
+    assert persisted.use_count == 6
+    assert persisted.beta == 10.0
+    assert outcome.rolled_back == ()
+    assert outcome.retirement_protected == (persisted,)
+    store.close()
+
+
+def test_posterior_retirement_can_rollback_only_its_exact_predecessors(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "memory.sqlite3")
+    manager = MemoryManager(store)
+    prior = _memory("prior", "refund policy", "Use the 14 day rule.").model_copy(
+        update={"scope": "refund"}
+    )
+    unrelated = _memory("unrelated", "shipping policy", "Use standard shipping.").model_copy(
+        update={"scope": "shipping"}
+    )
+    successor = _memory(
+        "successor",
+        "refund policy",
+        "Use the premium 30 day rule.",
+    ).model_copy(update={"scope": "refund", "supersedes_memory_ids": ["prior"]})
+    store.save_memory(prior)
+    store.save_memory(unrelated)
+    manager.activate(successor, 0.2, 0.1, 0.0)
+
+    outcome = manager.record_outcome(
+        ["successor"],
+        success=False,
+        policy=PolicyGenome(rollback_min_uses=1, rollback_utility_threshold=0.6),
+    )
+
+    assert [[item.memory_id for item in group] for group in outcome.retirement_predecessors] == [
+        ["prior"]
+    ]
+    assert len(outcome.retirement_snapshots) == 1
+    snapshot = outcome.retirement_snapshots[0]
+    retired = outcome.rolled_back[0]
+    assert retired.beta == snapshot.beta + 1.0
+    assert retired.use_count == snapshot.use_count + 1
+    restored = manager.rollback_retirement(
+        retired,
+        outcome.retirement_predecessors[0],
+        snapshot,
+    )
+    assert restored is not None
+    assert restored.status == MemoryStatus.ACTIVE
+    assert restored.alpha == snapshot.alpha
+    assert restored.beta == snapshot.beta
+    assert restored.use_count == snapshot.use_count
+    assert restored.success_count == snapshot.success_count
+    assert store.get_memory("prior").status == MemoryStatus.SUPERSEDED  # type: ignore[union-attr]
+    assert store.get_memory("unrelated").status == MemoryStatus.ACTIVE  # type: ignore[union-attr]
     store.close()
 
 

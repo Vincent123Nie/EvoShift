@@ -37,6 +37,7 @@ class _ContextState:
     committed_observations: int = 0
     pending_signal: str = ""
     pending_observations: int = 0
+    pending_first_index: int | None = None
     total_observations: int = 0
 
 
@@ -69,7 +70,12 @@ class FeedbackTrustModel:
             config.dynamic_feedback_trust_enabled if dynamic_enabled is None else dynamic_enabled
         )
         self.context_field = config.dynamic_feedback_context_field.strip()
+        if self.context_field != "feedback_context":
+            raise ValueError(
+                "feedback trust requires the typed learner-visible feedback_context field"
+            )
         self.min_consistent = config.dynamic_feedback_min_consistent_observations
+        self.change_min_span = config.dynamic_feedback_change_min_span
         self.cold_start_trust = config.dynamic_feedback_cold_start_trust
         self.conflict_trust = config.dynamic_feedback_conflict_trust
         self.prior_strength = config.dynamic_feedback_prior_strength
@@ -77,10 +83,16 @@ class FeedbackTrustModel:
         self._sources: dict[str, _SourceState] = {}
         self._contexts: OrderedDict[tuple[str, str], _ContextState] = OrderedDict()
         self.confirmed_changes = 0
+        self.temporally_deferred_changes = 0
         self.low_trust_observations = 0
 
-    def assess(self, sample: BenchmarkSample) -> FeedbackAssessment:
-        source = str(sample.metadata.get("feedback_source", "")).strip() or "unspecified"
+    def assess(
+        self,
+        sample: BenchmarkSample,
+        *,
+        episode_index: int | None = None,
+    ) -> FeedbackAssessment:
+        source, observable_context = self.observable_key(sample)
         prior = self.source_trust.get(source, self.default_trust)
         if not self.dynamic_enabled or "feedback_reference" not in sample.metadata:
             reason_prefix = "configured_source" if source in self.source_trust else "default_source"
@@ -95,11 +107,20 @@ class FeedbackTrustModel:
                 pending_observations=0,
             )
 
-        context = self._context(sample)
+        context = observable_context
         signal = self._canonical_signal(sample.metadata["feedback_reference"])
+        if self.change_min_span > 0 and episode_index is None:
+            raise ValueError(
+                "episode_index is required when dynamic_feedback_change_min_span is enabled"
+            )
         source_state = self._sources.setdefault(source, self._new_source_state(prior))
         context_state = self._get_context_state(source, context)
-        trust, reason = self._observe(source_state, context_state, signal)
+        trust, reason = self._observe(
+            source_state,
+            context_state,
+            signal,
+            episode_index=episode_index,
+        )
         if trust < prior:
             self.low_trust_observations += 1
         return FeedbackAssessment(
@@ -113,12 +134,20 @@ class FeedbackTrustModel:
             pending_observations=context_state.pending_observations,
         )
 
+    def observable_key(self, sample: BenchmarkSample) -> tuple[str, str]:
+        """Return the learner-visible provenance/context key without mutating trust state."""
+
+        source = str(sample.metadata.get("feedback_source", "")).strip() or "unspecified"
+        return source, self._context(sample)
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "dynamic_enabled": self.dynamic_enabled,
+            "change_min_span": self.change_min_span,
             "tracked_sources": len(self._sources),
             "tracked_contexts": len(self._contexts),
             "confirmed_context_changes": self.confirmed_changes,
+            "temporally_deferred_changes": self.temporally_deferred_changes,
             "low_trust_observations": self.low_trust_observations,
             "source_posteriors": {
                 source: {
@@ -156,46 +185,66 @@ class FeedbackTrustModel:
         source: _SourceState,
         context: _ContextState,
         signal: str,
+        *,
+        episode_index: int | None,
     ) -> tuple[float, str]:
         context.total_observations += 1
         if not context.committed_signal:
-            self._advance_pending(context, signal)
+            self._advance_pending(context, signal, episode_index=episode_index)
             if context.pending_observations >= self.min_consistent:
                 context.committed_signal = signal
                 context.committed_observations = context.pending_observations
                 source.alpha += context.pending_observations
-                context.pending_signal = ""
-                context.pending_observations = 0
+                self._clear_pending(context)
                 return source.mean, "dynamic_initial_consensus"
             return min(source.mean, self.cold_start_trust), "dynamic_cold_start"
 
         if signal == context.committed_signal:
             if context.pending_observations:
                 source.beta += context.pending_observations
-            context.pending_signal = ""
-            context.pending_observations = 0
+            self._clear_pending(context)
             context.committed_observations += 1
             source.alpha += 1.0
             return source.mean, "dynamic_consistent"
 
-        self._advance_pending(context, signal)
+        self._advance_pending(context, signal, episode_index=episode_index)
         if context.pending_observations >= self.min_consistent:
+            first_index = context.pending_first_index
+            change_span = (
+                episode_index - first_index
+                if episode_index is not None and first_index is not None
+                else 0
+            )
+            if change_span < self.change_min_span:
+                self.temporally_deferred_changes += 1
+                return min(source.mean, self.conflict_trust), "dynamic_pending_change_span"
             context.committed_signal = signal
             context.committed_observations = context.pending_observations
             source.alpha += context.pending_observations
-            context.pending_signal = ""
-            context.pending_observations = 0
+            self._clear_pending(context)
             self.confirmed_changes += 1
             return source.mean, "dynamic_confirmed_change"
         return min(source.mean, self.conflict_trust), "dynamic_pending_change"
 
     @staticmethod
-    def _advance_pending(context: _ContextState, signal: str) -> None:
+    def _advance_pending(
+        context: _ContextState,
+        signal: str,
+        *,
+        episode_index: int | None,
+    ) -> None:
         if context.pending_signal == signal:
             context.pending_observations += 1
         else:
             context.pending_signal = signal
             context.pending_observations = 1
+            context.pending_first_index = episode_index
+
+    @staticmethod
+    def _clear_pending(context: _ContextState) -> None:
+        context.pending_signal = ""
+        context.pending_observations = 0
+        context.pending_first_index = None
 
     @staticmethod
     def _canonical_signal(value: Any) -> str:
