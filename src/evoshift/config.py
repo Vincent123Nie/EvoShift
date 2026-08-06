@@ -101,6 +101,7 @@ class EvolutionConfig(ConfigModel):
     candidate_min_trusted_observations: int = Field(default=1, ge=0, le=1000)
     candidate_min_new_observations: int = Field(default=1, ge=1, le=1000)
     candidate_cooldown_episodes: int = Field(default=4, ge=0, le=10000)
+    candidate_evidence_context_scoped: bool = False
     replay_current_regime_only: bool = True
     replay_historical_context_anchors_enabled: bool = False
     replay_historical_context_anchor_fraction: float = Field(

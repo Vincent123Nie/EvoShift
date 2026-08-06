@@ -67,6 +67,12 @@ def test_fast_confirmation_trust_floor_is_bounded() -> None:
     assert config.active_audit_retirement_probation_fast_confirm_min_trust == 0.94
 
 
+def test_candidate_evidence_context_scoping_is_explicitly_configurable() -> None:
+    config = EvolutionConfig(candidate_evidence_context_scoped=True)
+
+    assert config.candidate_evidence_context_scoped is True
+
+
 def test_historical_replay_anchors_require_at_least_one_exact_quota_slot() -> None:
     with pytest.raises(ValueError, match="historical replay anchors require"):
         EvolutionConfig(

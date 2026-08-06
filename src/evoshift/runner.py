@@ -210,6 +210,7 @@ class EvoShiftRunner:
                 min_trusted_observations=(self.config.evolution.candidate_min_trusted_observations),
                 min_new_observations=(self.config.evolution.candidate_min_new_observations),
                 cooldown_episodes=self.config.evolution.candidate_cooldown_episodes,
+                context_scoped=self.config.evolution.candidate_evidence_context_scoped,
                 shadow_eprocess_enabled=self.config.evolution.shadow_eprocess_enabled,
                 shadow_eprocess_null_match_probability=(
                     self.config.evolution.shadow_eprocess_null_match_probability
@@ -2775,6 +2776,7 @@ class EvoShiftRunner:
                                 index,
                                 trust=assessment.trust,
                                 trusted=feedback_eligible,
+                                context_key=(assessment.source, assessment.context),
                             )
                             shadow_candidate_observations += int(not feedback_eligible)
                             shadow_cooldown_active = (
@@ -2798,6 +2800,11 @@ class EvoShiftRunner:
                                     evidence.signature,
                                     {
                                         "reason": readiness_reason,
+                                        "candidate_evidence_context_scoped": (
+                                            self.config.evolution.candidate_evidence_context_scoped
+                                        ),
+                                        "candidate_evidence_source": evidence.evidence_source,
+                                        "candidate_evidence_context": evidence.evidence_context,
                                         "observation_count": evidence.observation_count,
                                         "last_validation_observation_count": (
                                             evidence.last_validation_observation_count
@@ -2853,6 +2860,11 @@ class EvoShiftRunner:
                                         evidence.signature,
                                         {
                                             "reason": "insufficient_trusted_replay_buffer",
+                                            "candidate_evidence_context_scoped": (
+                                                self.config.evolution.candidate_evidence_context_scoped
+                                            ),
+                                            "candidate_evidence_source": evidence.evidence_source,
+                                            "candidate_evidence_context": evidence.evidence_context,
                                             "observation_count": evidence.observation_count,
                                             "replay_count": len(replay_buffer),
                                             "regime_start_index": regime_start,
@@ -2872,6 +2884,11 @@ class EvoShiftRunner:
                                         {
                                             "status": candidate.status.value,
                                             "candidate_signature": evidence.signature,
+                                            "candidate_evidence_context_scoped": (
+                                                self.config.evolution.candidate_evidence_context_scoped
+                                            ),
+                                            "candidate_evidence_source": evidence.evidence_source,
+                                            "candidate_evidence_context": evidence.evidence_context,
                                             "observation_count": evidence.observation_count,
                                             "evidence_lane": evidence_lane,
                                             "shadow_e_value": evidence.shadow_e_value,

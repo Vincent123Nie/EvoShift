@@ -61,6 +61,7 @@ evolution:
   candidate_min_observations: 1
   candidate_min_new_observations: 1
   candidate_cooldown_episodes: 4
+  candidate_evidence_context_scoped: false
   replay_current_regime_only: true
   replay_historical_context_anchors_enabled: false
   replay_historical_context_anchor_fraction: 0.3333333333333333

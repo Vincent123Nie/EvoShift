@@ -125,6 +125,62 @@ def test_candidate_pool_tracks_shadow_trust_and_can_require_trusted_evidence() -
     assert pool.readiness(evidence, 2) == (True, "ready")
 
 
+def test_context_scoped_candidate_pool_does_not_fuse_observable_contexts() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=2,
+        min_trusted_observations=1,
+        min_new_observations=1,
+        cooldown_episodes=0,
+        context_scoped=True,
+    )
+
+    first = pool.observe(
+        _candidate("ctx-a-1"),
+        10,
+        context_key=("portal", "refund:premium:days_15_30"),
+    )
+    second = pool.observe(
+        _candidate("ctx-b-1"),
+        11,
+        context_key=("portal", "refund:any:days_31_plus"),
+    )
+
+    assert second is not first
+    assert first.observation_count == 1
+    assert second.observation_count == 1
+    assert pool.readiness(first, 11) == (False, "insufficient_observations")
+    assert pool.readiness(second, 11) == (False, "insufficient_observations")
+
+    same_context = pool.observe(
+        _candidate("ctx-a-2"),
+        14,
+        context_key=("portal", "refund:premium:days_15_30"),
+    )
+    assert same_context is first
+    assert same_context.observation_count == 2
+    assert pool.readiness(same_context, 14) == (True, "ready")
+
+
+def test_context_scoped_candidate_pool_still_suppresses_global_active_duplicate() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=1,
+        min_new_observations=1,
+        cooldown_episodes=0,
+        context_scoped=True,
+    )
+    active = _candidate().model_copy(update={"memory_id": "memory", "status": MemoryStatus.ACTIVE})
+    pool.seed_accepted([active])
+
+    evidence = pool.observe(
+        _candidate("ctx"),
+        20,
+        context_key=("portal", "refund:premium:days_15_30"),
+    )
+
+    assert pool.readiness(evidence, 20) == (False, "duplicate_of_active_memory")
+
+
 def test_shadow_eprocess_excludes_discovery_then_crosses_and_resets() -> None:
     pool = CandidateEvidencePool(
         min_observations=1,

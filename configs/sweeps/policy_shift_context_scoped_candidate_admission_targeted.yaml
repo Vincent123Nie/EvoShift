@@ -1,0 +1,14 @@
+base_config: configs/experiments/policy_shift_causal_memory_demo.yaml
+seeds: [233, 255]
+algorithms:
+  - evoshift
+grid:
+  benchmark.feedback_noise_rate: [0.10]
+  benchmark.feedback_attack_burst_length: [0, 2, 4]
+variants:
+  global_candidate_evidence:
+    evolution.candidate_evidence_context_scoped: false
+  context_scoped_candidate_evidence:
+    evolution.candidate_evidence_context_scoped: true
+# 2 variants * 2 seeds * 1 noise level * 3 burst lengths.
+max_runs: 12
