@@ -70,6 +70,10 @@ class FeedbackTrustModel:
             config.dynamic_feedback_trust_enabled if dynamic_enabled is None else dynamic_enabled
         )
         self.context_field = config.dynamic_feedback_context_field.strip()
+        if self.context_field != "feedback_context":
+            raise ValueError(
+                "feedback trust requires the typed learner-visible feedback_context field"
+            )
         self.min_consistent = config.dynamic_feedback_min_consistent_observations
         self.change_min_span = config.dynamic_feedback_change_min_span
         self.cold_start_trust = config.dynamic_feedback_cold_start_trust

@@ -121,7 +121,6 @@ class MemoryAgent:
             )
         context = render_memory_context(retrieved, policy.memory_token_budget)
         task_payload = {
-            "sample_id": sample.sample_id,
             "domain": sample.domain,
             "task": sample.prompt,
             "experience_cards": context,
@@ -140,7 +139,7 @@ class MemoryAgent:
                 ],
                 max_output_tokens=self.provider.max_output_tokens,
                 reasoning_effort=self.provider.reasoning_effort,
-                metadata={"purpose": "solve", "sample_id": sample.sample_id},
+                metadata={"purpose": "solve"},
             )
         )
         allowed_ids = [item.item.memory_id for item in retrieved]
@@ -189,7 +188,7 @@ class MemoryAgent:
                 ],
                 max_output_tokens=self.provider.max_output_tokens,
                 reasoning_effort=self.provider.reasoning_effort,
-                metadata={"purpose": "self_refine", "sample_id": sample.sample_id},
+                metadata={"purpose": "self_refine"},
             )
         )
         output = parse_solver_output(response.text, allowed_memory_ids)

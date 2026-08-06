@@ -60,6 +60,45 @@ async def test_memory_agent_injects_retrieved_experience(tmp_path: Path) -> None
     assert isinstance(request, GenerationRequest)
     user_payload = str(request.messages[-1]["content"])
     assert '"phase"' not in user_payload
+    assert '"sample_id"' not in user_payload
+    assert request.metadata == {"purpose": "solve"}
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_solver_request_is_invariant_to_hidden_benchmark_identity(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    client = CapturingClient()
+    agent = MemoryAgent(client, ProviderConfig(model="fake"), MemoryManager(store))
+    visible = {"prompt": "refund request on day 10", "domain": "customer_support"}
+
+    await agent.solve(
+        BenchmarkSample(
+            sample_id="policy_shift:0:0000",
+            reference="deny",
+            phase="phase_0",
+            metadata={"protected": True, "policy_version": "v1"},
+            **visible,
+        ),
+        PolicyGenome(),
+    )
+    await agent.solve(
+        BenchmarkSample(
+            sample_id="policy_shift:5:9999",
+            reference="approve",
+            phase="phase_5",
+            metadata={"protected": False, "policy_version": "v3"},
+            **visible,
+        ),
+        PolicyGenome(),
+    )
+
+    first, second = client.requests
+    assert isinstance(first, GenerationRequest)
+    assert isinstance(second, GenerationRequest)
+    assert first == second
     store.close()
 
 

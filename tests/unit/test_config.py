@@ -19,3 +19,29 @@ def test_retirement_context_bound_revival_accepts_complete_dependency_chain() ->
     )
 
     assert config.dormant_revival_retirement_context_enabled
+
+
+def test_historical_replay_anchors_require_at_least_one_exact_quota_slot() -> None:
+    with pytest.raises(ValueError, match="historical replay anchors require"):
+        EvolutionConfig(
+            validation_window=2,
+            replay_historical_context_anchors_enabled=True,
+            replay_historical_context_anchor_fraction=1.0 / 3.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "hidden_field",
+    [
+        "phase_index",
+        "policy_version",
+        "protected",
+        "valid_memory_tags",
+        "stale_memory_tags",
+        "feedback_kind",
+        "feedback_corrupted",
+    ],
+)
+def test_dynamic_feedback_context_rejects_oracle_metadata_fields(hidden_field: str) -> None:
+    with pytest.raises(ValueError, match="typed learner-visible feedback_context"):
+        EvolutionConfig(dynamic_feedback_context_field=hidden_field)

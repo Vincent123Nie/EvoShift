@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -101,6 +102,12 @@ class EvolutionConfig(ConfigModel):
     candidate_min_new_observations: int = Field(default=1, ge=1, le=1000)
     candidate_cooldown_episodes: int = Field(default=4, ge=0, le=10000)
     replay_current_regime_only: bool = True
+    replay_historical_context_anchors_enabled: bool = False
+    replay_historical_context_anchor_fraction: float = Field(
+        default=1.0 / 3.0,
+        gt=0.0,
+        le=0.5,
+    )
     candidate_replay_since_first_evidence: bool = False
     max_candidates_per_round: int = Field(default=1, ge=1, le=8)
     policy_evolution_enabled: bool = True
@@ -154,8 +161,20 @@ class EvolutionConfig(ConfigModel):
                 "feedback_source_trust requires non-empty sources and values in [0, 1]: "
                 + ", ".join(invalid_sources)
             )
-        if not self.dynamic_feedback_context_field.strip():
-            raise ValueError("dynamic_feedback_context_field must not be empty")
+        if self.dynamic_feedback_context_field != "feedback_context":
+            raise ValueError(
+                "dynamic_feedback_context_field must use the typed learner-visible "
+                "feedback_context field"
+            )
+        if (
+            self.replay_historical_context_anchors_enabled
+            and math.floor(self.validation_window * self.replay_historical_context_anchor_fraction)
+            < 1
+        ):
+            raise ValueError(
+                "historical replay anchors require validation_window * "
+                "replay_historical_context_anchor_fraction >= 1"
+            )
         if (
             self.shadow_candidate_enabled
             and self.min_feedback_trust_for_shadow_candidate > self.min_feedback_trust_for_candidate

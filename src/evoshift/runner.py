@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from evoshift.agents import MemoryAgent
 from evoshift.agents.baselines import behavior_for
-from evoshift.audit import state_fingerprint
+from evoshift.audit import semantic_state_fingerprint, state_fingerprint
 from evoshift.benchmarks.base import BenchmarkAdapter, sample_fingerprint
 from evoshift.config import EvoShiftConfig
 from evoshift.evaluation import (
@@ -204,6 +204,7 @@ class EvoShiftRunner:
                 self.config.evolution,
                 protected_phases=self.config.benchmark.protected_phases,
             )
+            configured_protected_phases = frozenset(self.config.benchmark.protected_phases)
             candidate_pool = CandidateEvidencePool(
                 min_observations=self.config.evolution.candidate_min_observations,
                 min_trusted_observations=(self.config.evolution.candidate_min_trusted_observations),
@@ -496,6 +497,8 @@ class EvoShiftRunner:
                         "decision": decision.model_dump(mode="json"),
                         "completion_reason": outcome.completion_reason,
                         "shadow_derived": shadow_derived,
+                        "configured_protected_observations": sum(outcome.audit.protected_mask),
+                        "protection_basis": "configured_benchmark_protected_phases",
                         "candidate_trust": (
                             {
                                 "trusted_observations": evidence.trusted_observation_count,
@@ -1406,7 +1409,7 @@ class EvoShiftRunner:
                             oracle_candidate=score.primary,
                             control_usage=control_prediction.usage,
                             candidate_usage=prediction.usage,
-                            protected=bool(sample.metadata.get("protected")),
+                            protected=sample.phase in configured_protected_phases,
                         )
                         if future_result is not None:
                             complete_future_audit(future_result)
@@ -2756,6 +2759,18 @@ class EvoShiftRunner:
 
             final_memories = tuple(memory.active())
             final_state_hash = state_fingerprint(policy, final_memories)
+            semantic_final_state_hash = (
+                None
+                if self.frozen_audit
+                else semantic_state_fingerprint(
+                    policy,
+                    final_memories,
+                    episode_identity_by_id={
+                        episode.episode_id: f"{episode.index}:{episode.sample.sample_id}"
+                        for episode in episodes
+                    },
+                )
+            )
             expected_state_hash = self.expected_state_hash or self.source_state_hash
             if (
                 self.frozen_audit
@@ -3433,6 +3448,7 @@ class EvoShiftRunner:
                         "excluded_memory_version": self.excluded_memory_version,
                         "initial_active_memories": len(self.initial_memories),
                         "final_state_hash": final_state_hash,
+                        "semantic_final_state_hash": semantic_final_state_hash,
                         "state_unchanged": (
                             not self.frozen_audit
                             or not expected_state_hash

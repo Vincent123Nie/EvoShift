@@ -178,13 +178,31 @@ async def test_policy_shift_hard_rolls_back_poison_and_relearns_real_change(
         evolution["candidates_promoted"] + evolution["candidates_rejected"]
         == evolution["candidates_evaluated"]
     )
-    assert evolution["memory_candidates_evaluated"] == 6
+    assert evolution["memory_candidates_evaluated"] == 5
     assert evolution["memory_replay_gates_passed"] == 3
     assert evolution["memory_candidates_promoted"] == 2
-    assert evolution["memory_candidates_rejected"] == 4
+    assert evolution["memory_candidates_rejected"] == 3
     assert policy_shift["premature_update_rate"] == 0.125
     assert policy_shift["poison_persistence_error_rate"] == pytest.approx(2.0 / 7.0)
     assert policy_shift["invariant_retention_rate"] == 1.0
+
+    connection = sqlite3.connect(result.run_dir / "state.sqlite3")
+    try:
+        future_audit_payloads = [
+            json.loads(payload)
+            for (payload,) in connection.execute(
+                "SELECT payload_json FROM evolution_events "
+                "WHERE event_type='future_counterfactual_audit'"
+            )
+        ]
+    finally:
+        connection.close()
+    assert future_audit_payloads
+    assert all(
+        payload["configured_protected_observations"] == 0
+        and payload["protection_basis"] == "configured_benchmark_protected_phases"
+        for payload in future_audit_payloads
+    )
 
     audits = [
         decision
@@ -418,7 +436,7 @@ async def test_cooldown_dormant_revival_adds_recurrent_gain_without_false_reviva
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_context_bound_revival_uses_observable_key_without_feedback_reference(
+async def test_context_bound_retirement_uses_observable_key_without_feedback_reference(
     tmp_path: Path,
 ) -> None:
     config = load_config(Path("configs/experiments/policy_shift_causal_memory_demo.yaml"))
@@ -450,12 +468,13 @@ async def test_context_bound_revival_uses_observable_key_without_feedback_refere
                     "active_audit_retirement_probation_min_confirmations": 2,
                     "active_audit_retirement_probation_min_evidence_span": 2,
                     "dynamic_feedback_change_min_span": 0,
+                    "replay_historical_context_anchors_enabled": False,
                 }
             ),
         }
     )
     source = create_benchmark(config.benchmark, root=Path.cwd(), seed=seed)
-    adapter = _MissingFeedbackReferenceAdapter(source, missing_indices={97})
+    adapter = _MissingFeedbackReferenceAdapter(source, missing_indices={87})
 
     result = await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
 
@@ -467,7 +486,9 @@ async def test_context_bound_revival_uses_observable_key_without_feedback_refere
                 "SELECT event_type, entity_id, payload_json FROM evolution_events "
                 "WHERE event_type IN "
                 "('memory_retirement_probation_started', "
+                "'memory_retirement_probation_intervention', "
                 "'dormant_memory_revival_context_excluded', "
+                "'dormant_memory_revival_probe', "
                 "'dormant_memory_revival_registered', "
                 "'dormant_memory_revival_resolved')"
             )
@@ -475,32 +496,40 @@ async def test_context_bound_revival_uses_observable_key_without_feedback_refere
     finally:
         connection.close()
 
-    safe_key = "mem-cfb49bc0ef485383@v1"
     mismatched_key = "mem-61294fcf3a594201@v1"
     retirement = next(
         payload
         for event_type, entity_id, payload in lifecycle_events
         if event_type == "memory_retirement_probation_started"
-        and entity_id == safe_key
-        and payload["episode_index"] == 97
+        and entity_id == mismatched_key
+        and payload["episode_index"] == 87
     )
     assert retirement["source"] == "customer_support_portal"
-    assert retirement["context"] == "refund:any:days_8_14"
-    assert any(
-        event_type == "dormant_memory_revival_context_excluded" and entity_id == mismatched_key
-        for event_type, entity_id, _ in lifecycle_events
+    assert retirement["context"] == "refund:premium:days_15_30"
+    retirement_interventions = [
+        payload
+        for event_type, entity_id, payload in lifecycle_events
+        if event_type == "memory_retirement_probation_intervention" and entity_id == mismatched_key
+    ]
+    assert retirement_interventions
+    assert all(
+        payload["source"] == "customer_support_portal"
+        and payload["context"] == "refund:premium:days_15_30"
+        for payload in retirement_interventions
     )
-    safe_revival_events = [
+    mismatched_model_events = [
         event_type
         for event_type, entity_id, _ in lifecycle_events
-        if entity_id == safe_key and event_type.startswith("dormant_memory_revival_")
+        if entity_id == mismatched_key
+        and event_type
+        in {
+            "dormant_memory_revival_probe",
+            "dormant_memory_revival_registered",
+            "dormant_memory_revival_resolved",
+        }
     ]
-    assert safe_revival_events == [
-        "dormant_memory_revival_registered",
-        "dormant_memory_revival_resolved",
-    ]
+    assert mismatched_model_events == []
     revival = result.metrics["active_memory_governance"]["dormant_revival"]
-    assert revival["confirmations"] == 1
     assert revival["context_mismatch_confirmations"] == 0
     assert revival["post_confirmation_tag_associated_harmful_exposure_n"] == 0
 

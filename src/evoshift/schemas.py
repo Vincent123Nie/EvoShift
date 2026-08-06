@@ -281,6 +281,9 @@ class ValidationResult(StrictModel):
     oracle_mean_delta: Optional[float] = None
     observation_start_index: Optional[int] = None
     observation_end_index: Optional[int] = None
+    replay_sample_ids: List[str] = Field(default_factory=list)
+    replay_episode_indices: List[int] = Field(default_factory=list)
+    replay_protected_mask: List[bool] = Field(default_factory=list)
 
 
 class PromotionDecision(StrictModel):
