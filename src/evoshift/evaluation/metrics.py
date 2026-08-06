@@ -394,6 +394,10 @@ def feedback_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
             "false_negative_feedback_rate": 0.0,
             "mean_absolute_score_gap": 0.0,
             "mean_trust": 0.0,
+            "mean_adaptation_trust": 0.0,
+            "change_point_crossings": 0,
+            "change_point_max_probability": 0.0,
+            "change_point_mean_probability": 0.0,
             "eligible_feedback_rate": 0.0,
             "quarantined_feedback_n": 0,
             "corrupted_feedback_quarantine_rate": 0.0,
@@ -444,6 +448,18 @@ def feedback_metrics(episodes: Sequence[Episode]) -> dict[str, float | int]:
             for episode, feedback in zip(episodes, visible)
         ),
         "mean_trust": statistics.fmean(episode.feedback_trust for episode in episodes),
+        "mean_adaptation_trust": statistics.fmean(
+            episode.feedback_adaptation_trust for episode in episodes
+        ),
+        "change_point_crossings": sum(
+            int(episode.feedback_change_point_crossed) for episode in episodes
+        ),
+        "change_point_max_probability": max(
+            episode.feedback_change_point_probability for episode in episodes
+        ),
+        "change_point_mean_probability": statistics.fmean(
+            episode.feedback_change_point_probability for episode in episodes
+        ),
         "eligible_feedback_rate": statistics.fmean(
             float(episode.feedback_eligible) for episode in episodes
         ),

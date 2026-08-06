@@ -19,6 +19,10 @@ class FeedbackAssessment:
     source_posterior_mean: float
     context_observations: int
     pending_observations: int
+    adaptation_trust: float = 0.0
+    change_point_probability: float = 0.0
+    change_point_crossed: bool = False
+    change_point_run_length: int = 0
 
 
 @dataclass
@@ -39,6 +43,8 @@ class _ContextState:
     pending_observations: int = 0
     pending_first_index: int | None = None
     total_observations: int = 0
+    change_probability: float = 0.0
+    change_run_length: int = 0
 
 
 class FeedbackTrustModel:
@@ -75,6 +81,13 @@ class FeedbackTrustModel:
                 "feedback trust requires the typed learner-visible feedback_context field"
             )
         self.min_consistent = config.dynamic_feedback_min_consistent_observations
+        self.change_point_enabled = config.dynamic_feedback_change_point_enabled
+        self.change_hazard = config.dynamic_feedback_change_hazard
+        self.change_epsilon_0 = config.dynamic_feedback_change_epsilon_0
+        self.change_epsilon_1 = config.dynamic_feedback_change_epsilon_1
+        self.change_threshold = config.dynamic_feedback_change_threshold
+        self.change_soft_trust = config.dynamic_feedback_change_soft_trust
+        self.change_max_run_length = config.dynamic_feedback_change_max_run_length
         self.change_min_span = config.dynamic_feedback_change_min_span
         self.cold_start_trust = config.dynamic_feedback_cold_start_trust
         self.conflict_trust = config.dynamic_feedback_conflict_trust
@@ -85,6 +98,9 @@ class FeedbackTrustModel:
         self.confirmed_changes = 0
         self.temporally_deferred_changes = 0
         self.low_trust_observations = 0
+        self.posterior_crossings = 0
+        self.posterior_resets = 0
+        self.soft_change_observations = 0
 
     def assess(
         self,
@@ -105,6 +121,7 @@ class FeedbackTrustModel:
                 source_posterior_mean=prior,
                 context_observations=0,
                 pending_observations=0,
+                adaptation_trust=prior,
             )
 
         context = observable_context
@@ -115,7 +132,7 @@ class FeedbackTrustModel:
             )
         source_state = self._sources.setdefault(source, self._new_source_state(prior))
         context_state = self._get_context_state(source, context)
-        trust, reason = self._observe(
+        trust, adaptation_trust, reason, change_probability, crossed = self._observe(
             source_state,
             context_state,
             signal,
@@ -132,6 +149,10 @@ class FeedbackTrustModel:
             source_posterior_mean=source_state.mean,
             context_observations=context_state.total_observations,
             pending_observations=context_state.pending_observations,
+            adaptation_trust=max(0.0, min(1.0, adaptation_trust)),
+            change_point_probability=change_probability,
+            change_point_crossed=crossed,
+            change_point_run_length=context_state.change_run_length,
         )
 
     def observable_key(self, sample: BenchmarkSample) -> tuple[str, str]:
@@ -143,12 +164,22 @@ class FeedbackTrustModel:
     def snapshot(self) -> dict[str, Any]:
         return {
             "dynamic_enabled": self.dynamic_enabled,
+            "change_point_enabled": self.change_point_enabled,
+            "change_hazard": self.change_hazard,
+            "change_epsilon_0": self.change_epsilon_0,
+            "change_epsilon_1": self.change_epsilon_1,
+            "change_threshold": self.change_threshold,
+            "change_soft_trust": self.change_soft_trust,
+            "change_max_run_length": self.change_max_run_length,
             "change_min_span": self.change_min_span,
             "tracked_sources": len(self._sources),
             "tracked_contexts": len(self._contexts),
             "confirmed_context_changes": self.confirmed_changes,
             "temporally_deferred_changes": self.temporally_deferred_changes,
             "low_trust_observations": self.low_trust_observations,
+            "posterior_crossings": self.posterior_crossings,
+            "posterior_resets": self.posterior_resets,
+            "soft_change_observations": self.soft_change_observations,
             "source_posteriors": {
                 source: {
                     "alpha": state.alpha,
@@ -156,6 +187,17 @@ class FeedbackTrustModel:
                     "mean": state.mean,
                 }
                 for source, state in sorted(self._sources.items())
+            },
+            "change_point_contexts": {
+                f"{source}\u001f{context}": {
+                    "committed_signal": state.committed_signal,
+                    "pending_signal": state.pending_signal,
+                    "pending_observations": state.pending_observations,
+                    "change_probability": state.change_probability,
+                    "change_run_length": state.change_run_length,
+                    "total_observations": state.total_observations,
+                }
+                for (source, context), state in sorted(self._contexts.items())
             },
         }
 
@@ -187,7 +229,7 @@ class FeedbackTrustModel:
         signal: str,
         *,
         episode_index: int | None,
-    ) -> tuple[float, str]:
+    ) -> tuple[float, float, str, float, bool]:
         context.total_observations += 1
         if not context.committed_signal:
             self._advance_pending(context, signal, episode_index=episode_index)
@@ -196,18 +238,29 @@ class FeedbackTrustModel:
                 context.committed_observations = context.pending_observations
                 source.alpha += context.pending_observations
                 self._clear_pending(context)
-                return source.mean, "dynamic_initial_consensus"
-            return min(source.mean, self.cold_start_trust), "dynamic_cold_start"
+                return source.mean, source.mean, "dynamic_initial_consensus", 0.0, False
+            cold = min(source.mean, self.cold_start_trust)
+            return cold, cold, "dynamic_cold_start", 0.0, False
 
         if signal == context.committed_signal:
             if context.pending_observations:
                 source.beta += context.pending_observations
             self._clear_pending(context)
+            change_probability, _crossed, _reset = self._update_change_posterior(
+                context,
+                signal,
+            )
             context.committed_observations += 1
             source.alpha += 1.0
-            return source.mean, "dynamic_consistent"
+            return source.mean, source.mean, "dynamic_consistent", change_probability, False
 
+        pending_matches = not context.pending_signal or context.pending_signal == signal
         self._advance_pending(context, signal, episode_index=episode_index)
+        change_probability, crossed, _reset = self._update_change_posterior(
+            context,
+            signal,
+            pending_matches=pending_matches,
+        )
         if context.pending_observations >= self.min_consistent:
             first_index = context.pending_first_index
             change_span = (
@@ -217,14 +270,96 @@ class FeedbackTrustModel:
             )
             if change_span < self.change_min_span:
                 self.temporally_deferred_changes += 1
-                return min(source.mean, self.conflict_trust), "dynamic_pending_change_span"
+                return (
+                    min(source.mean, self.conflict_trust),
+                    self._adaptation_trust(source.mean, change_probability, crossed),
+                    "dynamic_pending_change_span",
+                    change_probability,
+                    crossed,
+                )
             context.committed_signal = signal
             context.committed_observations = context.pending_observations
             source.alpha += context.pending_observations
             self._clear_pending(context)
             self.confirmed_changes += 1
-            return source.mean, "dynamic_confirmed_change"
-        return min(source.mean, self.conflict_trust), "dynamic_pending_change"
+            context.change_probability = 0.0
+            context.change_run_length = 0
+            return source.mean, source.mean, "dynamic_confirmed_change", 0.0, False
+        return (
+            min(source.mean, self.conflict_trust),
+            self._adaptation_trust(source.mean, change_probability, crossed),
+            "dynamic_pending_change",
+            change_probability,
+            crossed,
+        )
+
+    def _adaptation_trust(
+        self,
+        source_mean: float,
+        change_probability: float,
+        crossed: bool,
+    ) -> float:
+        if not self.change_point_enabled or not crossed:
+            return min(source_mean, self.conflict_trust)
+        self.soft_change_observations += 1
+        return max(self.conflict_trust, min(source_mean, self.change_soft_trust))
+
+    def _update_change_posterior(
+        self,
+        context: _ContextState,
+        signal: str,
+        *,
+        pending_matches: bool = True,
+    ) -> tuple[float, bool, bool]:
+        """Update a bounded two-state Bayesian change-point approximation.
+
+        ``H0`` says the committed label remains valid and ``H1`` says the
+        pending label is a persistent replacement. The posterior is used only
+        for the soft adaptation lane; lifecycle commits retain the existing
+        repeated-evidence rule.
+        """
+
+        if not self.change_point_enabled:
+            return 0.0, False, False
+        if signal == context.committed_signal:
+            reset = context.change_probability > 0.0
+            if reset:
+                self.posterior_resets += 1
+            context.change_probability = 0.0
+            context.change_run_length = 0
+            return 0.0, False, reset
+        if not pending_matches:
+            # A different contradictory label is evidence that the pending
+            # candidate itself was unstable; do not accumulate it into the
+            # previous candidate's posterior.
+            reset = context.change_probability > 0.0
+            if reset:
+                self.posterior_resets += 1
+            context.change_probability = 0.0
+            context.change_run_length = 0
+            return 0.0, False, reset
+        prior = context.change_probability + (1.0 - context.change_probability) * self.change_hazard
+        is_contradiction = signal != context.committed_signal
+        likelihood_h0 = self.change_epsilon_0 if is_contradiction else 1.0 - self.change_epsilon_0
+        likelihood_h1 = (
+            1.0 - self.change_epsilon_1 if pending_matches else self.change_epsilon_1
+        )
+        denominator = prior * likelihood_h1 + (1.0 - prior) * likelihood_h0
+        posterior = (prior * likelihood_h1 / denominator) if denominator else prior
+        previous = context.change_probability
+        context.change_probability = max(0.0, min(1.0, posterior))
+        context.change_run_length = min(
+            self.change_max_run_length,
+            context.change_run_length + 1,
+        )
+        crossed = (
+            is_contradiction
+            and context.change_probability >= self.change_threshold
+            and previous < self.change_threshold
+        )
+        if crossed:
+            self.posterior_crossings += 1
+        return context.change_probability, crossed, False
 
     @staticmethod
     def _advance_pending(

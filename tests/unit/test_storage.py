@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from evoshift.runtime.artifacts import RunArtifacts, load_episodes
 from evoshift.schemas import (
     Algorithm,
     BenchmarkSample,
@@ -54,6 +55,32 @@ def test_store_round_trip(tmp_path: Path) -> None:
         "active_memories": 1,
     }
     store.close()
+
+
+def test_artifacts_round_trip_preserves_change_point_trace(tmp_path: Path) -> None:
+    artifacts = RunArtifacts(tmp_path, "run-1")
+    episode = Episode(
+        episode_id="e1",
+        run_id="run-1",
+        index=0,
+        sample=BenchmarkSample(sample_id="s1", prompt="case", reference="hidden"),
+        output=SolverOutput(answer="answer"),
+        score=ScoreBundle(primary=1.0, success=True),
+        feedback_adaptation_trust=0.65,
+        feedback_change_point_probability=0.61,
+        feedback_change_point_crossed=True,
+        feedback_change_point_run_length=1,
+    )
+
+    artifacts.append_episode(episode)
+
+    loaded = load_episodes(artifacts.run_dir / "predictions.jsonl")
+    assert loaded == [episode]
+    trace = (artifacts.run_dir / "traces.jsonl").read_text(encoding="utf-8")
+    assert '"feedback_adaptation_trust": 0.65' in trace
+    assert '"feedback_change_point_probability": 0.61' in trace
+    assert '"feedback_change_point_crossed": true' in trace
+    assert '"feedback_change_point_run_length": 1' in trace
 
 
 def test_store_keeps_memory_versions(tmp_path: Path) -> None:

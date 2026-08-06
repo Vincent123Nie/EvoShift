@@ -206,6 +206,125 @@ def test_dynamic_feedback_change_span_requires_global_episode_index() -> None:
         model.assess(sample)
 
 
+def test_change_point_posterior_soft_crossing_is_non_destructive() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.90,
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_change_point_enabled=True,
+            dynamic_feedback_change_hazard=0.15,
+            dynamic_feedback_change_epsilon_0=0.10,
+            dynamic_feedback_change_epsilon_1=0.10,
+            dynamic_feedback_change_threshold=0.60,
+            dynamic_feedback_change_soft_trust=0.65,
+        )
+    )
+
+    def sample(sample_id: str, label: str) -> BenchmarkSample:
+        return BenchmarkSample(
+            sample_id=sample_id,
+            prompt="case",
+            reference="hidden",
+            metadata={
+                "feedback_source": "portal",
+                "feedback_context": "case",
+                "feedback_reference": label,
+            },
+        )
+
+    model.assess(sample("one", "DENY"))
+    model.assess(sample("two", "DENY"))
+    soft = model.assess(sample("three", "APPROVE"))
+
+    assert soft.reason == "dynamic_pending_change"
+    assert soft.trust == 0.10
+    assert soft.adaptation_trust == 0.65
+    assert soft.change_point_crossed is True
+    assert soft.change_point_probability > 0.60
+    assert soft.pending_observations == 1
+
+    recovered = model.assess(sample("four", "DENY"))
+    assert recovered.reason == "dynamic_consistent"
+    assert recovered.change_point_probability == 0.0
+    assert recovered.change_point_crossed is False
+    assert recovered.adaptation_trust > 0.60
+
+
+def test_change_point_posterior_confirms_only_existing_repeated_evidence() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.90,
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_change_point_enabled=True,
+            dynamic_feedback_change_hazard=0.15,
+        )
+    )
+
+    def sample(sample_id: str, label: str) -> BenchmarkSample:
+        return BenchmarkSample(
+            sample_id=sample_id,
+            prompt="case",
+            reference="hidden",
+            metadata={
+                "feedback_source": "portal",
+                "feedback_context": "case",
+                "feedback_reference": label,
+            },
+        )
+
+    model.assess(sample("one", "DENY"))
+    model.assess(sample("two", "DENY"))
+    first = model.assess(sample("three", "APPROVE"))
+    second = model.assess(sample("four", "APPROVE"))
+
+    assert first.change_point_crossed is True
+    assert first.trust == 0.10
+    assert second.reason == "dynamic_confirmed_change"
+    assert second.change_point_probability == 0.0
+    assert second.trust > 0.60
+    assert model.snapshot()["posterior_crossings"] == 1
+
+
+def test_change_point_posterior_does_not_accumulate_alternating_candidates() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.90,
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_change_point_enabled=True,
+            dynamic_feedback_change_hazard=0.15,
+        )
+    )
+
+    def sample(sample_id: str, label: str) -> BenchmarkSample:
+        return BenchmarkSample(
+            sample_id=sample_id,
+            prompt="case",
+            reference="hidden",
+            metadata={
+                "feedback_source": "portal",
+                "feedback_context": "case",
+                "feedback_reference": label,
+            },
+        )
+
+    model.assess(sample("one", "DENY"))
+    model.assess(sample("two", "DENY"))
+    first = model.assess(sample("three", "APPROVE"))
+    alternating = model.assess(sample("four", "REVIEW"))
+    recovered = model.assess(sample("five", "DENY"))
+
+    assert first.change_point_crossed is True
+    assert alternating.change_point_probability < first.change_point_probability
+    assert alternating.change_point_crossed is False
+    assert recovered.change_point_probability == 0.0
+    assert recovered.change_point_crossed is False
+
+
+def test_change_point_posterior_requires_dynamic_feedback_trust() -> None:
+    with pytest.raises(ValidationError, match="requires dynamic feedback trust"):
+        EvolutionConfig(dynamic_feedback_change_point_enabled=True)
+
+
 def test_dynamic_feedback_trust_bounds_context_state() -> None:
     model = FeedbackTrustModel(
         EvolutionConfig(

@@ -169,6 +169,13 @@ _AGGREGATE_FIELDS = {
     "revival_control_requests": "revival_control_requests",
     "confirmed_context_changes": "confirmed_context_changes",
     "temporally_deferred_changes": "temporally_deferred_changes",
+    "change_point_crossings": "change_point_crossings",
+    "change_point_max_probability": "change_point_max_probability",
+    "change_point_mean_probability": "change_point_mean_probability",
+    "mean_adaptation_trust": "mean_adaptation_trust",
+    "posterior_crossings": "posterior_crossings",
+    "posterior_resets": "posterior_resets",
+    "soft_change_observations": "soft_change_observations",
     "total_requests": "total_requests",
     "total_tokens": "total_tokens",
 }
@@ -326,6 +333,14 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                     "corrupted_feedback_quarantine_rate"
                 ),
                 "clean_feedback_quarantine_rate": feedback.get("clean_feedback_quarantine_rate"),
+                "mean_feedback_trust": feedback.get("mean_trust"),
+                "mean_adaptation_trust": feedback.get("mean_adaptation_trust"),
+                "change_point_crossings": feedback.get("change_point_crossings"),
+                "change_point_max_probability": feedback.get("change_point_max_probability"),
+                "change_point_mean_probability": feedback.get("change_point_mean_probability"),
+                "posterior_crossings": trust_model.get("posterior_crossings"),
+                "posterior_resets": trust_model.get("posterior_resets"),
+                "soft_change_observations": trust_model.get("soft_change_observations"),
                 "mean_recovery_steps": statistics.fmean(recovered) if recovered else None,
                 "unrecovered_shifts": sum(value is None for value in recovery_steps.values()),
                 "shift_detection_events": evolution.get("shift_detection_events"),
@@ -911,6 +926,14 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "poison_persistence_error_rate",
         "corrupted_feedback_quarantine_rate",
         "clean_feedback_quarantine_rate",
+        "mean_feedback_trust",
+        "mean_adaptation_trust",
+        "change_point_crossings",
+        "change_point_max_probability",
+        "change_point_mean_probability",
+        "posterior_crossings",
+        "posterior_resets",
+        "soft_change_observations",
         "mean_recovery_steps",
         "unrecovered_shifts",
         "shift_detection_events",
@@ -1135,6 +1158,35 @@ def _write_sweep_markdown(
                     _format_mean(item, "mean_recovery_steps"),
                     f"{item.get('total_requests_mean', 0.0):.1f}",
                     f"{item.get('total_tokens_mean', 0.0):.1f}",
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Change-point posterior diagnostics",
+            "",
+            (
+                "| Algorithm | Variant | Posterior crossings | Resets | Soft observations | "
+                "Mean q | Max q | Mean adaptation trust |"
+            ),
+            "|---|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for item in aggregate_rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(item["algorithm"]),
+                    str(item["variant"]),
+                    _format_mean(item, "posterior_crossings"),
+                    _format_mean(item, "posterior_resets"),
+                    _format_mean(item, "soft_change_observations"),
+                    _format_mean(item, "change_point_mean_probability"),
+                    _format_mean(item, "change_point_max_probability"),
+                    _format_mean(item, "mean_adaptation_trust"),
                 ]
             )
             + " |"

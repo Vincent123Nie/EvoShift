@@ -248,6 +248,10 @@ class Episode(StrictModel):
     score: ScoreBundle
     feedback_score: Optional[ScoreBundle] = None
     feedback_trust: float = Field(default=1.0, ge=0.0, le=1.0)
+    feedback_adaptation_trust: float = Field(default=1.0, ge=0.0, le=1.0)
+    feedback_change_point_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    feedback_change_point_crossed: bool = False
+    feedback_change_point_run_length: int = Field(default=0, ge=0)
     feedback_eligible: bool = True
     feedback_trust_reason: str = "default_trust"
     selected_memory_ids: List[str] = Field(default_factory=list)

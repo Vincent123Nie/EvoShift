@@ -82,6 +82,13 @@ class EvolutionConfig(ConfigModel):
     dynamic_feedback_trust_enabled: bool = False
     dynamic_feedback_context_field: str = "feedback_context"
     dynamic_feedback_min_consistent_observations: int = Field(default=2, ge=2, le=100)
+    dynamic_feedback_change_point_enabled: bool = False
+    dynamic_feedback_change_hazard: float = Field(default=0.10, gt=0.0, lt=1.0)
+    dynamic_feedback_change_epsilon_0: float = Field(default=0.10, gt=0.0, lt=0.5)
+    dynamic_feedback_change_epsilon_1: float = Field(default=0.10, gt=0.0, lt=0.5)
+    dynamic_feedback_change_threshold: float = Field(default=0.60, gt=0.5, lt=1.0)
+    dynamic_feedback_change_soft_trust: float = Field(default=0.65, ge=0.0, le=1.0)
+    dynamic_feedback_change_max_run_length: int = Field(default=10000, ge=1, le=1000000)
     dynamic_feedback_change_min_span: int = Field(default=0, ge=0, le=10000)
     dynamic_feedback_cold_start_trust: float = Field(default=0.40, ge=0.0, le=1.0)
     dynamic_feedback_conflict_trust: float = Field(default=0.10, ge=0.0, le=1.0)
@@ -177,6 +184,16 @@ class EvolutionConfig(ConfigModel):
             raise ValueError(
                 "dynamic_feedback_context_field must use the typed learner-visible "
                 "feedback_context field"
+            )
+        if self.dynamic_feedback_change_point_enabled and not self.dynamic_feedback_trust_enabled:
+            raise ValueError("change-point feedback posterior requires dynamic feedback trust")
+        if (
+            self.dynamic_feedback_change_soft_trust
+            < self.min_feedback_trust_for_drift
+            and self.dynamic_feedback_change_point_enabled
+        ):
+            raise ValueError(
+                "change-point soft trust must reach the configured drift threshold"
             )
         if (
             self.replay_historical_context_anchors_enabled
