@@ -73,6 +73,16 @@ def test_candidate_mature_feedback_gate_is_nonnegative() -> None:
     assert config.candidate_min_mature_feedback_observations == 1
 
 
+def test_weighted_candidate_evidence_settings_are_bounded() -> None:
+    config = EvolutionConfig(
+        candidate_min_weighted_mature_evidence=2.5,
+        candidate_provisional_evidence_weight=0.5,
+    )
+
+    assert config.candidate_min_weighted_mature_evidence == 2.5
+    assert config.candidate_provisional_evidence_weight == 0.5
+
+
 def test_historical_replay_anchors_require_at_least_one_exact_quota_slot() -> None:
     with pytest.raises(ValueError, match="historical replay anchors require"):
         EvolutionConfig(

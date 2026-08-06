@@ -69,6 +69,8 @@ evolution:
   candidate_min_observations: 1
   candidate_min_new_observations: 1
   candidate_min_mature_feedback_observations: 0
+  candidate_min_weighted_mature_evidence: 0.0
+  candidate_provisional_evidence_weight: 0.5
   candidate_cooldown_episodes: 4
   replay_current_regime_only: true
   replay_historical_context_anchors_enabled: true

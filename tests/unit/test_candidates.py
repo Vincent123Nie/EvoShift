@@ -218,3 +218,25 @@ def test_trusted_lane_bypasses_shadow_cooldown_and_uses_trusted_start_index() ->
     assert evidence.first_trusted_episode_index == 2
     assert pool.shadow_cooldown_would_block(evidence, 2) is True
     assert pool.readiness(evidence, 2, trusted=True) == (True, "ready")
+
+
+def test_candidate_pool_supports_fractional_provisional_maturity() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=1,
+        min_weighted_mature_evidence=2.5,
+        min_new_observations=1,
+        cooldown_episodes=0,
+    )
+
+    evidence = pool.observe(_candidate("initial"), 1, mature=False, maturity_weight=0.5)
+    pool.observe(_candidate("confirmed"), 2, mature=True, maturity_weight=1.0)
+    assert evidence.weighted_mature_evidence == 1.5
+    assert pool.readiness(evidence, 2) == (
+        False,
+        "insufficient_weighted_mature_evidence",
+    )
+
+    pool.observe(_candidate("stable"), 3, mature=True, maturity_weight=1.0)
+    assert evidence.weighted_mature_evidence == 2.5
+    assert pool.readiness(evidence, 3) == (True, "ready")

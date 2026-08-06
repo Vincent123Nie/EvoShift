@@ -271,6 +271,7 @@ dataset hash, and comparison artifact.
 - [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)
 - [Mature-feedback candidate admission](docs/experiment_mature_feedback_candidate_admission.md)
 - [Two-mature-feedback candidate admission](docs/experiment_two_mature_feedback_candidate_admission.md)
+- [Trust-weighted candidate evidence](docs/experiment_trust_weighted_candidate_evidence.md)
 
 ## Security
 

@@ -40,6 +40,7 @@ class CandidateEvidence:
     trusted_observation_count: int = 0
     shadow_observation_count: int = 0
     mature_observation_count: int = 0
+    weighted_mature_evidence: float = 0.0
     trust_sum: float = 0.0
     min_trust: float = 1.0
     max_trust: float = 0.0
@@ -69,6 +70,7 @@ class CandidateEvidencePool:
         min_observations: int,
         min_trusted_observations: int,
         min_mature_observations: int = 0,
+        min_weighted_mature_evidence: float = 0.0,
         min_new_observations: int,
         cooldown_episodes: int,
         shadow_eprocess_enabled: bool = False,
@@ -90,6 +92,7 @@ class CandidateEvidencePool:
         self.min_observations = min_observations
         self.min_trusted_observations = min_trusted_observations
         self.min_mature_observations = min_mature_observations
+        self.min_weighted_mature_evidence = min_weighted_mature_evidence
         self.min_new_observations = min_new_observations
         self.cooldown_episodes = cooldown_episodes
         self.shadow_eprocess_enabled = shadow_eprocess_enabled
@@ -127,9 +130,12 @@ class CandidateEvidencePool:
         trust: float = 1.0,
         trusted: bool = True,
         mature: bool = True,
+        maturity_weight: float = 1.0,
     ) -> CandidateEvidence:
         if not 0.0 <= trust <= 1.0:
             raise ValueError("candidate evidence trust must be in [0, 1]")
+        if not 0.0 <= maturity_weight <= 1.0:
+            raise ValueError("candidate evidence maturity weight must be in [0, 1]")
         signature = candidate_signature(candidate)
         existing = self._items.get(signature)
         if not trusted and self.shadow_eprocess_enabled:
@@ -148,6 +154,7 @@ class CandidateEvidencePool:
                 trusted_observation_count=int(trusted),
                 shadow_observation_count=int(not trusted),
                 mature_observation_count=int(mature),
+                weighted_mature_evidence=maturity_weight,
                 trust_sum=trust,
                 min_trust=trust,
                 max_trust=trust,
@@ -185,6 +192,7 @@ class CandidateEvidencePool:
         existing.trusted_observation_count += int(trusted)
         existing.shadow_observation_count += int(not trusted)
         existing.mature_observation_count += int(mature)
+        existing.weighted_mature_evidence += maturity_weight
         if trusted and existing.first_trusted_episode_index is None:
             existing.first_trusted_episode_index = episode_index
         if not trusted and existing.first_shadow_episode_index is None:
@@ -212,6 +220,8 @@ class CandidateEvidencePool:
             return False, "insufficient_trusted_observations"
         if evidence.mature_observation_count < self.min_mature_observations:
             return False, "insufficient_mature_feedback_evidence"
+        if evidence.weighted_mature_evidence < self.min_weighted_mature_evidence:
+            return False, "insufficient_weighted_mature_evidence"
         if not trusted and self.shadow_eprocess_enabled and not evidence.shadow_eprocess_ready:
             return False, "shadow_eprocess_below_threshold"
         observation_count = (
