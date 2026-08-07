@@ -99,7 +99,7 @@ changing the sample or gate.
 
 ## Results
 
-### Development validation (before clean-worktree formal run)
+### Formal validation on the clean feature commit
 
 The full pinned file was validated locally at the expected `277383467` bytes
 and SHA-256. The offline run evaluated all 470 non-abstention questions and
@@ -109,7 +109,7 @@ excluded 30 abstention questions:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | BM25 | 0.7404 | 0.8128 | 0.7769 | 0.7970 | 0.8000 |
 
-Artifact: `runs/retrieval-dev2/longmemeval-bm25-20260807T082258127761Z`.
+Formal artifact: `runs/retrieval-formal/longmemeval-bm25-20260807T090412560343Z`.
 The dependency-free implementation matched the upstream `rank_bm25==0.2.2`
 primary session metrics for all 470 questions and matched the upstream top-10
 source-session order for all 470 questions. The only supplemental MRR
@@ -117,24 +117,35 @@ difference was an unspecified NumPy tie order among zero-score documents.
 
 The real-model mechanism screen used the deterministic first question from each
 of the six question types (`n=6`) with the authorized reverse proxy and model
-`gpt-5.6`. Three requests succeeded and three returned repeated gateway `502`
-errors; all failed calls preserved the exact BM25 ranking:
+`gpt-5.6`. This clean run had six successful requests and zero fallbacks:
 
 | System | Recall-all@5 | Recall-all@10 | NDCG-any@5 | NDCG-any@10 | MRR |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | BM25 | 1.0000 | 1.0000 | 0.9077 | 0.9077 | 0.8056 |
-| BM25 + rerank | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.9167 |
-| Delta | 0.0000 | 0.0000 | +0.0923 | +0.0923 | +0.1111 |
+| BM25 + rerank (dirty diagnostic) | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.9167 |
+| Delta (dirty diagnostic) | 0.0000 | 0.0000 | +0.0923 | +0.0923 | +0.1111 |
+| BM25 + rerank (clean) | 0.8333 | 1.0000 | 0.8333 | 0.8859 | 0.8519 |
+| Delta (clean) | -0.1667 | 0.0000 | -0.0744 | -0.0218 | +0.0463 |
 
 The first-stage top-20 candidate ceiling was `Recall-any=1.0` and
-`Recall-all=1.0` on this six-question screen. Rerank fallback rate was 0.50;
-successful requests used 48,271 total tokens and the summed reported latency
-was 174,347 ms. Artifact:
-`runs/retrieval-real/longmemeval-bm25_llm_rerank-20260807T083441284271Z`.
+`Recall-all=1.0` on this six-question screen. Rerank fallback rate was 0.00;
+the six requests used 88,984 total tokens and the summed reported latency was
+158,086 ms. Formal artifact:
+`runs/retrieval-formal-real/longmemeval-bm25_llm_rerank-20260807T090525691199Z`.
+
+The earlier dirty-worktree diagnostic (`runs/retrieval-real/...
+20260807T083441284271Z`) had three gateway `502` fallbacks and is retained only
+as a provider-resilience diagnostic, not as model evidence.
+
+The clean screen fails the frozen gate (`primary_nonregression=false`). One
+failure is especially instructive: BM25 already placed the evidence session at
+rank 1, but the unconstrained LLM reranker moved it below rank 5. Since the
+candidate ceiling was perfect, this is a pure second-stage over-reranking
+failure. The reranker is not adopted for LongMemEval and remains default-off.
 
 This is mechanism and protocol evidence, not a public SOTA claim: six questions
-cannot support a confidence interval, the gateway reliability is inadequate for
-a full paid run, and no downstream reader QA comparison has been made yet. The
-reranker remains optional and default-off. The public benchmark infrastructure
-is adopted; model-level adoption requires a clean, larger paired screen with
-stable provider availability and a same-reader QA transfer test.
+cannot support a confidence interval and no downstream reader QA comparison has
+been made yet. The public benchmark infrastructure is adopted; the model-level
+candidate is rejected by the primary non-regression gate. The next experiment
+will test a label-free selective rerank/veto rule on the same frozen questions
+before any larger paid screen.
