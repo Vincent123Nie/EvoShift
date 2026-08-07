@@ -314,6 +314,43 @@ async def test_llm_reranker_failure_preserves_exact_bm25_order(
 
 
 @pytest.mark.asyncio
+async def test_rank_fusion_failure_preserves_exact_bm25_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    question = LongMemEvalQuestion(
+        question_id="q-fusion",
+        question_type="single",
+        question="question",
+        sessions=(
+            LongMemEvalSession("a", "d1", "alpha", "User: alpha"),
+            LongMemEvalSession("b", "d2", "beta", "User: beta"),
+        ),
+        answer_session_ids=frozenset({"a"}),
+    )
+    client = FakeLLMClient(responses=['{"ranked_candidate_ids":["c01"]}'])
+    reranker = LongMemEvalLLMReranker(
+        client,
+        ProviderConfig(kind="fake", model="test"),
+        candidate_k=2,
+        output_k=1,
+        max_candidate_chars=256,
+        max_total_candidate_chars=512,
+        bm25_rank_weight=0.4,
+    )
+
+    def fail_fusion(*_args: Any, **_kwargs: Any) -> tuple[str, ...]:
+        raise ValueError("synthetic fusion invariant")
+
+    monkeypatch.setattr(retrieval_module, "fuse_rankings", fail_fusion)
+    outcome = await reranker.rerank(question, ("b", "a"))
+
+    assert outcome.ranking == ("b", "a")
+    assert outcome.fallback is True
+    assert outcome.fallback_reason == "fusion_invariant"
+    assert outcome.applied is False
+
+
+@pytest.mark.asyncio
 async def test_tiny_end_to_end_evaluation_and_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -323,7 +360,7 @@ async def test_tiny_end_to_end_evaluation_and_artifacts(
     client = FakeLLMClient(responses=['{"ranked_candidate_ids":["c01","c00"]}'] * 2)
     evaluation = await run_longmemeval_retrieval(
         dataset,
-        method="bm25_llm_rerank",
+        method="bm25_llm_rerank_fused",
         client=client,
         provider=ProviderConfig(kind="fake", model="test"),
         max_per_type=1,
@@ -332,6 +369,7 @@ async def test_tiny_end_to_end_evaluation_and_artifacts(
         output_k=2,
         max_candidate_chars=256,
         max_total_candidate_chars=512,
+        bm25_rank_weight=0.4,
     )
 
     assert evaluation.report["n_questions"] == 2
@@ -346,6 +384,7 @@ async def test_tiny_end_to_end_evaluation_and_artifacts(
     assert ceiling["recall_all"] == 1.0
     assert set(ceiling["by_question_type"]) == {"single", "temporal"}
     protocol = evaluation.report["protocol"]
+    assert protocol["storage"] == {"cache_enabled": False}
     assert protocol["dataset_non_abstention_questions"] == 3
     assert protocol["excluded_abstention_questions"] == 1
     assert protocol["reranker"] == {
@@ -357,9 +396,9 @@ async def test_tiny_end_to_end_evaluation_and_artifacts(
         "failure_policy": "exact BM25 fallback",
         "candidate_ids": "per-question opaque labels",
         "rank_fusion": {
-            "enabled": False,
-            "bm25_rank_weight": 0.0,
-            "llm_rank_weight": 1.0,
+            "enabled": True,
+            "bm25_rank_weight": 0.4,
+            "llm_rank_weight": 0.6,
             "tie_break": "original BM25 order",
         },
     }
@@ -369,6 +408,9 @@ async def test_tiny_end_to_end_evaluation_and_artifacts(
     assert confirmation_gate["minimum_target_improvement"] == 0.03
     assert confirmation_gate["target_metrics"] == ["recall_all@5", "ndcg_any@10"]
     assert confirmation_gate["exact_fallback"] is True
+    assert confirmation_gate["frozen_selection"] is False
+    assert confirmation_gate["frozen_protocol"] is False
+    assert confirmation_gate["allowlist_guard"] is True
     assert confirmation_gate["passed"] == all(
         confirmation_gate[name]
         for name in (
@@ -376,6 +418,8 @@ async def test_tiny_end_to_end_evaluation_and_artifacts(
             "target_improvement",
             "target_ci_nonnegative",
             "exact_fallback",
+            "frozen_selection",
+            "allowlist_guard",
         )
     )
     run_dir = write_retrieval_artifacts(
