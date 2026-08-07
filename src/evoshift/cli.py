@@ -220,7 +220,7 @@ def benchmark_retrieval_eval(
     ),
     method: str = typer.Option(
         "bm25",
-        help="Retrieval system: bm25 or bm25_llm_rerank.",
+        help="Retrieval system: bm25, bm25_llm_rerank, or bm25_llm_rerank_fused.",
     ),
     config: Optional[Path] = typer.Option(None, help="Provider/budget configuration YAML."),
     set_value: List[str] = typer.Option([], "--set", help="Override dotted key=value."),
@@ -239,6 +239,12 @@ def benchmark_retrieval_eval(
     max_candidate_chars: int = typer.Option(
         2_500, min=256, help="Per-session character bound in the reranker prompt."
     ),
+    bm25_rank_weight: float = typer.Option(
+        0.4,
+        min=0.0,
+        max=1.0,
+        help="BM25 rank weight for bm25_llm_rerank_fused.",
+    ),
 ) -> None:
     """Evaluate session retrieval on pinned LongMemEval without online mutation."""
 
@@ -256,7 +262,7 @@ def benchmark_retrieval_eval(
         normalized_method = method.strip().lower().replace("-", "_")
         client = None
         budget = None
-        if normalized_method == "bm25_llm_rerank":
+        if normalized_method in {"bm25_llm_rerank", "bm25_llm_rerank_fused"}:
             budget = BudgetLedger.from_config(resolved.budget)
             client = create_client(resolved.provider, budget=budget)
         try:
@@ -271,6 +277,7 @@ def benchmark_retrieval_eval(
                 candidate_k=candidate_k,
                 output_k=output_k,
                 max_candidate_chars=max_candidate_chars,
+                bm25_rank_weight=bm25_rank_weight,
             )
         finally:
             if client is not None:
