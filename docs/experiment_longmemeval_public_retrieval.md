@@ -143,9 +143,15 @@ rank 1, but the unconstrained LLM reranker moved it below rank 5. Since the
 candidate ceiling was perfect, this is a pure second-stage over-reranking
 failure. The reranker is not adopted for LongMemEval and remains default-off.
 
+The follow-up fixed-weight selective rank-fusion experiment preserves this
+negative result rather than rewriting it. Its separate pre-registration and
+clean confirmation are documented in
+`docs/experiment_longmemeval_selective_rank_fusion.md`; only the guarded fused
+variant was adopted, while the raw reranker remains non-default.
+
 This is mechanism and protocol evidence, not a public SOTA claim: six questions
 cannot support a confidence interval and no downstream reader QA comparison has
 been made yet. The public benchmark infrastructure is adopted; the model-level
-candidate is rejected by the primary non-regression gate. The next experiment
-will test a label-free selective rerank/veto rule on the same frozen questions
-before any larger paid screen.
+candidate is rejected by the primary non-regression gate. The selective fusion
+follow-up passed its separate 12-question frozen confirmation, but still does
+not establish an end-to-end QA or public SOTA result.
