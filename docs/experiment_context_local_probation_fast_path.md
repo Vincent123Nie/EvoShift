@@ -1,5 +1,13 @@
 # Pre-registration: context-local probation fast path
 
+> **Correction (2026-08-06):** the original implementation selected the
+> intervention after reading the current sample's stateful feedback assessor.
+> Although the label was not sent to the solver, this violated the prequential
+> predict-then-score boundary. The earlier fast-path capability gains are
+> invalid as primary evidence and are retained only as a historical failure
+> analysis. The corrected protocol is recorded in
+> `docs/experiment_prequential_feedback_firewall.md`.
+
 ## Question
 
 Can a replay-verified memory help the first changed sample before ordinary
@@ -35,9 +43,11 @@ calls on that sample:
 The memory-on answer remains the foreground answer, while the paired control is
 fed into the existing future counterfactual auditor. A lease is consumed after
 each intervention and expires after the fixed age or use budget. The candidate
-never supersedes an active memory, mutates policy, or becomes visible in a
-different observable context. Future audit completion is still required before
-activation; failed or expired audits discard the lease.
+never supersedes an active memory, mutates policy, or forces a candidate in a
+different observable context. Ordinary retrieval may still select `PROBATION`
+cards under the global future-audit semantics; context locality describes this
+rescue lease, not all probationary exposure. Future audit completion is still
+required before activation; failed or expired audits discard the lease.
 
 The first 40-run targeted matrix (`runs/sweeps/20260806T083314Z`) showed the
 mechanism but rejected v1. Under forced retrieval misses (`top_k=0`), changed
@@ -71,7 +81,7 @@ evolution:
 The longer TTL bridges the observed registration-to-first-transition gap. It
 does not weaken the two-use budget or permit a global state transition.
 
-## v2 Result And Decision
+## Historical v2 Result And Decision (Invalidated)
 
 The frozen v2 candidate was evaluated in
 `runs/sweeps/20260806T084540Z` with five seeds (`122, 133, 144, 155, 166`),
@@ -92,11 +102,10 @@ first-changed-case success rate rose from `0.0` to `0.5` in the clean runs and
 in three of five noisy seeds; the remaining noisy seeds show that a candidate
 that does not exist before the transition cannot be recovered by this mechanism.
 
-This supports adopting v2 as a narrowly scoped retrieval-miss recovery
-mechanism, with the lifecycle guardrails retained. It is not evidence of a
-general SOTA improvement: normal retrieval is intentionally unchanged, and the
-candidate does not solve cold-start change detection or create a new candidate
-before a policy transition. Those remain separate follow-up experiments.
+This originally supported adopting v2 as a narrowly scoped retrieval-miss
+recovery mechanism. The prequential correction above invalidates that adoption
+decision. The code remains default-off as a measured diagnostic; only the
+corrected rerun may support future claims.
 
 ## Online invariants
 

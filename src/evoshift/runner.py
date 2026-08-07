@@ -1505,12 +1505,12 @@ class EvoShiftRunner:
                     if item.status == MemoryStatus.ACTIVE:
                         stale_active_memory_opportunities += 1
                         stale_pair_first_active_index.setdefault(pair, index)
-                assessment = trust_model.assess(sample, episode_index=index)
+                pre_predict_assessment = trust_model.pre_predict(sample)
                 context_probation_intervention: ContextProbationLease | None = None
                 context_probation_control_prediction: Any = None
                 context_probation_eligible = (
                     context_local_probation is not None
-                    and assessment.trust >= context_local_probation.min_trust
+                    and pre_predict_assessment.trust >= context_local_probation.min_trust
                     and circuit_intervention is None
                     and retirement_intervention is None
                     and revival_intervention is None
@@ -1520,7 +1520,8 @@ class EvoShiftRunner:
                     context_probation_intervention = context_local_probation.match(
                         source=observable_source,
                         context=observable_context,
-                        signal=assessment.signal,
+                        signal=pre_predict_assessment.signal,
+                        context_observations=pre_predict_assessment.context_observations,
                         episode_index=index,
                     )
                     if context_probation_intervention is not None:
@@ -1555,7 +1556,8 @@ class EvoShiftRunner:
                     context_probation_interventions += 1
                     context_probation_paired_controls += 1
                     context_probation_low_trust_interventions += int(
-                        assessment.trust < self.config.evolution.min_feedback_trust_for_replay
+                        pre_predict_assessment.trust
+                        < self.config.evolution.min_feedback_trust_for_replay
                     )
                     context_probation_forced_applications += int(
                         context_probation_intervention.memory.memory_id
@@ -1573,13 +1575,20 @@ class EvoShiftRunner:
                             "source": observable_source,
                             "context": observable_context,
                             "registered_index": (context_probation_intervention.registered_index),
+                            "registered_context_observations": (
+                                context_probation_intervention.registered_context_observations
+                            ),
+                            "pre_predict_context_observations": (
+                                pre_predict_assessment.context_observations
+                            ),
                             "expires_after_index": (
                                 context_probation_intervention.expires_after_index
                             ),
                             "use_number": context_probation_intervention.uses + 1,
                             "max_uses": context_probation_intervention.max_uses,
-                            "feedback_trust": assessment.trust,
-                            "feedback_signal": assessment.signal,
+                            "pre_predict_trust": pre_predict_assessment.trust,
+                            "pre_predict_signal": pre_predict_assessment.signal,
+                            "pre_predict_reason": pre_predict_assessment.reason,
                             "paired_control": True,
                             "candidate_only": True,
                             "retrieval_miss_rescue": True,
@@ -1618,6 +1627,7 @@ class EvoShiftRunner:
                     )
                 score = score_sample(sample, prediction.output.answer)
                 feedback_score = score_feedback_sample(sample, prediction.output.answer)
+                assessment = trust_model.observe_feedback(sample, episode_index=index)
                 retirement_probation_provisional_valid_failure_episodes += int(
                     bool(provisional_valid_retirements) and not score.success
                 )
@@ -3061,6 +3071,9 @@ class EvoShiftRunner:
                                                             source=observable_source,
                                                             context=observable_context,
                                                             signal=assessment.signal,
+                                                            context_observations=(
+                                                                pre_predict_assessment.context_observations
+                                                            ),
                                                             episode_index=index,
                                                         )
                                                         if context_local_probation is not None

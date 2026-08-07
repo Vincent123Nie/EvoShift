@@ -7,13 +7,43 @@ from pathlib import Path
 import pytest
 
 from evoshift.benchmarks import create_benchmark
+from evoshift.benchmarks.base import BenchmarkAdapter
 from evoshift.config import load_config
 from evoshift.runner import EvoShiftRunner
+from evoshift.schemas import BenchmarkSample
+
+
+class _FixedSamplesAdapter(BenchmarkAdapter):
+    def __init__(self, samples: list[BenchmarkSample]) -> None:
+        self.samples = samples
+
+    def load(self) -> list[BenchmarkSample]:
+        return [sample.model_copy(deep=True) for sample in self.samples]
+
+
+def _prediction_at(run_dir: Path, episode_index: int) -> dict[str, object]:
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    return next(row for row in rows if row["index"] == episode_index)
+
+
+def _context_probation_payloads(run_dir: Path) -> list[dict[str, object]]:
+    connection = sqlite3.connect(run_dir / "state.sqlite3")
+    try:
+        events = connection.execute(
+            "SELECT payload_json FROM evolution_events "
+            "WHERE event_type='context_local_probation_intervention' ORDER BY event_id"
+        ).fetchall()
+    finally:
+        connection.close()
+    return [json.loads(row[0]) for row in events]
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_context_local_probation_repairs_retrieval_miss_with_paired_control(
+async def test_context_local_probation_uses_only_historical_feedback_for_intervention(
     tmp_path: Path,
 ) -> None:
     base = load_config(Path("configs/experiments/policy_shift_hard_demo.yaml"))
@@ -61,10 +91,10 @@ async def test_context_local_probation_repairs_retrieval_miss_with_paired_contro
     )
     assert (
         candidate.metrics["policy_shift"]["first_changed_case_success_rate"]
-        > control.metrics["policy_shift"]["first_changed_case_success_rate"]
+        == control.metrics["policy_shift"]["first_changed_case_success_rate"]
     )
     evolution = candidate.metrics["evolution"]
-    assert evolution["context_probation_interventions"] >= 4
+    assert evolution["context_probation_interventions"] >= 1
     assert (
         evolution["context_probation_paired_controls"]
         == evolution["context_probation_interventions"]
@@ -75,16 +105,55 @@ async def test_context_local_probation_repairs_retrieval_miss_with_paired_contro
     )
     assert candidate.metrics["future_audit"]["confirmed"] >= 1
 
-    connection = sqlite3.connect(candidate.run_dir / "state.sqlite3")
-    try:
-        events = connection.execute(
-            "SELECT payload_json FROM evolution_events "
-            "WHERE event_type='context_local_probation_intervention'"
-        ).fetchall()
-    finally:
-        connection.close()
-    payloads = [json.loads(row[0]) for row in events]
+    payloads = _context_probation_payloads(candidate.run_dir)
     assert len(payloads) == evolution["context_probation_interventions"]
     assert all(payload["paired_control"] for payload in payloads)
     assert all(payload["candidate_only"] for payload in payloads)
     assert all(not payload["persistent_state_changed"] for payload in payloads)
+    assert all(
+        payload["pre_predict_context_observations"] > payload["registered_context_observations"]
+        for payload in payloads
+    )
+
+    target_index = int(payloads[0]["episode_index"])
+    samples = create_benchmark(
+        candidate_config.benchmark,
+        root=Path.cwd(),
+        seed=233,
+    ).load()
+    target = samples[target_index]
+    original_feedback = str(target.metadata["feedback_reference"])
+    assert original_feedback.casefold() != payloads[0]["pre_predict_signal"]
+    flipped_feedback = "DENY" if original_feedback == "APPROVE" else "APPROVE"
+    metadata = {**target.metadata, "feedback_reference": flipped_feedback}
+    samples[target_index] = target.model_copy(update={"metadata": metadata})
+    flipped_config = candidate_config.model_copy(
+        update={
+            "storage": candidate_config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "flipped"), "cache_enabled": False}
+            )
+        }
+    )
+    flipped = await EvoShiftRunner(
+        flipped_config,
+        _FixedSamplesAdapter(samples),
+        workdir=Path.cwd(),
+    ).run()
+    original_prediction = _prediction_at(candidate.run_dir, target_index)
+    flipped_prediction = _prediction_at(flipped.run_dir, target_index)
+    assert flipped_prediction["output"] == original_prediction["output"]
+    assert flipped_prediction["selected_memory_ids"] == original_prediction["selected_memory_ids"]
+    flipped_payloads = _context_probation_payloads(flipped.run_dir)
+    flipped_target = next(
+        payload for payload in flipped_payloads if payload["episode_index"] == target_index
+    )
+    for key in (
+        "context",
+        "registered_index",
+        "registered_context_observations",
+        "pre_predict_context_observations",
+        "pre_predict_signal",
+        "pre_predict_trust",
+        "pre_predict_reason",
+    ):
+        assert flipped_target[key] == payloads[0][key]

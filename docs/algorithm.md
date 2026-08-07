@@ -37,6 +37,9 @@ y_hat_t = f_theta(system_prompt, x_t, R(x_t, M_t, pi_t))
 ```
 
 Only after `y_hat_t` is scored may feedback influence `M_(t+1)` or `pi_(t+1)`.
+The same temporal firewall applies to auxiliary interventions: decision-time
+trust and context-local leases may inspect only feedback state committed by
+episodes `< t`, never the current episode's `feedback_reference`.
 
 ## End-to-end loop
 

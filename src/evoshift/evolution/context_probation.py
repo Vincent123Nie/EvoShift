@@ -16,6 +16,7 @@ class ContextProbationLease:
     source: str
     context: str
     signal: str
+    registered_context_observations: int
     registered_index: int
     expires_after_index: int
     max_uses: int
@@ -55,16 +56,19 @@ class ContextLocalProbation:
         source: str,
         context: str,
         signal: str,
+        context_observations: int,
         episode_index: int,
     ) -> ContextProbationLease | None:
         key = (str(source).strip(), str(context).strip().casefold())
-        if not key[0] or not key[1] or key in self._leases:
+        normalized_signal = str(signal).strip().casefold()
+        if not key[0] or not key[1] or not normalized_signal or key in self._leases:
             return None
         lease = ContextProbationLease(
             memory=memory,
             source=key[0],
             context=key[1],
-            signal=str(signal),
+            signal=normalized_signal,
+            registered_context_observations=max(0, int(context_observations)),
             registered_index=episode_index,
             expires_after_index=episode_index + self.max_age,
             max_uses=self.max_uses,
@@ -79,13 +83,16 @@ class ContextLocalProbation:
         source: str,
         context: str,
         signal: str,
+        context_observations: int,
         episode_index: int,
     ) -> ContextProbationLease | None:
         key = (str(source).strip(), str(context).strip().casefold())
         lease = self._leases.get(key)
         if lease is None or episode_index <= lease.registered_index:
             return None
-        if lease.signal and str(signal) != lease.signal:
+        if str(signal).strip().casefold() != lease.signal:
+            return None
+        if int(context_observations) <= lease.registered_context_observations:
             return None
         if episode_index > lease.expires_after_index:
             self._leases.pop(key, None)
@@ -106,6 +113,7 @@ class ContextLocalProbation:
             source=current.source,
             context=current.context,
             signal=current.signal,
+            registered_context_observations=current.registered_context_observations,
             registered_index=current.registered_index,
             expires_after_index=current.expires_after_index,
             max_uses=current.max_uses,

@@ -237,6 +237,10 @@ class EvolutionConfig(ConfigModel):
                 raise ValueError("context-local probation fast path requires future audit")
             if not self.paired_replay:
                 raise ValueError("context-local probation fast path requires paired replay")
+            if not self.dynamic_feedback_trust_enabled:
+                raise ValueError(
+                    "context-local probation fast path requires dynamic feedback trust"
+                )
         if self.active_audit_min_negative_observations > self.active_audit_min_observations:
             raise ValueError(
                 "active_audit_min_negative_observations must not exceed "

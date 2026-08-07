@@ -9,6 +9,7 @@ def _config(**updates: object) -> EvolutionConfig:
     return EvolutionConfig(
         paired_replay=True,
         future_audit_enabled=True,
+        dynamic_feedback_trust_enabled=True,
         context_local_probation_fast_path_enabled=True,
         **updates,
     )
@@ -36,33 +37,78 @@ def test_context_probation_is_exact_context_and_bounded() -> None:
         source="portal",
         context="Refund:Case",
         signal="approve",
+        context_observations=2,
         episode_index=10,
     )
     assert lease is not None
     assert (
-        probation.match(source="portal", context="other", signal="approve", episode_index=11)
+        probation.match(
+            source="portal",
+            context="other",
+            signal="approve",
+            context_observations=3,
+            episode_index=11,
+        )
         is None
     )
     assert (
-        probation.match(source="portal", context="refund:case", signal="deny", episode_index=11)
+        probation.match(
+            source="portal",
+            context="refund:case",
+            signal="deny",
+            context_observations=3,
+            episode_index=11,
+        )
         is None
     )
     assert (
-        probation.match(source="portal", context="refund:case", signal="approve", episode_index=10)
+        probation.match(
+            source="portal",
+            context="refund:case",
+            signal="approve",
+            context_observations=3,
+            episode_index=10,
+        )
         is None
     )
     assert (
-        probation.match(source="portal", context="refund:case", signal="approve", episode_index=11)
+        probation.match(
+            source="portal",
+            context="refund:case",
+            signal="approve",
+            context_observations=2,
+            episode_index=11,
+        )
+        is None
+    )
+    assert (
+        probation.match(
+            source="portal",
+            context="refund:case",
+            signal="approve",
+            context_observations=3,
+            episode_index=11,
+        )
         == lease
     )
     probation.consume(lease)
     second = probation.match(
-        source="portal", context="refund:case", signal="approve", episode_index=12
+        source="portal",
+        context="refund:case",
+        signal="approve",
+        context_observations=4,
+        episode_index=12,
     )
     assert second is not None
     probation.consume(second)
     assert (
-        probation.match(source="portal", context="refund:case", signal="approve", episode_index=13)
+        probation.match(
+            source="portal",
+            context="refund:case",
+            signal="approve",
+            context_observations=5,
+            episode_index=13,
+        )
         is None
     )
     assert probation.snapshot()["interventions"] == 2
@@ -71,14 +117,24 @@ def test_context_probation_is_exact_context_and_bounded() -> None:
 def test_context_probation_expires_and_discard_is_memory_scoped() -> None:
     probation = ContextLocalProbation(_config(context_local_probation_fast_path_max_age=1))
     lease = probation.register(
-        _memory(), source="portal", context="case", signal="approve", episode_index=10
+        _memory(),
+        source="portal",
+        context="case",
+        signal="approve",
+        context_observations=1,
+        episode_index=10,
     )
     assert lease is not None
     assert probation.expire(11) == 0
     assert probation.expire(12) == 1
     assert probation.snapshot()["pending"] == 0
     lease = probation.register(
-        _memory(), source="portal", context="case", signal="approve", episode_index=20
+        _memory(),
+        source="portal",
+        context="case",
+        signal="approve",
+        context_observations=1,
+        episode_index=20,
     )
     assert lease is not None
     probation.discard("candidate")
@@ -88,9 +144,30 @@ def test_context_probation_expires_and_discard_is_memory_scoped() -> None:
 def test_context_probation_rejects_stale_lease_consumption() -> None:
     probation = ContextLocalProbation(_config())
     lease = probation.register(
-        _memory(), source="portal", context="case", signal="approve", episode_index=10
+        _memory(),
+        source="portal",
+        context="case",
+        signal="approve",
+        context_observations=1,
+        episode_index=10,
     )
     assert lease is not None
     probation.discard("candidate")
     with pytest.raises(ValueError, match="no longer pending"):
         probation.consume(lease)
+
+
+def test_context_probation_rejects_empty_signal_instead_of_creating_wildcard() -> None:
+    probation = ContextLocalProbation(_config())
+    assert (
+        probation.register(
+            _memory(),
+            source="portal",
+            context="case",
+            signal="  ",
+            context_observations=2,
+            episode_index=10,
+        )
+        is None
+    )
+    assert probation.snapshot()["registrations"] == 0

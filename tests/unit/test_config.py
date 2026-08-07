@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from evoshift.config import EvolutionConfig
 
@@ -27,6 +28,19 @@ def test_context_scoped_retirement_requires_probation() -> None:
         match="context-scoped retirement probation requires retirement probation",
     ):
         EvolutionConfig(active_audit_retirement_probation_context_scoped=True)
+
+
+def test_context_local_probation_requires_dynamic_feedback_trust() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="context-local probation fast path requires dynamic feedback trust",
+    ):
+        EvolutionConfig(
+            context_local_probation_fast_path_enabled=True,
+            future_audit_enabled=True,
+            paired_replay=True,
+            dynamic_feedback_trust_enabled=False,
+        )
 
 
 def test_context_scoped_retirement_accepts_complete_dependency_chain() -> None:

@@ -49,6 +49,8 @@ VERA has two time scales:
 
 No model-generated Python is executed. Every episode, memory version, policy,
 validation decision, event, and rollback is persisted with provenance.
+Current-episode feedback is observed only after the first-pass prediction and
+score; decision-time trust reads state produced by earlier episodes only.
 
 ## What is implemented
 
@@ -270,6 +272,7 @@ dataset hash, and comparison artifact.
 - [Dynamic-trust and future-audit experiment](docs/experiment_dynamic_trust_conflict_memory.md)
 - [Active-memory causal-governance experiment](docs/experiment_causal_memory_governance.md)
 - [Allowlisted LLM reranking experiment](docs/experiment_llm_rerank_paraphrase.md)
+- [Prequential feedback firewall correction](docs/experiment_prequential_feedback_firewall.md)
 - [Recurrence-aware causal rollback experiment](docs/experiment_recurrence_aware_rollback.md)
 - [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)
 

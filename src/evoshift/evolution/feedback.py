@@ -42,12 +42,13 @@ class _ContextState:
 
 
 class FeedbackTrustModel:
-    """Assess observable feedback provenance and temporal consistency.
+    """Assess feedback trust without crossing the prequential time boundary.
 
-    Static mode preserves the configured source-prior behavior. Dynamic mode
-    additionally reads only an observable context key and learner-visible
-    ``feedback_reference``. Hidden oracle correctness, corruption annotations,
-    attack labels, and benchmark phase are never consulted.
+    ``pre_predict`` reads only the observable source/context key and trust state
+    produced by earlier episodes. ``observe_feedback`` is the only stateful
+    path that reads the current learner-visible ``feedback_reference``. Hidden
+    oracle correctness, corruption annotations, attack labels, and benchmark
+    phase are never consulted.
 
     A per-context label is committed after repeated evidence. An isolated
     contradiction is quarantined as a pending change; a repeated contradiction
@@ -86,12 +87,74 @@ class FeedbackTrustModel:
         self.temporally_deferred_changes = 0
         self.low_trust_observations = 0
 
-    def assess(
+    def pre_predict(self, sample: BenchmarkSample) -> FeedbackAssessment:
+        """Return decision-time trust using only observations from prior episodes."""
+
+        source, context = self.observable_key(sample)
+        prior = self.source_trust.get(source, self.default_trust)
+        if not self.dynamic_enabled:
+            reason_prefix = "configured_source" if source in self.source_trust else "default_source"
+            return FeedbackAssessment(
+                source=source,
+                context="",
+                signal="",
+                trust=prior,
+                reason=f"pre_predict_{reason_prefix}:{source}",
+                source_posterior_mean=prior,
+                context_observations=0,
+                pending_observations=0,
+            )
+
+        source_state = self._sources.get(source)
+        source_mean = (
+            source_state.mean if source_state is not None else self._new_source_state(prior).mean
+        )
+        context_state = self._contexts.get((source, context))
+        if context_state is None or not context_state.committed_signal:
+            return FeedbackAssessment(
+                source=source,
+                context=context,
+                signal=context_state.pending_signal if context_state is not None else "",
+                trust=min(source_mean, self.cold_start_trust),
+                reason="dynamic_pre_predict_cold_start",
+                source_posterior_mean=source_mean,
+                context_observations=(
+                    context_state.total_observations if context_state is not None else 0
+                ),
+                pending_observations=(
+                    context_state.pending_observations if context_state is not None else 0
+                ),
+            )
+        if context_state.pending_observations:
+            return FeedbackAssessment(
+                source=source,
+                context=context,
+                signal=context_state.pending_signal,
+                trust=min(source_mean, self.conflict_trust),
+                reason="dynamic_pre_predict_pending_change",
+                source_posterior_mean=source_mean,
+                context_observations=context_state.total_observations,
+                pending_observations=context_state.pending_observations,
+            )
+        return FeedbackAssessment(
+            source=source,
+            context=context,
+            signal=context_state.committed_signal,
+            trust=source_mean,
+            reason="dynamic_pre_predict_consistent",
+            source_posterior_mean=source_mean,
+            context_observations=context_state.total_observations,
+            pending_observations=0,
+        )
+
+    def observe_feedback(
         self,
         sample: BenchmarkSample,
         *,
         episode_index: int | None = None,
     ) -> FeedbackAssessment:
+        """Observe the current feedback after scoring and update dynamic trust state."""
+
         source, observable_context = self.observable_key(sample)
         prior = self.source_trust.get(source, self.default_trust)
         if not self.dynamic_enabled or "feedback_reference" not in sample.metadata:
@@ -133,6 +196,21 @@ class FeedbackTrustModel:
             context_observations=context_state.total_observations,
             pending_observations=context_state.pending_observations,
         )
+
+    def pre_feedback_assessment(self, sample: BenchmarkSample) -> FeedbackAssessment:
+        """Compatibility alias for :meth:`pre_predict`."""
+
+        return self.pre_predict(sample)
+
+    def assess(
+        self,
+        sample: BenchmarkSample,
+        *,
+        episode_index: int | None = None,
+    ) -> FeedbackAssessment:
+        """Compatibility alias for the post-score :meth:`observe_feedback` path."""
+
+        return self.observe_feedback(sample, episode_index=episode_index)
 
     def observable_key(self, sample: BenchmarkSample) -> tuple[str, str]:
         """Return the learner-visible provenance/context key without mutating trust state."""
