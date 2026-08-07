@@ -53,6 +53,7 @@ class RetrievalQuestionResult:
     rerank_applied: bool = False
     rerank_fallback: bool = False
     fallback_reason: str = ""
+    fusion_allowlist_guard_passed: bool = False
     usage: LLMUsage | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -78,6 +79,7 @@ class RerankOutcome:
     applied: bool
     fallback: bool
     fallback_reason: str
+    fusion_allowlist_guard_passed: bool
     usage: LLMUsage | None
 
 
@@ -179,6 +181,7 @@ class LongMemEvalLLMReranker:
                 applied=False,
                 fallback=False,
                 fallback_reason="",
+                fusion_allowlist_guard_passed=True,
                 usage=None,
             )
         labels = tuple(f"c{index:02d}" for index in range(len(candidate_document_ids)))
@@ -208,17 +211,21 @@ class LongMemEvalLLMReranker:
         ranked_ids.extend(bm25_ranking[len(candidate_document_ids) :])
         if len(ranked_ids) != len(bm25_ranking) or Counter(ranked_ids) != Counter(bm25_ranking):
             return self._fallback(bm25_ranking, "allowlist_invariant", usage=response.usage)
-        fused_ids = fuse_rankings(
-            bm25_ranking,
-            ranked_ids,
-            bm25_rank_weight=self.bm25_rank_weight,
-        )
+        try:
+            fused_ids = fuse_rankings(
+                bm25_ranking,
+                ranked_ids,
+                bm25_rank_weight=self.bm25_rank_weight,
+            )
+        except ValueError:
+            return self._fallback(bm25_ranking, "fusion_invariant", usage=response.usage)
         return RerankOutcome(
             ranking=fused_ids,
             attempted=True,
             applied=True,
             fallback=False,
             fallback_reason="",
+            fusion_allowlist_guard_passed=True,
             usage=response.usage,
         )
 
@@ -282,6 +289,7 @@ class LongMemEvalLLMReranker:
             applied=False,
             fallback=True,
             fallback_reason=reason,
+            fusion_allowlist_guard_passed=True,
             usage=usage,
         )
 
@@ -300,6 +308,7 @@ async def run_longmemeval_retrieval(
     max_candidate_chars: int = 2_500,
     max_total_candidate_chars: int = 50_000,
     bm25_rank_weight: float = 0.4,
+    cache_enabled: bool = False,
 ) -> RetrievalEvaluation:
     normalized_method = method.strip().lower().replace("-", "_")
     rerank_methods = {"bm25_llm_rerank", "bm25_llm_rerank_fused"}
@@ -364,6 +373,7 @@ async def run_longmemeval_retrieval(
     report["protocol"] = {
         "dataset_non_abstention_questions": non_abstention_count,
         "excluded_abstention_questions": excluded_abstention_count,
+        "storage": {"cache_enabled": cache_enabled},
         "session_representation": {
             "bm25": "official user-turn text",
             "llm_rerank": "bounded full session with timestamp",
@@ -385,6 +395,7 @@ async def run_longmemeval_retrieval(
                 "tie_break": "original BM25 order",
             },
         }
+        _finalize_confirmation_gate(report, method=normalized_method)
     model = provider.resolved_model() if provider is not None and reranker is not None else "none"
     return RetrievalEvaluation(
         method=normalized_method,
@@ -448,6 +459,11 @@ def aggregate_retrieval_results(
             "applied": sum(result.rerank_applied for result in results),
             "fallbacks": fallbacks,
             "fallback_rate": fallbacks / attempts if attempts else 0.0,
+            "allowlist_guard_passed": all(
+                result.fusion_allowlist_guard_passed
+                for result in results
+                if result.rerank_attempted
+            ),
             "fallback_reasons": dict(
                 sorted(Counter(r.fallback_reason for r in results if r.fallback_reason).items())
             ),
@@ -500,31 +516,69 @@ def aggregate_retrieval_results(
             "exact_fallback": fallback_exact,
         }
         report["screen_gate"]["passed"] = all(report["screen_gate"].values())
-        target_names = ("recall_all@5", "ndcg_any@10")
-        minimum_target_improvement = 0.03
-        improved_targets = [
-            name
-            for name in target_names
-            if report["macro_delta"][name] >= minimum_target_improvement
-        ]
-        confirmation_criteria = {
-            "primary_nonregression": all(
-                report["macro_delta"][name] >= -1e-12 for name in primary_names
-            ),
-            "target_improvement": bool(improved_targets),
-            "target_ci_nonnegative": any(
-                paired_intervals[name][0] >= -1e-12 for name in improved_targets
-            ),
-            "exact_fallback": fallback_exact,
-        }
-        report["confirmation_gate"] = {
-            "minimum_target_improvement": minimum_target_improvement,
-            "target_metrics": list(target_names),
-            "improved_targets": improved_targets,
-            **confirmation_criteria,
-            "passed": all(confirmation_criteria.values()),
-        }
     return report
+
+
+def _finalize_confirmation_gate(report: dict[str, Any], *, method: str) -> None:
+    """Apply the frozen 12-question adoption protocol to a rerank report."""
+
+    target_names = ("recall_all@5", "ndcg_any@10")
+    minimum_target_improvement = 0.03
+    macro_delta = report["macro_delta"]
+    intervals = report["paired_bootstrap_95_ci"]
+    primary_names = RETRIEVAL_METRIC_NAMES[:4]
+    improved_targets = [
+        name for name in target_names if macro_delta[name] >= minimum_target_improvement
+    ]
+    selection = report["selection"]
+    expected_types = {
+        "knowledge-update": 2,
+        "multi-session": 2,
+        "single-session-assistant": 2,
+        "single-session-preference": 2,
+        "single-session-user": 2,
+        "temporal-reasoning": 2,
+    }
+    frozen_selection = (
+        report["n_questions"] == 12
+        and selection.get("limit") == 0
+        and selection.get("max_per_type") == 2
+        and selection.get("question_type_counts") == expected_types
+    )
+    reranker_protocol = report["protocol"].get("reranker", {})
+    storage_protocol = report["protocol"].get("storage", {})
+    frozen_protocol = (
+        reranker_protocol.get("candidate_k") == 20
+        and reranker_protocol.get("output_k") == 10
+        and reranker_protocol.get("max_candidate_chars") == 2_500
+        and reranker_protocol.get("max_total_candidate_chars") == 50_000
+        and reranker_protocol.get("concurrency") == 4
+        and reranker_protocol.get("rank_fusion")
+        == {
+            "enabled": True,
+            "bm25_rank_weight": 0.4,
+            "llm_rank_weight": 0.6,
+            "tie_break": "original BM25 order",
+        }
+        and storage_protocol.get("cache_enabled") is False
+    )
+    criteria = {
+        "method_match": method == "bm25_llm_rerank_fused",
+        "frozen_selection": frozen_selection,
+        "frozen_protocol": frozen_protocol,
+        "primary_nonregression": all(macro_delta[name] >= -1e-12 for name in primary_names),
+        "target_improvement": bool(improved_targets),
+        "target_ci_nonnegative": any(intervals[name][0] >= -1e-12 for name in improved_targets),
+        "exact_fallback": report["screen_gate"]["exact_fallback"],
+        "allowlist_guard": report["reranking"]["allowlist_guard_passed"],
+    }
+    report["confirmation_gate"] = {
+        "minimum_target_improvement": minimum_target_improvement,
+        "target_metrics": list(target_names),
+        "improved_targets": improved_targets,
+        **criteria,
+        "passed": all(criteria.values()),
+    }
 
 
 def retrieval_metrics_for_ranking(
@@ -783,6 +837,7 @@ async def _rerank_result(
         rerank_applied=outcome.applied,
         rerank_fallback=outcome.fallback,
         fallback_reason=outcome.fallback_reason,
+        fusion_allowlist_guard_passed=outcome.fusion_allowlist_guard_passed,
         usage=outcome.usage,
     )
 

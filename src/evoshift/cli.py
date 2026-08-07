@@ -278,6 +278,7 @@ def benchmark_retrieval_eval(
                 output_k=output_k,
                 max_candidate_chars=max_candidate_chars,
                 bm25_rank_weight=bm25_rank_weight,
+                cache_enabled=resolved.storage.cache_enabled,
             )
         finally:
             if client is not None:
