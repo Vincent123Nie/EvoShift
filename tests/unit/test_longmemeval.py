@@ -24,6 +24,7 @@ from evoshift.evaluation.longmemeval_retrieval import (
     LongMemEvalBM25,
     LongMemEvalLLMReranker,
     bound_candidate_text,
+    fuse_rankings,
     parse_candidate_ranking,
     retrieval_metrics_for_ranking,
     run_longmemeval_retrieval,
@@ -180,6 +181,18 @@ def test_rerank_parser_rejects_unknown_and_duplicate_ids() -> None:
     )
     assert parse_candidate_ranking("not json", ["c00"]) is None
     assert parse_candidate_ranking('{"wrong":[]}', ["c00"]) is None
+
+
+def test_rank_fusion_is_deterministic_and_fail_closed() -> None:
+    assert fuse_rankings(
+        ("a", "b", "c"),
+        ("c", "a", "b"),
+        bm25_rank_weight=0.4,
+    ) == ("a", "c", "b")
+    with pytest.raises(ValueError, match="identical document permutations"):
+        fuse_rankings(("a", "b"), ("a", "injected"), bm25_rank_weight=0.4)
+    with pytest.raises(ValueError, match="between zero and one"):
+        fuse_rankings(("a",), ("a",), bm25_rank_weight=1.1)
 
 
 @pytest.mark.asyncio
@@ -343,9 +356,28 @@ async def test_tiny_end_to_end_evaluation_and_artifacts(
         "concurrency": 2,
         "failure_policy": "exact BM25 fallback",
         "candidate_ids": "per-question opaque labels",
+        "rank_fusion": {
+            "enabled": False,
+            "bm25_rank_weight": 0.0,
+            "llm_rank_weight": 1.0,
+            "tie_break": "original BM25 order",
+        },
     }
     assert evaluation.report["selection"]["max_per_type"] == 1
     assert evaluation.report["screen_gate"]["exact_fallback"] is True
+    confirmation_gate = evaluation.report["confirmation_gate"]
+    assert confirmation_gate["minimum_target_improvement"] == 0.03
+    assert confirmation_gate["target_metrics"] == ["recall_all@5", "ndcg_any@10"]
+    assert confirmation_gate["exact_fallback"] is True
+    assert confirmation_gate["passed"] == all(
+        confirmation_gate[name]
+        for name in (
+            "primary_nonregression",
+            "target_improvement",
+            "target_ci_nonnegative",
+            "exact_fallback",
+        )
+    )
     run_dir = write_retrieval_artifacts(
         evaluation,
         tmp_path / "runs",

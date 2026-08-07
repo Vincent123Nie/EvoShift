@@ -145,6 +145,7 @@ class LongMemEvalLLMReranker:
         output_k: int = 10,
         max_candidate_chars: int = 2_500,
         max_total_candidate_chars: int = 50_000,
+        bm25_rank_weight: float = 0.0,
     ) -> None:
         if candidate_k < output_k or output_k < 1:
             raise ValueError("rerank candidate_k must be at least output_k >= 1")
@@ -154,12 +155,15 @@ class LongMemEvalLLMReranker:
             raise ValueError("max_candidate_chars must be at least 256")
         if candidate_k * max_candidate_chars > max_total_candidate_chars:
             raise ValueError("configured rerank candidate text exceeds the total character cap")
+        if not 0.0 <= bm25_rank_weight <= 1.0:
+            raise ValueError("bm25_rank_weight must be between zero and one")
         self.client = client
         self.provider = provider
         self.candidate_k = candidate_k
         self.output_k = output_k
         self.max_candidate_chars = max_candidate_chars
         self.max_total_candidate_chars = max_total_candidate_chars
+        self.bm25_rank_weight = bm25_rank_weight
 
     async def rerank(
         self,
@@ -204,8 +208,13 @@ class LongMemEvalLLMReranker:
         ranked_ids.extend(bm25_ranking[len(candidate_document_ids) :])
         if len(ranked_ids) != len(bm25_ranking) or Counter(ranked_ids) != Counter(bm25_ranking):
             return self._fallback(bm25_ranking, "allowlist_invariant", usage=response.usage)
+        fused_ids = fuse_rankings(
+            bm25_ranking,
+            ranked_ids,
+            bm25_rank_weight=self.bm25_rank_weight,
+        )
         return RerankOutcome(
-            ranking=tuple(ranked_ids),
+            ranking=fused_ids,
             attempted=True,
             applied=True,
             fallback=False,
@@ -290,16 +299,18 @@ async def run_longmemeval_retrieval(
     output_k: int = 10,
     max_candidate_chars: int = 2_500,
     max_total_candidate_chars: int = 50_000,
+    bm25_rank_weight: float = 0.4,
 ) -> RetrievalEvaluation:
     normalized_method = method.strip().lower().replace("-", "_")
-    if normalized_method not in {"bm25", "bm25_llm_rerank"}:
-        raise ValueError("method must be 'bm25' or 'bm25_llm_rerank'")
+    rerank_methods = {"bm25_llm_rerank", "bm25_llm_rerank_fused"}
+    if normalized_method not in {"bm25", *rerank_methods}:
+        raise ValueError("method must be 'bm25', 'bm25_llm_rerank', or 'bm25_llm_rerank_fused'")
     if concurrency < 1 or concurrency > 32:
         raise ValueError("concurrency must be between 1 and 32")
     verify_longmemeval_file(dataset_path)
 
     reranker: LongMemEvalLLMReranker | None = None
-    if normalized_method == "bm25_llm_rerank":
+    if normalized_method in rerank_methods:
         if client is None or provider is None:
             raise ValueError("LLM reranking requires a client and provider configuration")
         reranker = LongMemEvalLLMReranker(
@@ -309,6 +320,7 @@ async def run_longmemeval_retrieval(
             output_k=output_k,
             max_candidate_chars=max_candidate_chars,
             max_total_candidate_chars=max_total_candidate_chars,
+            bm25_rank_weight=(bm25_rank_weight if normalized_method.endswith("_fused") else 0.0),
         )
 
     results: list[RetrievalQuestionResult] = []
@@ -366,6 +378,12 @@ async def run_longmemeval_retrieval(
             "concurrency": concurrency,
             "failure_policy": "exact BM25 fallback",
             "candidate_ids": "per-question opaque labels",
+            "rank_fusion": {
+                "enabled": normalized_method.endswith("_fused"),
+                "bm25_rank_weight": reranker.bm25_rank_weight,
+                "llm_rank_weight": 1.0 - reranker.bm25_rank_weight,
+                "tie_break": "original BM25 order",
+            },
         }
     model = provider.resolved_model() if provider is not None and reranker is not None else "none"
     return RetrievalEvaluation(
@@ -391,14 +409,14 @@ def aggregate_retrieval_results(
             "question_type_counts": dict(sorted(Counter(r.question_type for r in results).items()))
         },
     }
-    if method == "bm25_llm_rerank":
+    if method in {"bm25_llm_rerank", "bm25_llm_rerank_fused"}:
         candidate = _aggregate_system(results, candidate=True)
-        report["systems"]["bm25_llm_rerank"] = candidate
+        report["systems"][method] = candidate
         report["macro_delta"] = {
             name: candidate["macro"][name] - baseline["macro"][name]
             for name in RETRIEVAL_METRIC_NAMES
         }
-        report["paired_bootstrap_95_ci"] = {
+        paired_intervals = {
             name: list(
                 paired_bootstrap_ci(
                     [
@@ -413,6 +431,7 @@ def aggregate_retrieval_results(
             )
             for name in RETRIEVAL_METRIC_NAMES
         }
+        report["paired_bootstrap_95_ci"] = paired_intervals
         report["by_question_type_delta"] = {
             question_type: {
                 name: float(candidate["by_question_type"][question_type][name])
@@ -481,6 +500,30 @@ def aggregate_retrieval_results(
             "exact_fallback": fallback_exact,
         }
         report["screen_gate"]["passed"] = all(report["screen_gate"].values())
+        target_names = ("recall_all@5", "ndcg_any@10")
+        minimum_target_improvement = 0.03
+        improved_targets = [
+            name
+            for name in target_names
+            if report["macro_delta"][name] >= minimum_target_improvement
+        ]
+        confirmation_criteria = {
+            "primary_nonregression": all(
+                report["macro_delta"][name] >= -1e-12 for name in primary_names
+            ),
+            "target_improvement": bool(improved_targets),
+            "target_ci_nonnegative": any(
+                paired_intervals[name][0] >= -1e-12 for name in improved_targets
+            ),
+            "exact_fallback": fallback_exact,
+        }
+        report["confirmation_gate"] = {
+            "minimum_target_improvement": minimum_target_improvement,
+            "target_metrics": list(target_names),
+            "improved_targets": improved_targets,
+            **confirmation_criteria,
+            "passed": all(confirmation_criteria.values()),
+        }
     return report
 
 
@@ -524,6 +567,34 @@ def parse_candidate_ranking(text: str, allowed_ids: Sequence[str]) -> tuple[str,
     if len(set(ranked)) != len(ranked):
         return None
     return tuple(ranked)
+
+
+def fuse_rankings(
+    bm25_ranking: Sequence[str],
+    llm_ranking: Sequence[str],
+    *,
+    bm25_rank_weight: float,
+) -> tuple[str, ...]:
+    """Fuse two complete permutations without allowing document injection."""
+
+    if not 0.0 <= bm25_rank_weight <= 1.0:
+        raise ValueError("bm25_rank_weight must be between zero and one")
+    if Counter(bm25_ranking) != Counter(llm_ranking):
+        raise ValueError("rank fusion requires identical document permutations")
+    if len(set(bm25_ranking)) != len(bm25_ranking):
+        raise ValueError("rank fusion requires unique opaque document IDs")
+    bm25_positions = {document_id: index for index, document_id in enumerate(bm25_ranking)}
+    llm_positions = {document_id: index for index, document_id in enumerate(llm_ranking)}
+    return tuple(
+        sorted(
+            bm25_ranking,
+            key=lambda document_id: (
+                bm25_rank_weight * bm25_positions[document_id]
+                + (1.0 - bm25_rank_weight) * llm_positions[document_id],
+                bm25_positions[document_id],
+            ),
+        )
+    )
 
 
 def bound_candidate_text(text: str, max_chars: int) -> str:
@@ -775,6 +846,7 @@ __all__ = [
     "RetrievalQuestionResult",
     "aggregate_retrieval_results",
     "bound_candidate_text",
+    "fuse_rankings",
     "parse_candidate_ranking",
     "render_retrieval_report",
     "retrieval_metrics_for_ranking",
