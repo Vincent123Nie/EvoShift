@@ -20,9 +20,14 @@ def test_doctor_is_offline_and_reports_config() -> None:
 
 def test_benchmark_list() -> None:
     result = runner.invoke(app, ["benchmark", "list"])
+    retrieval_help = runner.invoke(app, ["benchmark", "retrieval-eval", "--help"])
     assert result.exit_code == 0
     assert "synthetic_shift" in result.stdout
     assert "bbh" in result.stdout
+    assert "longmemeval_s" in result.stdout
+    assert retrieval_help.exit_code == 0
+    assert "bm25_llm_rerank" in retrieval_help.stdout
+    assert "max-per-type" in retrieval_help.stdout
 
 
 def test_version_and_provider_smoke_without_network(monkeypatch: pytest.MonkeyPatch) -> None:

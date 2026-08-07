@@ -599,24 +599,48 @@ current Reflexion row isolates verification completely.
 Do not tune each ablation separately on the test stream. Freeze all shared
 hyperparameters from meta-development and change only the named component.
 
-## 10. Future public memory benchmarks
+## 10. Public memory retrieval and future benchmarks
 
-LongMemEval and LoCoMo are planned, public extensions for conversational
-long-term memory. They should be separate tracks rather than merged with BBH:
+LongMemEval_S session retrieval is implemented as a standalone, read-only
+benchmark rather than a prequential adapter. It pins the cleaned public file,
+streams and validates all 500 entries, excludes the 30 official abstention
+questions, and evaluates the remaining 470 with the upstream session-level
+Recall-all and NDCG formulation plus supplemental MRR.
 
-- LongMemEval can test long-range information retention, temporal reasoning,
-  abstention, and evidence retrieval over long histories.
+The first stage reproduces the official user-turn `rank_bm25` representation.
+The optional candidate takes a bounded top-20 session pool and reranks it with
+opaque IDs using full timestamped sessions. The request cannot contain source
+session IDs, `answer`, `answer_session_ids`, `has_answer`, question ID/type, or
+BM25 scores. Unknown/duplicate IDs, malformed responses, and provider failures
+trigger exact BM25 fallback. Because the second stage cannot recover evidence
+outside its pool, every report includes first-stage Recall-any/Recall-all
+ceiling metrics.
+
+Run it with:
+
+```bash
+evoshift data pull longmemeval
+evoshift benchmark retrieval-eval --method bm25
+evoshift benchmark retrieval-eval --method bm25-llm-rerank \
+  --config configs/models/gateway_gpt56.yaml --max-per-type 1
+```
+
+This track evaluates evidence retrieval only. A memory-system claim additionally
+requires a frozen-reader downstream QA comparison on the same retrieved
+sessions. A small `max_per_type` screen cannot support a confidence or SOTA
+claim.
+
+LoCoMo remains a planned public extension. These tracks must remain separate
+rather than merged with BBH:
+
 - LoCoMo can test multi-session conversational memory and event/person
   consistency over time.
 
-Before reporting either dataset, implement a pinned adapter, license and
-revision manifest, official task-specific scorer, contamination statement, and
-the same prequential label firewall. These benchmarks evaluate memory quality,
-not the same distribution-shift construct as the BBH stream. Report their
-metrics separately and do not average them into one “SOTA” number.
-
-As of this protocol, EvoShift contains no dedicated LongMemEval or LoCoMo
-adapter and makes no empirical claim on either dataset.
+Before reporting LoCoMo, implement a pinned adapter, license and revision
+manifest, official task-specific scorer, contamination statement, and the same
+label firewall. Public memory benchmarks evaluate memory quality, not the same
+distribution-shift construct as the BBH stream. Report their metrics separately
+and do not average them into one “SOTA” number.
 
 ## 11. Reproducibility checklist
 

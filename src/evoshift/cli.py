@@ -149,6 +149,11 @@ def benchmark_list() -> None:
         ),
         ("jsonl", "User or exported public dataset in normalized JSONL", "no"),
         ("bbh", "Pinned BIG-Bench Hard task-family shift stream", "first pull"),
+        (
+            "longmemeval_s",
+            "Pinned public session-level long-term-memory retrieval evaluation",
+            "first pull",
+        ),
         ("huggingface", "Generic Hugging Face dataset field mapper", "first pull"),
     ]
     for row in rows:
@@ -158,7 +163,9 @@ def benchmark_list() -> None:
 
 @data_app.command("pull")
 def data_pull(
-    dataset: str = typer.Argument("bbh", help="Dataset kind: bbh or tau3-retail-policy."),
+    dataset: str = typer.Argument(
+        "bbh", help="Dataset kind: bbh, tau3-retail-policy, or longmemeval."
+    ),
     config: Optional[Path] = typer.Option(None, help="Configuration YAML."),
     set_value: List[str] = typer.Option([], "--set", help="Override dotted key=value."),
 ) -> None:
@@ -170,10 +177,22 @@ def data_pull(
             benchmark_kind = "bbh"
         elif normalized in {"tau3-retail-policy", "tau3-retail-policy-shift"}:
             benchmark_kind = "tau3_retail_policy_shift"
+        elif normalized in {"longmemeval", "longmemeval-s"}:
+            from evoshift.benchmarks.longmemeval import (
+                default_longmemeval_path,
+                download_longmemeval,
+            )
+
+            integrity = download_longmemeval(default_longmemeval_path(Path.cwd()))
+            console.print("[green]Verified pinned LongMemEval_S file.[/green]")
+            console.print(
+                f"{integrity.path} bytes={integrity.size_bytes} sha256={integrity.sha256}"
+            )
+            return
         else:
             raise ValueError(
-                "data pull currently supports 'bbh' and 'tau3-retail-policy'; "
-                "HF downloads occur on run"
+                "data pull currently supports 'bbh', 'tau3-retail-policy', and "
+                "'longmemeval'; generic HF downloads occur on run"
             )
         resolved = _config(config, [f"benchmark.kind={benchmark_kind}", *set_value])
         from evoshift.benchmarks import create_benchmark
@@ -188,6 +207,98 @@ def data_pull(
         label = "BBH files" if benchmark_kind == "bbh" else "source files"
         console.print(f"[green]Verified {len(files)} {label}.[/green]")
         console.print(str(getattr(adapter, "manifest_path", "")))
+    except Exception as exc:
+        _fail(exc)
+
+
+@benchmark_app.command("retrieval-eval")
+def benchmark_retrieval_eval(
+    dataset: Optional[Path] = typer.Option(
+        None,
+        "--dataset",
+        help="Pinned LongMemEval_S JSON; defaults to data/benchmarks after data pull.",
+    ),
+    method: str = typer.Option(
+        "bm25",
+        help="Retrieval system: bm25 or bm25_llm_rerank.",
+    ),
+    config: Optional[Path] = typer.Option(None, help="Provider/budget configuration YAML."),
+    set_value: List[str] = typer.Option([], "--set", help="Override dotted key=value."),
+    output_root: Path = typer.Option(
+        Path("runs/retrieval"), help="Root for immutable retrieval artifacts."
+    ),
+    limit: int = typer.Option(0, min=0, help="Maximum selected questions; zero means all."),
+    max_per_type: int = typer.Option(
+        0,
+        min=0,
+        help="Take the deterministic first N non-abstention questions per type.",
+    ),
+    concurrency: int = typer.Option(4, min=1, max=32, help="Maximum concurrent LLM calls."),
+    candidate_k: int = typer.Option(20, min=1, max=50, help="BM25 rerank candidate pool."),
+    output_k: int = typer.Option(10, min=1, max=50, help="Requested reranker prefix length."),
+    max_candidate_chars: int = typer.Option(
+        2_500, min=256, help="Per-session character bound in the reranker prompt."
+    ),
+) -> None:
+    """Evaluate session retrieval on pinned LongMemEval without online mutation."""
+
+    async def execute() -> None:
+        from evoshift.benchmarks.longmemeval import default_longmemeval_path
+        from evoshift.evaluation.longmemeval_retrieval import (
+            run_longmemeval_retrieval,
+            write_retrieval_artifacts,
+        )
+        from evoshift.runtime.artifacts import git_state
+        from evoshift.runtime.budget import BudgetLedger
+
+        resolved = _config(config, set_value)
+        selected_path = dataset or default_longmemeval_path(Path.cwd())
+        normalized_method = method.strip().lower().replace("-", "_")
+        client = None
+        budget = None
+        if normalized_method == "bm25_llm_rerank":
+            budget = BudgetLedger.from_config(resolved.budget)
+            client = create_client(resolved.provider, budget=budget)
+        try:
+            evaluation = await run_longmemeval_retrieval(
+                selected_path,
+                method=normalized_method,
+                client=client,
+                provider=resolved.provider if client is not None else None,
+                limit=limit,
+                max_per_type=max_per_type,
+                concurrency=concurrency,
+                candidate_k=candidate_k,
+                output_k=output_k,
+                max_candidate_chars=max_candidate_chars,
+            )
+        finally:
+            if client is not None:
+                await client.aclose()
+        commit, dirty = git_state(Path.cwd())
+        budget_payload = budget.snapshot().as_dict() if budget is not None else None
+        run_dir = write_retrieval_artifacts(
+            evaluation,
+            output_root,
+            config_hash=resolved.fingerprint(),
+            git_commit=commit,
+            git_dirty=dirty,
+            budget=budget_payload,
+        )
+        systems = evaluation.report["systems"]
+        selected_system = systems.get(normalized_method, systems["bm25"])
+        macro = selected_system["macro"]
+        console.print(f"[green]Retrieval evaluation complete:[/green] {run_dir.name}")
+        console.print(str(run_dir))
+        console.print(
+            f"n={evaluation.report['n_questions']} "
+            f"recall_all@5={macro['recall_all@5']:.4f} "
+            f"recall_all@10={macro['recall_all@10']:.4f} "
+            f"ndcg_any@10={macro['ndcg_any@10']:.4f} mrr={macro['mrr']:.4f}"
+        )
+
+    try:
+        asyncio.run(execute())
     except Exception as exc:
         _fail(exc)
 

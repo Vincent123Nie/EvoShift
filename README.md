@@ -60,6 +60,9 @@ score; decision-time trust reads state produced by earlier episodes only.
 - Deterministic fake/demo providers for offline tests and full pipeline demos.
 - Pinned BIG-Bench Hard adapter with fixed Git revision, SHA-256, byte-size,
   manifest, and canary validation.
+- Pinned LongMemEval_S session-retrieval benchmark with streaming validation,
+  official Recall-all/NDCG metrics, opaque candidate IDs, and paired BM25/LLM
+  reranking artifacts.
 - Generic Hugging Face and JSONL adapters plus a deterministic distribution
   shift benchmark.
 - Provenance-domain-scoped BM25 retrieval with Beta posterior utility,
@@ -140,6 +143,28 @@ and preregistered ablation fields. The full stream and bounded sweep specs are
 under `configs/experiments/` and `configs/sweeps/`. The committed BBH experiment
 configs disable the shared LLM cache so run order cannot create zero-cost,
 zero-latency results for later methods.
+
+## Public LongMemEval retrieval experiment
+
+```bash
+evoshift data pull longmemeval
+
+evoshift benchmark retrieval-eval --method bm25
+
+evoshift benchmark retrieval-eval \
+  --method bm25-llm-rerank \
+  --config configs/models/gateway_gpt56.yaml \
+  --max-per-type 1 --concurrency 4
+```
+
+The dataset is pinned by byte size and SHA-256. Retrieval excludes the 30
+official abstention questions, maps source session IDs to per-question opaque
+document/candidate IDs, and never exposes `answer`, `answer_session_ids`,
+`has_answer`, question ID/type, or BM25 scores to the model. The offline command
+runs all 470 scored questions. `--max-per-type 1` is only a paid mechanism
+screen; it is not a leaderboard estimate. Artifacts report BM25 candidate-pool
+recall ceilings, paired metric deltas and intervals, fallback behavior, and
+provider usage.
 
 ## Frozen held-out audit
 
