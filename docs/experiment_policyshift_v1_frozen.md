@@ -42,6 +42,13 @@ commit/dirty flag, and the exact run path. `matrix.json` additionally records
 the seed list, pair counts, and all bootstrap inputs; it is the authoritative
 provenance index for the table below.
 
+There is intentionally no single global generated-stream hash: the seed is
+part of stream construction, so each seed has its own dataset hash and each
+algorithm/seed assignment has its own config hash. The 20 manifests are the
+authoritative mapping from every table row to those hashes. The matrix is
+complete (`completed_runs=20`, `expected_runs=20`) with no silently dropped
+seed.
+
 ## Results
 
 Values are mean across the five seeds. Recovery is mean recovery steps on
