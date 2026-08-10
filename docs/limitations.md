@@ -146,12 +146,15 @@ The held-out task families are unseen by the EvoShift run, not necessarily
 unseen by the base model. The audit measures transfer of external state, not
 zero-shot novelty of the underlying LLM.
 
-### Memory-specific datasets need dedicated adapters
+### Memory-specific datasets need dedicated readers
 
-LongMemEval and LoCoMo contain nested histories, temporal structure, and
-specialized graders. Flattening them through the generic Hugging Face adapter
-would erase the memory problem being evaluated. BFCL and tau-bench likewise
-need structured tool calls and executable environments.
+The pinned LongMemEval session-retrieval adapter is implemented and validated
+against the cleaned 500-entry file, including the 470/30 scored/abstention
+split and official retrieval metrics. It does not yet implement the downstream
+reader QA/temporal grader or LongMemEval-V2. LoCoMo still needs its own pinned
+adapter and scorer. Flattening either dataset through the generic Hugging Face
+adapter would erase the memory problem being evaluated. BFCL and tau-bench
+likewise need structured tool calls and executable environments.
 
 ## Systems limitations
 
@@ -193,7 +196,9 @@ EvoShift currently does not attempt to:
 3. Run per-card counterfactual audit on an untouched public or realistic policy
    stream with a frozen API model.
 4. Implement exact McNemar plus block/cluster bootstrap for repeated seeds.
-5. Add a dedicated LongMemEval-V2 adapter and temporal scorers.
+5. Add the LongMemEval-V2 adapter, temporal reader scorer, and same-reader QA
+   transfer evaluation; keep the current retrieval-only adapter as a separate
+   track.
 6. Add dense/hybrid retrieval and contradiction-aware memory admission.
 7. Add BFCL structured tool-call state and official executable scoring.
 8. Add tenant-aware storage/cache isolation and encrypted artifact export.

@@ -311,6 +311,13 @@ governance metrics that exist only once per run use the same routine with one
 run-level observation per seed. A one-seed mini diagnostic validates the
 protocol but is not a repeated-seed research result.
 
+The completed v1 short live freeze uses all four named methods and five paired
+seeds on the same `gpt-5.6` remote alias. Its negative Full-vs-Reflexion result,
+resource comparison, confidence intervals, run IDs, and historical dirty
+manifest limitation are recorded in
+`docs/experiment_policyshift_v1_frozen.md`. It is evidence for engineering
+behavior, not an official tau3 score or SOTA claim.
+
 ## 6. Metric definitions
 
 Let `s_t` be the stored first-pass primary score for episode `t`, `y_t` its
@@ -608,13 +615,16 @@ questions, and evaluates the remaining 470 with the upstream session-level
 Recall-all and NDCG formulation plus supplemental MRR.
 
 The first stage reproduces the official user-turn `rank_bm25` representation.
-The optional candidate takes a bounded top-20 session pool and reranks it with
-opaque IDs using full timestamped sessions. The request cannot contain source
-session IDs, `answer`, `answer_session_ids`, `has_answer`, question ID/type, or
-BM25 scores. Unknown/duplicate IDs, malformed responses, and provider failures
-trigger exact BM25 fallback. Because the second stage cannot recover evidence
-outside its pool, every report includes first-stage Recall-any/Recall-all
-ceiling metrics.
+The optional raw candidate takes a bounded top-20 session pool and reranks it
+with opaque IDs using full timestamped sessions. The adopted optional candidate
+is `bm25_llm_rerank_fused`: it combines zero-based BM25 and LLM ranks with a
+frozen `0.4/0.6` weighted rank sum and uses original BM25 order for ties. The
+LLM request cannot contain source session IDs, `answer`, `answer_session_ids`,
+`has_answer`, question ID/type, or BM25 scores. Unknown/duplicate IDs,
+malformed responses, provider failures, and fusion invariant errors trigger
+exact BM25 fallback. Because the second stage cannot recover evidence outside
+its pool, every report includes first-stage Recall-any/Recall-all ceiling
+metrics. Rank fusion is opt-in and does not change the default BM25 path.
 
 Run it with:
 
@@ -623,12 +633,21 @@ evoshift data pull longmemeval
 evoshift benchmark retrieval-eval --method bm25
 evoshift benchmark retrieval-eval --method bm25-llm-rerank \
   --config configs/models/gateway_gpt56.yaml --max-per-type 1
+evoshift benchmark retrieval-eval --method bm25-llm-rerank-fused \
+  --config configs/models/gateway_gpt56.yaml --max-per-type 2 \
+  --candidate-k 20 --output-k 10 --bm25-rank-weight 0.4 \
+  --set storage.cache_enabled=false
 ```
 
 This track evaluates evidence retrieval only. A memory-system claim additionally
 requires a frozen-reader downstream QA comparison on the same retrieved
 sessions. A small `max_per_type` screen cannot support a confidence or SOTA
 claim.
+
+The adopted guarded confirmation and its raw comparator are recorded in
+`docs/experiment_longmemeval_selective_rank_fusion.md`. The clean run passes
+its frozen 12-question mechanism gate, but it remains a retrieval-only result:
+there is no downstream reader QA transfer or leaderboard claim.
 
 LoCoMo remains a planned public extension. These tracks must remain separate
 rather than merged with BBH:

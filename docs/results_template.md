@@ -207,8 +207,10 @@ Mandatory caveats:
 - Foreground resource metrics exclude critic and replay calls; total cost comes
   from `costs.json`.
 - A stable closed-model name may not identify an immutable model snapshot.
-- LongMemEval and LoCoMo results are `N/A` until dedicated pinned adapters and
-  official evaluation are implemented.
+- LongMemEval_S retrieval may be reported only with its pinned revision,
+  official retrieval metrics, frozen question list, and artifact manifest;
+  downstream reader QA and LongMemEval-V2 remain `N/A`. LoCoMo remains `N/A`
+  until a dedicated pinned adapter and scorer are implemented.
 
 ## 12. Final claim text
 

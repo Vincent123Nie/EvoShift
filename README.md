@@ -62,7 +62,9 @@ score; decision-time trust reads state produced by earlier episodes only.
   manifest, and canary validation.
 - Pinned LongMemEval_S session-retrieval benchmark with streaming validation,
   official Recall-all/NDCG metrics, opaque candidate IDs, and paired BM25/LLM
-  reranking artifacts.
+  reranking artifacts. The adopted optional second stage is a fail-closed
+  `bm25_llm_rerank_fused` rank fusion with frozen `0.4/0.6` BM25/LLM weights;
+  it is retrieval evidence only, not end-to-end QA or SOTA.
 - Generic Hugging Face and JSONL adapters plus a deterministic distribution
   shift benchmark.
 - Provenance-domain-scoped BM25 retrieval with Beta posterior utility,
@@ -155,6 +157,13 @@ evoshift benchmark retrieval-eval \
   --method bm25-llm-rerank \
   --config configs/models/gateway_gpt56.yaml \
   --max-per-type 1 --concurrency 4
+
+evoshift benchmark retrieval-eval \
+  --method bm25-llm-rerank-fused \
+  --config configs/models/gateway_gpt56.yaml \
+  --max-per-type 2 --candidate-k 20 --output-k 10 \
+  --bm25-rank-weight 0.4 --concurrency 4 \
+  --set storage.cache_enabled=false
 ```
 
 The dataset is pinned by byte size and SHA-256. Retrieval excludes the 30
@@ -165,6 +174,13 @@ runs all 470 scored questions. `--max-per-type 1` is only a paid mechanism
 screen; it is not a leaderboard estimate. Artifacts report BM25 candidate-pool
 recall ceilings, paired metric deltas and intervals, fallback behavior, and
 provider usage.
+The clean 12-question guarded confirmation is recorded in
+[`experiment_longmemeval_selective_rank_fusion.md`](docs/experiment_longmemeval_selective_rank_fusion.md).
+
+The public-source-derived PolicyShift live comparison is recorded in
+[`experiment_policyshift_v1_frozen.md`](docs/experiment_policyshift_v1_frozen.md);
+it has five paired seeds across Static, Reflexion, Replay-only, and Full
+EvoShift, but its historical manifests are explicitly marked dirty.
 
 ## Frozen held-out audit
 
@@ -247,14 +263,15 @@ python -m build
 python scripts/verify_bbh_manifest.py
 ```
 
-Verified locally on 2026-08-05:
+Verified locally on 2026-08-10:
 
-- 142 tests passed;
-- branch-aware coverage: 84.32% (`fail_under = 80`);
-- Ruff and strict mypy passed over 52 source files;
+- 256 tests passed;
+- branch-aware coverage: 84.65% (`fail_under = 80`);
+- LongMemEval retrieval targeted branch coverage: 92.46%;
+- Ruff and strict mypy passed over 58 source files;
 - source and wheel distributions built successfully;
-- all 42 experiment, benchmark fragment, provider fragment, and sweep YAML
-  files passed schema/loading validation, including 946 expanded sweep
+- all 68 experiment, benchmark fragment, provider fragment, model, and sweep
+  YAML files passed schema/loading validation, including 3,806 expanded sweep
   assignments;
 - the OpenAI-compatible provider contract suite passed, and an opt-in live
   smoke against a private compatible gateway returned exactly `OK`;
@@ -297,6 +314,9 @@ dataset hash, and comparison artifact.
 - [Dynamic-trust and future-audit experiment](docs/experiment_dynamic_trust_conflict_memory.md)
 - [Active-memory causal-governance experiment](docs/experiment_causal_memory_governance.md)
 - [Allowlisted LLM reranking experiment](docs/experiment_llm_rerank_paraphrase.md)
+- [Public LongMemEval retrieval experiment](docs/experiment_longmemeval_public_retrieval.md)
+- [Selective LongMemEval rank-fusion confirmation](docs/experiment_longmemeval_selective_rank_fusion.md)
+- [PolicyShift v1 frozen live comparison](docs/experiment_policyshift_v1_frozen.md)
 - [Prequential feedback firewall correction](docs/experiment_prequential_feedback_firewall.md)
 - [Recurrence-aware causal rollback experiment](docs/experiment_recurrence_aware_rollback.md)
 - [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)

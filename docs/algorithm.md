@@ -12,10 +12,13 @@ The central hypothesis is falsifiable:
 > static prompting or unverified memory, without unacceptable regression on
 > protected earlier domains or resource cost.
 
-The implementation does not yet establish that hypothesis on a public
-benchmark. Synthetic/demo behavior is a pipeline check only. A valid result
-requires same-model baselines, repeated trials where meaningful, held-out
-evaluation, uncertainty estimates, and cost reporting.
+The implementation does not yet establish superiority on a public benchmark.
+The public-source-derived PolicyShift live matrix is a documented negative
+result, while LongMemEval currently validates retrieval rather than the online
+adaptation hypothesis. Synthetic/demo behavior remains a pipeline and mechanism
+check only. A valid superiority result requires same-model baselines, repeated
+trials where meaningful, held-out evaluation, uncertainty estimates, and cost
+reporting.
 
 ## Notation
 
@@ -506,9 +509,12 @@ than reverting the entire run.
 
 A confirmed candidate may list `supersedes_memory_ids`. Confirmation changes
 those active predecessors to `SUPERSEDED`, removing them from retrieval without
-deleting provenance. If the successor later crosses posterior rollback, each
-still-superseded predecessor is reactivated. A candidate rejected during future
-probation never supersedes the old rule, so there is nothing to restore.
+deleting provenance. Eager predecessor reactivation is available only behind
+`active_audit_restore_predecessors=true`; the safe default is `false` because a
+multi-step reversion can leave both successor and predecessor stale. The
+adopted path preserves lineage and requires a recurring rule to pass replay and
+probation as a new version. A candidate rejected during future probation never
+supersedes the old rule, so there is nothing to restore.
 
 Posterior rollback remains a low-cost baseline and fallback. Active causal
 governance is the higher-fidelity path for attributed trusted failures. On the

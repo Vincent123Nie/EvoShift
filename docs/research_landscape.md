@@ -45,7 +45,7 @@ system.”
 | Dataset | What it tests | Strength for this project | Limitation / work required |
 |---|---|---|---|
 | [BIG-Bench Hard](https://github.com/suzgunmirac/BIG-Bench-Hard) | Diverse difficult reasoning task families with deterministic targets | Public, lightweight, easy to phase by domain, cheap to score, and suitable for controlled distribution shifts and held-out families | It is not a long-conversation memory benchmark and may be present in model pretraining |
-| [LongMemEval-V2](https://huggingface.co/datasets/xiaowu0162/longmemeval-v2) and [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | Long-term memory for web, enterprise, and chat assistants | Directly measures retention, temporal reasoning, and cross-session retrieval | Nested histories and specialized graders need a dedicated adapter; long contexts materially increase API cost |
+| [LongMemEval-V2](https://huggingface.co/datasets/xiaowu0162/longmemeval-v2) and [LongMemEval](https://github.com/xiaowu0162/LongMemEval) | Long-term memory for web, enterprise, and chat assistants | Directly measures retention, temporal reasoning, and cross-session retrieval; EvoShift now has a pinned LongMemEval_S session-retrieval adapter | Downstream reader QA, temporal grading, and LongMemEval-V2 remain unimplemented; long contexts materially increase API cost |
 | [LoCoMo](https://github.com/snap-research/locomo) ([paper](https://arxiv.org/abs/2402.17753)) | Very long multi-session conversational memory and QA | Strong memory-specific qualitative error analysis | Only ten source conversations; split construction and leakage control need care, and the generic row adapter is insufficient |
 | [BFCL](https://github.com/ShishirPatil/gorilla/tree/main/berkeley-function-call-leaderboard) / [HF data](https://huggingface.co/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard) | Single/multi-turn function calling, parallel calls, relevance, and tool use | Industrially recognizable, structured execution-based scoring, and natural tool-schema shifts | Requires a first-class tool-call representation and official evaluator rather than treating calls as free-form text |
 | [tau-bench](https://github.com/sierra-research/tau-bench) and [tau2-bench](https://github.com/sierra-research/tau2-bench) | Tool-Agent-User interaction in realistic domains | Best industrial extension for policy adherence, stateful tools, and long-horizon recovery | Environment setup, user simulation, database state, and pass^k evaluation would lengthen the first project cycle substantially |
@@ -57,8 +57,8 @@ with API credits and local CPU only.
 
 ## Recommended extension order
 
-1. **LongMemEval-V2**: add a dedicated session/history adapter and temporal QA
-   scorers to test whether verified experience helps actual long-term memory.
+1. **LongMemEval-V2**: extend the implemented LongMemEval_S retrieval adapter
+   with temporal reader QA and same-reader transfer scoring.
 2. **BFCL**: evolve tool-selection and argument-construction memories with the
    official executable evaluator; this is the strongest short industrial
    extension.
@@ -78,7 +78,7 @@ the three extensions above.
 | Why not GEPA? | GEPA searches textual artifacts against an evaluation set; EvoShift controls online state transitions in a non-stationary stream. |
 | Why not A-MEM? | A-MEM learns memory structure and links; EvoShift asks whether a memory or retrieval-policy change has measurable causal value before activation. |
 | Why not AgentEvolver or SkillRL-style training? | The project constraint is black-box API access and no training compute; weight updates are explicitly out of scope. |
-| Why not claim SOTA? | No official baseline reproduction, full repeated-seed public table, per-candidate held-out audit, or leaderboard-compatible protocol has yet been completed. |
+| Why not claim SOTA? | The public-source PolicyShift table is a short historical dirty-worktree engineering freeze, LongMemEval is retrieval-only, and there is no official baseline reproduction, per-candidate held-out reader audit, or leaderboard-compatible protocol. |
 
 ## Claim boundary
 
