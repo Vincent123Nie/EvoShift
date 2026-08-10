@@ -220,6 +220,9 @@ class EvoShiftRunner:
                     self.config.evolution.shadow_eprocess_alternative_match_probability
                 ),
                 shadow_eprocess_alpha=self.config.evolution.shadow_eprocess_alpha,
+                shadow_hierarchical_eprocess_enabled=(
+                    self.config.evolution.shadow_hierarchical_eprocess_enabled
+                ),
             )
             candidate_pool.seed_accepted(memory.active())
             future_auditor = (
@@ -2944,6 +2947,22 @@ class EvoShiftRunner:
                                         "evidence_lane": evidence_lane,
                                         "shadow_e_value": evidence.shadow_e_value,
                                         "shadow_eprocess_ready": (evidence.shadow_eprocess_ready),
+                                        **(
+                                            {
+                                                "candidate_cluster_signature": (
+                                                    evidence.cluster_signature
+                                                ),
+                                                "shadow_cluster_e_value": (
+                                                    candidate_pool.cluster_e_value(
+                                                        evidence.cluster_signature
+                                                    )
+                                                ),
+                                            }
+                                            if (
+                                                self.config.evolution.shadow_hierarchical_eprocess_enabled
+                                            )
+                                            else {}
+                                        ),
                                         "shadow_eprocess_threshold": (
                                             candidate_pool.shadow_eprocess_threshold
                                         ),
@@ -2987,6 +3006,17 @@ class EvoShiftRunner:
                                             "shadow_eprocess_ready": (
                                                 evidence.shadow_eprocess_ready
                                             ),
+                                            **(
+                                                {
+                                                    "candidate_cluster_signature": (
+                                                        evidence.cluster_signature
+                                                    ),
+                                                }
+                                                if (
+                                                    self.config.evolution.shadow_hierarchical_eprocess_enabled
+                                                )
+                                                else {}
+                                            ),
                                         },
                                     )
                                 else:
@@ -3003,6 +3033,17 @@ class EvoShiftRunner:
                                             "shadow_e_value": evidence.shadow_e_value,
                                             "shadow_eprocess_ready": (
                                                 evidence.shadow_eprocess_ready
+                                            ),
+                                            **(
+                                                {
+                                                    "candidate_cluster_signature": (
+                                                        evidence.cluster_signature
+                                                    ),
+                                                }
+                                                if (
+                                                    self.config.evolution.shadow_hierarchical_eprocess_enabled
+                                                )
+                                                else {}
                                             ),
                                         },
                                     )
@@ -3050,6 +3091,17 @@ class EvoShiftRunner:
                                                             ),
                                                             "candidate_signature": (
                                                                 evidence.signature
+                                                            ),
+                                                            **(
+                                                                {
+                                                                    "candidate_cluster_signature": (
+                                                                        evidence.cluster_signature
+                                                                    ),
+                                                                }
+                                                                if (
+                                                                    self.config.evolution.shadow_hierarchical_eprocess_enabled
+                                                                )
+                                                                else {}
                                                             ),
                                                         },
                                                     )
@@ -3120,6 +3172,17 @@ class EvoShiftRunner:
                                                             ),
                                                             "shadow_eprocess_ready": (
                                                                 evidence.shadow_eprocess_ready
+                                                            ),
+                                                            **(
+                                                                {
+                                                                    "candidate_cluster_signature": (
+                                                                        evidence.cluster_signature
+                                                                    ),
+                                                                }
+                                                                if (
+                                                                    self.config.evolution.shadow_hierarchical_eprocess_enabled
+                                                                )
+                                                                else {}
                                                             ),
                                                             "context_local_probation_registered": (
                                                                 context_lease is not None
@@ -3432,6 +3495,19 @@ class EvoShiftRunner:
                 if outcome.decision.result.oracle_mean_delta is not None
                 and outcome.decision.result.oracle_mean_delta < 0.0
             ]
+            cluster_metrics = (
+                {
+                    "shadow_cluster_eprocess_opportunities": (
+                        candidate_pool.shadow_cluster_eprocess_opportunities
+                    ),
+                    "shadow_cluster_eprocess_crossings": (
+                        candidate_pool.shadow_cluster_eprocess_crossings
+                    ),
+                    "shadow_cluster_eprocess": candidate_pool.cluster_snapshot(),
+                }
+                if self.config.evolution.shadow_hierarchical_eprocess_enabled
+                else {}
+            )
             metrics.update(
                 {
                     "algorithm": self.config.algorithm.value,
@@ -3480,6 +3556,7 @@ class EvoShiftRunner:
                             candidate_pool.shadow_eprocess_opportunities
                         ),
                         "shadow_eprocess_crossings": (candidate_pool.shadow_eprocess_crossings),
+                        **cluster_metrics,
                         "trusted_candidate_shadow_cooldown_bypasses": (
                             trusted_candidate_shadow_cooldown_bypasses
                         ),

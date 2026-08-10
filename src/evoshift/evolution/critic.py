@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from evoshift.config import EvolutionConfig, ProviderConfig
+from evoshift.evolution.candidates import observable_candidate_cluster_key
 from evoshift.schemas import (
     Episode,
     FailureRecord,
@@ -178,6 +179,7 @@ class ExperienceCritic:
             tags=list(dict.fromkeys(tags))[:20],
             source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
+            evidence_cluster_key=self._cluster_key(episode),
             supersedes_memory_ids=[
                 str(memory_id)
                 for memory_id in memory_data.get("supersedes_memory_ids", [])[:20]
@@ -198,8 +200,7 @@ class ExperienceCritic:
             confidence=max(0.0, min(1.0, confidence)),
         )
 
-    @staticmethod
-    def _fallback(episode: Episode) -> FailureRecord:
+    def _fallback(self, episode: Episode) -> FailureRecord:
         candidate = MemoryItem(
             memory_id="",
             status=MemoryStatus.SHADOW,
@@ -210,6 +211,7 @@ class ExperienceCritic:
             evidence="Fallback because the critic response was not valid structured JSON.",
             source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
+            evidence_cluster_key=self._cluster_key(episode),
             valid_from_episode_id=episode.episode_id,
             valid_from_index=episode.index,
             confidence=0.2,
@@ -222,4 +224,35 @@ class ExperienceCritic:
             evidence="Structured critic output could not be parsed.",
             proposed_memory=candidate,
             confidence=0.2,
+        )
+
+    def _cluster_key(self, episode: Episode) -> str:
+        """Derive provenance from fields visible to the learner only."""
+
+        if not self.evolution.shadow_hierarchical_eprocess_enabled:
+            return ""
+
+        metadata = episode.sample.metadata
+        source = str(metadata.get("feedback_source", "")).strip() or "unspecified"
+        context = str(metadata.get("feedback_context", "")).strip()
+        if not context:
+            context = " ".join(episode.sample.prompt.casefold().split())
+        raw_signal = metadata.get(
+            "feedback_reference",
+            "success" if episode.adaptation_score.success else "failure",
+        )
+        if isinstance(raw_signal, str):
+            signal = " ".join(raw_signal.casefold().split())
+        else:
+            signal = json.dumps(
+                raw_signal,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        return observable_candidate_cluster_key(
+            domain=episode.sample.domain,
+            feedback_source=source,
+            feedback_context=context,
+            feedback_signal=signal,
         )

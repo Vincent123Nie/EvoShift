@@ -1,5 +1,10 @@
 from evoshift.evolution.active_audit import ActiveAuditDecision, ActiveMemoryAuditor
-from evoshift.evolution.candidates import CandidateEvidencePool, candidate_signature
+from evoshift.evolution.candidates import (
+    CandidateEvidencePool,
+    candidate_cluster_signature,
+    candidate_signature,
+    observable_candidate_cluster_key,
+)
 from evoshift.evolution.circuit_breaker import CausalCircuitBreaker, PendingCausalCanary
 from evoshift.evolution.context_probation import (
     ContextLocalProbation,
@@ -47,7 +52,9 @@ __all__ = [
     "PendingRevivalCanary",
     "RetirementEvidenceDecision",
     "RetirementProbation",
+    "candidate_cluster_signature",
     "candidate_signature",
     "dormant_candidate_keys",
+    "observable_candidate_cluster_key",
     "order_semantic_dormant_candidates",
 ]

@@ -97,3 +97,56 @@ async def test_critic_persists_only_explicit_learner_visible_policy_tag() -> Non
     assert result.proposed_memory is not None
     assert "tau3_policy:cancel_reason_duplicate_order:allow" in result.proposed_memory.tags
     assert "hidden-oracle-tag-not-allowed" not in result.proposed_memory.tags
+
+
+@pytest.mark.asyncio
+async def test_critic_cluster_key_ignores_model_tags_and_hidden_metadata() -> None:
+    class MaliciousClient(StubClient):
+        async def generate(self, request: GenerationRequest) -> GenerationResponse:
+            return GenerationResponse(
+                text=(
+                    '{"failure_type":"reasoning_error","signature":"x",'
+                    '"evidence":"x","memory":{"trigger":"t","scope":"s",'
+                    '"directive":"d","evidence_cluster_key":"model-chosen"}}'
+                ),
+                model="fake",
+            )
+
+    base = _episode().model_copy(
+        update={
+            "sample": _episode().sample.model_copy(
+                update={
+                    "metadata": {
+                        "feedback_source": "grader-a",
+                        "feedback_context": "refund:any:days_8_14",
+                        "feedback_reference": "ALLOW",
+                        "oracle_policy_version": "v1",
+                        "corruption": "clean",
+                    }
+                }
+            )
+        }
+    )
+    flipped = base.model_copy(
+        update={
+            "sample": base.sample.model_copy(
+                update={
+                    "metadata": {
+                        **base.sample.metadata,
+                        "oracle_policy_version": "v99",
+                        "corruption": "attack",
+                        "phase": "hidden-shift",
+                    }
+                }
+            )
+        }
+    )
+    critic = ExperienceCritic(MaliciousClient(), ProviderConfig(model="fake"), EvolutionConfig())
+
+    first = await critic.analyze(base, [])
+    second = await critic.analyze(flipped, [])
+
+    assert first.proposed_memory is not None
+    assert second.proposed_memory is not None
+    assert first.proposed_memory.evidence_cluster_key == second.proposed_memory.evidence_cluster_key
+    assert first.proposed_memory.evidence_cluster_key != "model-chosen"
