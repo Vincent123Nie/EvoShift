@@ -42,6 +42,14 @@ def _load_comparison_config(row: dict[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def _manifest(row: dict[str, Any]) -> dict[str, Any]:
+    run_dir = Path(str(row["run_dir"]))
+    payload = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("manifest.json must contain a mapping")
+    return payload
+
+
 def audit(sweep_dir: Path) -> dict[str, Any]:
     rows = _load_rows(sweep_dir)
     by_variant = {str(row.get("variant")): row for row in rows}
@@ -57,26 +65,36 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
             "same_dataset_hash": True,
             "same_seed": True,
             "same_model": True,
+            "same_git_commit": True,
+            "clean_worktrees": True,
             "cache_disabled": True,
             "only_hierarchical_flag_differs": True,
+            "hierarchical_flag_assignment_valid": True,
         },
         "interpretation": "diagnostic_only",
     }
     dataset_hashes: set[str] = set()
     seeds: set[int] = set()
     models: set[str] = set()
+    git_commits: set[str] = set()
+    dirty_states: list[bool] = []
     for variant in sorted(required):
         row = by_variant[variant]
         metrics, costs = _run_metrics(row)
+        manifest = _manifest(row)
         dataset_hashes.add(str(metrics.get("dataset_hash", "")))
         seeds.add(int(row.get("seed", 0)))
         models.add(str(row.get("model", metrics.get("model", ""))))
+        git_commits.add(str(manifest.get("git_commit", "")))
+        dirty_states.append(bool(manifest.get("git_dirty", True)))
         evolution = metrics.get("evolution", {})
         critic = metrics.get("critic", {})
+        phases = metrics.get("phases", {})
         report["variants"][variant] = {
             "run_id": row.get("run_id"),
             "score": metrics.get("overall", {}).get("mean_score"),
-            "changed_score": metrics.get("policy_shift", {}).get("changed_case_success_rate"),
+            "changed_score": phases.get("fixture_policy_change", {}).get("mean_score"),
+            "protected_score": phases.get("fixture_safe_anchor", {}).get("mean_score"),
             "critic_records": critic.get("records"),
             "critic_signature_unique": critic.get("signature_unique"),
             "critic_memory_trigger_unique": critic.get("memory_trigger_unique"),
@@ -91,18 +109,22 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
             "shadow_only_replays": evolution.get("shadow_only_candidate_replay_attempts"),
             "probations": evolution.get("shadow_candidate_probations"),
             "activations": evolution.get("shadow_candidate_activations"),
+            "rejections": evolution.get("shadow_candidate_rejections"),
+            "future_audit_confirmed": metrics.get("future_audit", {}).get("confirmed"),
+            "future_audit_expired": metrics.get("future_audit", {}).get("expired"),
             "harmful_promotion_rate": metrics.get("future_audit", {}).get("harmful_promotion_rate"),
             "harmful_active_memory_exposure": metrics.get("active_memory_governance", {}).get(
                 "harmful_active_memory_exposure_n"
             ),
             "requests": costs.get("requests"),
             "total_tokens": costs.get("total_tokens"),
-            "provider_failures": costs.get("provider_failures", 0),
         }
 
     report["protocol"]["same_dataset_hash"] = len(dataset_hashes) == 1 and "" not in dataset_hashes
     report["protocol"]["same_seed"] = len(seeds) == 1
     report["protocol"]["same_model"] = len(models) == 1 and "" not in models
+    report["protocol"]["same_git_commit"] = len(git_commits) == 1 and "" not in git_commits
+    report["protocol"]["clean_worktrees"] = not any(dirty_states)
     report["protocol"]["cache_disabled"] = all(
         (
             yaml.safe_load(
@@ -124,11 +146,18 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
         )
         == 1
     )
+    report["protocol"]["hierarchical_flag_assignment_valid"] = all(
+        bool(row.get("parameters", {}).get("evolution.shadow_hierarchical_eprocess_enabled"))
+        is (variant == "hierarchical_shadow_eprocess")
+        for variant, row in by_variant.items()
+    )
     exact = report["variants"]["exact_shadow_eprocess"]
     hierarchical = report["variants"]["hierarchical_shadow_eprocess"]
     report["delta"] = {
         "score": (hierarchical["score"] or 0.0) - (exact["score"] or 0.0),
         "changed_score": (hierarchical["changed_score"] or 0.0) - (exact["changed_score"] or 0.0),
+        "protected_score": (hierarchical["protected_score"] or 0.0)
+        - (exact["protected_score"] or 0.0),
         "cluster_crossings": (hierarchical["shadow_cluster_eprocess_crossings"] or 0)
         - (exact["shadow_cluster_eprocess_crossings"] or 0),
         "requests": (hierarchical["requests"] or 0) - (exact["requests"] or 0),
@@ -141,6 +170,12 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
             or (hierarchical["critic_memory_directive_unique"] or 0) >= 2
         ),
         "structured_critic_parse_clean": (hierarchical["critic_structured_fallbacks"] or 0) == 0,
+        "mechanism_reached": (
+            (hierarchical["shadow_cluster_eprocess_crossings"] or 0) >= 1
+            and (hierarchical["shadow_only_replays"] or 0) >= 1
+        ),
+        "shadow_admission_succeeded": (hierarchical["probations"] or 0) >= 1,
+        "capability_uplift_observed": (hierarchical["score"] or 0.0) > (exact["score"] or 0.0),
         "no_harmful_promotion": (hierarchical["harmful_promotion_rate"] or 0.0) == 0.0,
         "no_harmful_active_memory_exposure": (hierarchical["harmful_active_memory_exposure"] or 0)
         == 0,
