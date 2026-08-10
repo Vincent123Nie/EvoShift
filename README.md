@@ -182,6 +182,13 @@ The public-source-derived PolicyShift live comparison is recorded in
 it has five paired seeds across Static, Reflexion, Replay-only, and Full
 EvoShift, but its historical manifests are explicitly marked dirty.
 
+The observable-anchor hierarchical shadow e-process is documented in
+[`experiment_hierarchical_shadow_eprocess.md`](docs/experiment_hierarchical_shadow_eprocess.md).
+It is default-off experimental infrastructure: the deterministic confirmation
+had zero paired uplift and zero cluster crossings, so the algorithm was not
+adopted. The negative result and next valid validation step are recorded in
+[`results_hierarchical_shadow_eprocess.md`](docs/results_hierarchical_shadow_eprocess.md).
+
 ## Frozen held-out audit
 
 After a completed EvoShift run, evaluate its final state on unseen BBH task

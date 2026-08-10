@@ -317,3 +317,47 @@ def test_trusted_lane_ignores_shadow_cluster_probation() -> None:
     )
 
     assert pool.readiness(trusted, 2, trusted=True) == (True, "ready")
+
+
+def test_same_exact_text_cannot_reuse_crossing_from_a_different_cluster() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=0,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+    )
+    directives = ["wording one", "wording two", "wording three", "shared wording"]
+    current = None
+    for index, directive in enumerate(directives, start=1):
+        current = pool.observe(
+            _cluster_candidate(
+                f"cluster-a-{index}",
+                directive=directive,
+                cluster="cluster-a",
+            ),
+            index,
+            trust=0.1,
+            trusted=False,
+        )
+    assert current is not None
+    assert pool.readiness(current, 4, trusted=False) == (True, "ready")
+
+    reused_exact = pool.observe(
+        _cluster_candidate(
+            "cluster-b-1",
+            directive="shared wording",
+            cluster="cluster-b",
+        ),
+        5,
+        trust=0.1,
+        trusted=False,
+    )
+
+    assert reused_exact is current
+    assert reused_exact.cluster_signature == "cluster-b"
+    assert pool.readiness(reused_exact, 5, trusted=False) == (
+        False,
+        "shadow_eprocess_below_threshold",
+    )

@@ -2,9 +2,9 @@
 
 ## Status
 
-Rejected for adoption on the pre-registered deterministic gate. The code path
-is retained on branch `codex/hierarchical-shadow-eprocess`; it is not a claim of
-capability improvement and was not promoted to `main`.
+Rejected for algorithm adoption on the pre-registered deterministic gate. The
+default-off implementation and its negative result are safe to merge as
+experimental infrastructure; this is not a claim of capability improvement.
 
 ## Run
 

@@ -242,6 +242,13 @@ class CandidateEvidencePool:
             self._items[signature] = evidence
             return evidence
 
+        if (
+            existing.cluster_signature != cluster_signature
+            and not existing.accepted
+            and not existing.probationary
+        ):
+            existing.cluster_signature = cluster_signature
+
         provenance = list(
             dict.fromkeys(
                 existing.candidate.provenance_episode_ids + candidate.provenance_episode_ids
