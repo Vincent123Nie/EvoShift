@@ -277,3 +277,9 @@ paired reporting all passed. Do not adopt a claim that the present Full
 algorithm is superior on the public-source stream. The next algorithm branch
 must improve clean cold-start eligibility and change detection while retaining
 the isolated-noise false-alarm defense.
+
+The subsequent five-seed live comparison is recorded separately in
+`docs/experiment_policyshift_v1_frozen.md`. It covers all four named methods on
+the same short two-phase stream and retains the negative Full-vs-Reflexion
+result. Its historical manifests are dirty, so it is an engineering freeze,
+not a clean-current-commit claim.

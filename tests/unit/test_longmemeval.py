@@ -166,6 +166,80 @@ def test_bm25_metrics_and_bounded_text_match_frozen_contract() -> None:
     assert "truncated" in bounded
 
 
+def test_bm25_and_reranker_validate_configuration() -> None:
+    with pytest.raises(ValueError, match="at least one document"):
+        LongMemEvalBM25([])
+    with pytest.raises(ValueError, match="invalid BM25 parameters"):
+        LongMemEvalBM25(["document"], k1=0.0)
+    with pytest.raises(ValueError, match="invalid BM25 parameters"):
+        LongMemEvalBM25(["document"], b=1.1)
+
+    client = FakeLLMClient(responses=[])
+    provider = ProviderConfig(kind="fake", model="test")
+    invalid_cases = [
+        ({"candidate_k": 1, "output_k": 2}, "at least output_k"),
+        ({"candidate_k": 51, "output_k": 1}, "cannot exceed 50"),
+        (
+            {"candidate_k": 2, "output_k": 1, "max_candidate_chars": 255},
+            "must be at least 256",
+        ),
+        (
+            {
+                "candidate_k": 2,
+                "output_k": 1,
+                "max_candidate_chars": 256,
+                "max_total_candidate_chars": 511,
+            },
+            "exceeds the total character cap",
+        ),
+        (
+            {"candidate_k": 2, "output_k": 1, "bm25_rank_weight": -0.1},
+            "between zero and one",
+        ),
+    ]
+    for kwargs, message in invalid_cases:
+        with pytest.raises(ValueError, match=message):
+            LongMemEvalLLMReranker(client, provider, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_reranker_skips_model_call_for_single_candidate() -> None:
+    question = LongMemEvalQuestion(
+        question_id="q-single-candidate",
+        question_type="single",
+        question="question",
+        sessions=(LongMemEvalSession("a", "d1", "alpha", "User: alpha"),),
+        answer_session_ids=frozenset({"a"}),
+    )
+    client = FakeLLMClient(responses=[])
+    reranker = LongMemEvalLLMReranker(
+        client,
+        ProviderConfig(kind="fake", model="test"),
+        candidate_k=1,
+        output_k=1,
+        max_candidate_chars=256,
+        max_total_candidate_chars=256,
+    )
+
+    outcome = await reranker.rerank(question, ("a",))
+
+    assert outcome.ranking == ("a",)
+    assert outcome.attempted is False
+    assert outcome.fusion_allowlist_guard_passed is True
+    assert client.calls == []
+
+
+def test_retrieval_metric_and_text_boundaries_fail_closed() -> None:
+    with pytest.raises(ValueError, match="at least one correct session"):
+        retrieval_metrics_for_ranking(("a",), frozenset())
+    with pytest.raises(ValueError, match="contains no correct session"):
+        retrieval_metrics_for_ranking(("a",), frozenset({"missing"}))
+    with pytest.raises(ValueError, match="text bound is too small"):
+        bound_candidate_text("text", 31)
+    with pytest.raises(ValueError, match="unique opaque document IDs"):
+        fuse_rankings(("a", "a"), ("a", "a"), bm25_rank_weight=0.4)
+
+
 def test_rerank_parser_rejects_unknown_and_duplicate_ids() -> None:
     assert (
         parse_candidate_ranking(

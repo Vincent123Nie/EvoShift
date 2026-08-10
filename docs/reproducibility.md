@@ -114,6 +114,30 @@ The full matrix makes paid remote requests. Inject credentials and reverse
 proxy settings only through the documented environment variables. Generated
 source caches and run artifacts remain Git-ignored.
 
+The v1 short live-model freeze is the completed 20-run clean subset at
+`runs/sweeps/20260805T060325Z`: four methods, seeds `[11,22,33,44,55]`,
+`phase_size=8`, and schedule `[v1,v2]`. Its provenance and dirty-worktree
+limitation are documented in `docs/experiment_policyshift_v1_frozen.md`. Do
+not confuse that short freeze with the larger 80-run specification above.
+
+Pull and verify LongMemEval, run the full offline BM25 baseline, and reproduce
+the frozen guarded rerank screen with cache disabled:
+
+```bash
+evoshift data pull longmemeval
+evoshift benchmark retrieval-eval --method bm25
+evoshift benchmark retrieval-eval \
+  --method bm25-llm-rerank-fused \
+  --config configs/models/gateway_gpt56.yaml \
+  --max-per-type 2 --candidate-k 20 --output-k 10 \
+  --bm25-rank-weight 0.4 --concurrency 4 \
+  --set storage.cache_enabled=false
+```
+
+The exact clean run paths, commit, config hash, dataset hash, question
+selection, paired intervals, fallback count, and provider usage are recorded
+in `docs/experiment_longmemeval_selective_rank_fusion.md`.
+
 For repeated-seed clean, noise-only, attack-only, and combined corruption
 comparisons:
 

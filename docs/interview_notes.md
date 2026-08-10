@@ -299,41 +299,42 @@ framework.
 Calling these out demonstrates control of the research problem. Follow each
 with the metric or experiment that would test it.
 
-## Ablation table to prepare
+## Artifact-backed comparison to discuss
 
-Do not fill this table until the run artifacts exist.
+The short public-source-derived PolicyShift live freeze used `gpt-5.6`, five
+paired seeds, and 16 episodes per seed. Its historical manifests are dirty, so
+present it as engineering evidence and a negative result, not a publication
+table. Exact provenance is in `docs/experiment_policyshift_v1_frozen.md`.
 
-| Variant | Overall | Post-shift gain | Recovery steps | Protected regression | Tokens/task | Promotions |
+| Method | Score | Changed success | Invariant retention | Premature update | Requests | Tokens |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Static | TBD | TBD | TBD | TBD | TBD | 0 |
-| Self-Refine | TBD | TBD | TBD | TBD | TBD | 0 |
-| Unverified Reflexion | TBD | TBD | TBD | TBD | TBD | TBD |
-| VERA without drift gate | TBD | TBD | TBD | TBD | TBD | TBD |
-| VERA without protected replay | TBD | TBD | TBD | TBD | TBD | TBD |
-| VERA without dynamic trust | TBD | TBD | TBD | TBD | TBD | TBD |
-| VERA without future audit | TBD | TBD | TBD | TBD | TBD | TBD |
-| VERA with symmetric future stopping | TBD | TBD | TBD | TBD | TBD | TBD |
-| VERA without active causal governance | TBD | TBD | TBD | TBD | TBD | TBD |
-| VERA with eager predecessor restoration | TBD | TBD | TBD | TBD | TBD | TBD |
-| Full VERA | TBD | TBD | TBD | TBD | TBD | TBD |
+| Static | 0.5875 | 0.5625 | 0.6402 | 0.8333 | 16.0 | 9,576.8 |
+| Reflexion-style | 0.7000 | 0.8750 | 0.6962 | 0.4167 | 20.8 | 19,805.4 |
+| Replay-only | 0.6375 | 0.5000 | 0.6965 | 0.6944 | 69.4 | 51,395.2 |
+| Full EvoShift | 0.5875 | 0.5000 | 0.6412 | 0.6944 | 20.4 | 13,566.6 |
+
+The interview-worthy point is not that Full won; it did not. Dynamic trust
+protected against first contradictions but adapted too slowly on sparse
+contexts. Replay-only exposed the opposite failure by spending 69.4 requests
+without a score gain. This motivates a change-point posterior or confidence
+sequence, with matched false-alarm and safety gates.
 
 Useful hyperparameter sensitivity plots include replay window, `top_k`,
 exploration weight, Page-Hinkley threshold, minimum gain, CI lower-bound gate,
 protected regression tolerance, trust confirmation count, and future-audit
 minimum/maximum observations.
 
-## Resume bullet template
+## Resume bullet
 
-Use placeholders until measured:
-
-> Built EvoShift, an API-only self-evolving memory Agent with typed procedural
-> memories, same-source temporal trust, Page-Hinkley drift detection, BM25 +
-> online utility/UCB + MMR retrieval, replay-to-probation admission, later
-> admission audit, continuous exact-version active-memory audit, and SQLite
-> rollback/supersession; on
-> `[pinned benchmark]` under the same `[model/budget]`,
-> improved `[metric]` by `[artifact-backed value]` while limiting protected
-> regression to `[value]` and adaptation overhead to `[tokens or dollars]`.
+> Built EvoShift, an API-only self-evolving memory Agent with typed/versioned
+> procedural memories, same-source temporal trust, drift detection, BM25 +
+> utility/UCB + MMR retrieval, paired replay admission, probation/future audit,
+> and exact-version retirement/reacquisition. Added pinned LongMemEval retrieval
+> evaluation: a guarded BM25/LLM rank fusion improved NDCG-any@10 by 0.158 on a
+> frozen 12-question `gpt-5.6` mechanism screen with a positive paired 95% CI,
+> while preserving exact BM25 fallback. Also retained a five-seed public-source
+> PolicyShift failure showing Full did not beat Reflexion, and traced the gap to
+> conservative cold-start trust.
 
 Do not write “SOTA,” a percentage, or a latency claim until the exact run IDs,
 configuration hashes, dataset hashes, and comparison artifact can be produced
@@ -354,8 +355,9 @@ during the interview.
 7. Extend one-memory leave-out to bounded interaction attribution for multiple
    simultaneously applied memories.
 8. Calibrate LLM graders against rule metrics and a small human-labeled set.
-9. Evaluate on pinned BBH streams and at least one public long-term memory
-   benchmark with identical model/budget baselines.
+9. Extend the completed pinned LongMemEval retrieval track to same-reader
+   downstream QA and LongMemEval-V2 temporal scoring with identical
+   model/budget baselines.
 10. Add a multi-tenant storage/cache boundary before calling the runtime
    production-ready.
 
