@@ -379,6 +379,118 @@ def test_dynamic_feedback_trust_can_be_disabled_by_algorithm_control() -> None:
     assert model.snapshot()["dynamic_enabled"] is False
 
 
+def test_posterior_gate_uses_source_lower_bound_for_trusted_cold_start() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.50,
+            feedback_source_trust={"portal": 0.90},
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_posterior_gate_enabled=True,
+            dynamic_feedback_cold_start_trust=0.40,
+        )
+    )
+
+    trusted = BenchmarkSample(
+        sample_id="trusted",
+        prompt="case",
+        reference="hidden",
+        metadata={
+            "feedback_source": "portal",
+            "feedback_context": "rare-context",
+            "feedback_reference": "ALLOW",
+        },
+    )
+    unknown = trusted.model_copy(
+        update={"sample_id": "unknown", "metadata": {"feedback_context": "other"}}
+    )
+
+    trusted_before = model.pre_predict(trusted)
+    unknown_before = model.pre_predict(unknown)
+    trusted_after = model.observe_feedback(trusted, episode_index=0)
+
+    assert trusted_before.trust > 0.60
+    assert trusted_before.reason == "dynamic_pre_predict_cold_start_posterior_lcb"
+    assert trusted_after.trust > 0.60
+    assert trusted_after.source_posterior_lower_bound > 0.60
+    assert unknown_before.trust == 0.40
+    assert unknown_before.reason == "dynamic_pre_predict_cold_start"
+
+
+def test_posterior_gate_calibrates_change_confirmation_and_keeps_first_conflict_quarantined() -> (
+    None
+):
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.90,
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_posterior_gate_enabled=True,
+            dynamic_feedback_min_consistent_observations=2,
+            dynamic_feedback_change_prior_probability=0.20,
+            dynamic_feedback_change_null_repeat_probability=0.20,
+            dynamic_feedback_change_alternative_repeat_probability=0.80,
+            dynamic_feedback_change_posterior_threshold=0.80,
+        )
+    )
+
+    def sample(label: str, sample_id: str) -> BenchmarkSample:
+        return BenchmarkSample(
+            sample_id=sample_id,
+            prompt="case",
+            reference="hidden",
+            metadata={
+                "feedback_source": "portal",
+                "feedback_context": "case",
+                "feedback_reference": label,
+            },
+        )
+
+    model.observe_feedback(sample("DENY", "one"), episode_index=0)
+    model.observe_feedback(sample("DENY", "two"), episode_index=1)
+    first_change = model.observe_feedback(sample("ALLOW", "three"), episode_index=2)
+    second_change = model.observe_feedback(sample("ALLOW", "four"), episode_index=3)
+
+    assert first_change.reason == "dynamic_pending_change"
+    assert first_change.trust == 0.10
+    assert first_change.change_posterior == pytest.approx(0.50)
+    assert second_change.reason == "dynamic_confirmed_change_posterior"
+    assert second_change.change_posterior == 0.0
+    assert second_change.trust > 0.60
+    assert model.snapshot()["posterior_confirmed_changes"] == 1
+
+
+def test_posterior_gate_still_requires_temporal_span() -> None:
+    model = FeedbackTrustModel(
+        EvolutionConfig(
+            feedback_default_trust=0.90,
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_posterior_gate_enabled=True,
+            dynamic_feedback_min_consistent_observations=2,
+            dynamic_feedback_change_min_span=2,
+        )
+    )
+
+    def sample(label: str, sample_id: str) -> BenchmarkSample:
+        return BenchmarkSample(
+            sample_id=sample_id,
+            prompt="case",
+            reference="hidden",
+            metadata={
+                "feedback_source": "portal",
+                "feedback_context": "case",
+                "feedback_reference": label,
+            },
+        )
+
+    model.observe_feedback(sample("DENY", "one"), episode_index=0)
+    model.observe_feedback(sample("DENY", "two"), episode_index=1)
+    model.observe_feedback(sample("ALLOW", "three"), episode_index=10)
+    deferred = model.observe_feedback(sample("ALLOW", "four"), episode_index=11)
+
+    assert deferred.reason == "dynamic_pending_change_span"
+    assert deferred.trust == 0.10
+    assert deferred.change_posterior == pytest.approx(0.80)
+
+
 def test_shadow_candidate_config_enforces_verified_admission_invariants() -> None:
     with pytest.raises(ValidationError, match="requires future audit"):
         EvolutionConfig(shadow_candidate_enabled=True)

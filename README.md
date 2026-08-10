@@ -182,6 +182,12 @@ The public-source-derived PolicyShift live comparison is recorded in
 it has five paired seeds across Static, Reflexion, Replay-only, and Full
 EvoShift, but its historical manifests are explicitly marked dirty.
 
+The pre-registered cold-start follow-up is recorded in
+[`experiment_change_point_confidence_gate.md`](docs/experiment_change_point_confidence_gate.md).
+Its candidate sweep specs are under
+`configs/sweeps/tau3_retail_policy_shift_live_change_point_*.yaml`; no candidate
+is enabled by default until the frozen adoption gates pass.
+
 ## Frozen held-out audit
 
 After a completed EvoShift run, evaluate its final state on unseen BBH task

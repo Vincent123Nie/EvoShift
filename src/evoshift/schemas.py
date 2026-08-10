@@ -255,6 +255,19 @@ class Episode(StrictModel):
     feedback_trust: float = Field(default=1.0, ge=0.0, le=1.0)
     feedback_eligible: bool = True
     feedback_trust_reason: str = "default_trust"
+    pre_predict_feedback_trust: float = Field(default=1.0, ge=0.0, le=1.0)
+    pre_predict_feedback_reason: str = ""
+    pre_predict_feedback_signal: str = ""
+    pre_predict_context_observations: int = Field(default=0, ge=0)
+    pre_predict_pending_observations: int = Field(default=0, ge=0)
+    feedback_source: str = ""
+    feedback_context: str = ""
+    feedback_signal: str = ""
+    feedback_source_posterior_mean: float = Field(default=1.0, ge=0.0, le=1.0)
+    feedback_source_posterior_lower_bound: float = Field(default=0.0, ge=0.0, le=1.0)
+    feedback_change_posterior: float = Field(default=0.0, ge=0.0, le=1.0)
+    feedback_context_observations: int = Field(default=0, ge=0)
+    feedback_pending_observations: int = Field(default=0, ge=0)
     selected_memory_ids: List[str] = Field(default_factory=list)
     rerank_attempted: bool = False
     rerank_applied: bool = False

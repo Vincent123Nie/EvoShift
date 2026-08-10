@@ -69,6 +69,12 @@ evolution:
   dynamic_feedback_cold_start_trust: 0.40
   dynamic_feedback_conflict_trust: 0.10
   dynamic_feedback_prior_strength: 8.0
+  dynamic_feedback_posterior_gate_enabled: false
+  dynamic_feedback_cold_start_lcb_z: 1.2815515655
+  dynamic_feedback_change_prior_probability: 0.20
+  dynamic_feedback_change_null_repeat_probability: 0.20
+  dynamic_feedback_change_alternative_repeat_probability: 0.80
+  dynamic_feedback_change_posterior_threshold: 0.80
   min_feedback_trust_for_drift: 0.60
   min_feedback_trust_for_memory_update: 0.60
   min_feedback_trust_for_candidate: 0.60

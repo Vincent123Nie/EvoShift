@@ -1,0 +1,21 @@
+base_config: configs/experiments/tau3_retail_policy_shift_live.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - evoshift
+grid:
+  benchmark.phase_size: [8]
+  benchmark.policy_schedule: [[v1, v2]]
+  benchmark.feedback_noise_rate: [0.0]
+  benchmark.feedback_attack_burst_length: [0]
+variants:
+  current_full:
+    evolution.dynamic_feedback_posterior_gate_enabled: false
+  change_point_posterior:
+    evolution.dynamic_feedback_posterior_gate_enabled: true
+    evolution.dynamic_feedback_cold_start_lcb_z: 1.2815515655
+    evolution.dynamic_feedback_change_prior_probability: 0.20
+    evolution.dynamic_feedback_change_null_repeat_probability: 0.20
+    evolution.dynamic_feedback_change_alternative_repeat_probability: 0.80
+    evolution.dynamic_feedback_change_posterior_threshold: 0.80
+# Confirmatory common-response comparison: 2 variants * 5 paired seeds = 10 runs.
+max_runs: 10

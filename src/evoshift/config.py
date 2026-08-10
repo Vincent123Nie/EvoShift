@@ -87,6 +87,24 @@ class EvolutionConfig(ConfigModel):
     dynamic_feedback_conflict_trust: float = Field(default=0.10, ge=0.0, le=1.0)
     dynamic_feedback_prior_strength: float = Field(default=8.0, ge=0.0, le=1000.0)
     dynamic_feedback_max_contexts: int = Field(default=10000, ge=1, le=1000000)
+    dynamic_feedback_posterior_gate_enabled: bool = False
+    dynamic_feedback_cold_start_lcb_z: float = Field(default=1.2815515655, ge=0.0, le=5.0)
+    dynamic_feedback_change_prior_probability: float = Field(default=0.20, gt=0.0, lt=1.0)
+    dynamic_feedback_change_null_repeat_probability: float = Field(
+        default=0.20,
+        gt=0.0,
+        lt=1.0,
+    )
+    dynamic_feedback_change_alternative_repeat_probability: float = Field(
+        default=0.80,
+        gt=0.0,
+        lt=1.0,
+    )
+    dynamic_feedback_change_posterior_threshold: float = Field(
+        default=0.80,
+        gt=0.0,
+        lt=1.0,
+    )
     min_feedback_trust_for_drift: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_memory_update: float = Field(default=0.60, ge=0.0, le=1.0)
     min_feedback_trust_for_candidate: float = Field(default=0.60, ge=0.0, le=1.0)
@@ -185,6 +203,15 @@ class EvolutionConfig(ConfigModel):
             raise ValueError(
                 "dynamic_feedback_context_field must use the typed learner-visible "
                 "feedback_context field"
+            )
+        if self.dynamic_feedback_posterior_gate_enabled and not self.dynamic_feedback_trust_enabled:
+            raise ValueError("dynamic feedback posterior gate requires dynamic feedback trust")
+        if (
+            self.dynamic_feedback_change_alternative_repeat_probability
+            <= self.dynamic_feedback_change_null_repeat_probability
+        ):
+            raise ValueError(
+                "change-point alternative repeat probability must exceed the null probability"
             )
         if (
             self.replay_historical_context_anchors_enabled

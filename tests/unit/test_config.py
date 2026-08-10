@@ -120,3 +120,18 @@ def test_historical_replay_anchors_require_at_least_one_exact_quota_slot() -> No
 def test_dynamic_feedback_context_rejects_oracle_metadata_fields(hidden_field: str) -> None:
     with pytest.raises(ValueError, match="typed learner-visible feedback_context"):
         EvolutionConfig(dynamic_feedback_context_field=hidden_field)
+
+
+def test_change_point_posterior_gate_requires_dynamic_feedback() -> None:
+    with pytest.raises(ValidationError, match="requires dynamic feedback trust"):
+        EvolutionConfig(dynamic_feedback_posterior_gate_enabled=True)
+
+
+def test_change_point_posterior_gate_requires_separating_likelihoods() -> None:
+    with pytest.raises(ValidationError, match="alternative repeat probability"):
+        EvolutionConfig(
+            dynamic_feedback_trust_enabled=True,
+            dynamic_feedback_posterior_gate_enabled=True,
+            dynamic_feedback_change_null_repeat_probability=0.80,
+            dynamic_feedback_change_alternative_repeat_probability=0.20,
+        )

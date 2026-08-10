@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
@@ -19,6 +20,8 @@ class FeedbackAssessment:
     source_posterior_mean: float
     context_observations: int
     pending_observations: int
+    source_posterior_lower_bound: float = 0.0
+    change_posterior: float = 0.0
 
 
 @dataclass
@@ -81,11 +84,20 @@ class FeedbackTrustModel:
         self.conflict_trust = config.dynamic_feedback_conflict_trust
         self.prior_strength = config.dynamic_feedback_prior_strength
         self.max_contexts = config.dynamic_feedback_max_contexts
+        self.posterior_gate_enabled = config.dynamic_feedback_posterior_gate_enabled
+        self.cold_start_lcb_z = config.dynamic_feedback_cold_start_lcb_z
+        self.change_prior_probability = config.dynamic_feedback_change_prior_probability
+        self.change_null_repeat_probability = config.dynamic_feedback_change_null_repeat_probability
+        self.change_alternative_repeat_probability = (
+            config.dynamic_feedback_change_alternative_repeat_probability
+        )
+        self.change_posterior_threshold = config.dynamic_feedback_change_posterior_threshold
         self._sources: dict[str, _SourceState] = {}
         self._contexts: OrderedDict[tuple[str, str], _ContextState] = OrderedDict()
         self.confirmed_changes = 0
         self.temporally_deferred_changes = 0
         self.low_trust_observations = 0
+        self.posterior_confirmed_changes = 0
 
     def pre_predict(self, sample: BenchmarkSample) -> FeedbackAssessment:
         """Return decision-time trust using only observations from prior episodes."""
@@ -109,14 +121,26 @@ class FeedbackTrustModel:
         source_mean = (
             source_state.mean if source_state is not None else self._new_source_state(prior).mean
         )
+        source_lower_bound = self._source_lower_bound(
+            source_state or self._new_source_state(prior),
+        )
         context_state = self._contexts.get((source, context))
         if context_state is None or not context_state.committed_signal:
+            cold_start_trust = (
+                self._cold_start_trust(source_lower_bound)
+                if self.posterior_gate_enabled
+                else min(source_mean, self.cold_start_trust)
+            )
             return FeedbackAssessment(
                 source=source,
                 context=context,
                 signal=context_state.pending_signal if context_state is not None else "",
-                trust=min(source_mean, self.cold_start_trust),
-                reason="dynamic_pre_predict_cold_start",
+                trust=cold_start_trust,
+                reason=(
+                    "dynamic_pre_predict_cold_start_posterior_lcb"
+                    if self.posterior_gate_enabled and cold_start_trust > self.cold_start_trust
+                    else "dynamic_pre_predict_cold_start"
+                ),
                 source_posterior_mean=source_mean,
                 context_observations=(
                     context_state.total_observations if context_state is not None else 0
@@ -124,8 +148,15 @@ class FeedbackTrustModel:
                 pending_observations=(
                     context_state.pending_observations if context_state is not None else 0
                 ),
+                source_posterior_lower_bound=source_lower_bound,
+                change_posterior=(
+                    self._change_posterior(context_state.pending_observations)
+                    if context_state is not None
+                    else 0.0
+                ),
             )
         if context_state.pending_observations:
+            change_posterior = self._change_posterior(context_state.pending_observations)
             return FeedbackAssessment(
                 source=source,
                 context=context,
@@ -135,6 +166,8 @@ class FeedbackTrustModel:
                 source_posterior_mean=source_mean,
                 context_observations=context_state.total_observations,
                 pending_observations=context_state.pending_observations,
+                source_posterior_lower_bound=source_lower_bound,
+                change_posterior=change_posterior,
             )
         return FeedbackAssessment(
             source=source,
@@ -145,6 +178,7 @@ class FeedbackTrustModel:
             source_posterior_mean=source_mean,
             context_observations=context_state.total_observations,
             pending_observations=0,
+            source_posterior_lower_bound=source_lower_bound,
         )
 
     def observe_feedback(
@@ -186,6 +220,8 @@ class FeedbackTrustModel:
         )
         if trust < prior:
             self.low_trust_observations += 1
+        source_lower_bound = self._source_lower_bound(source_state)
+        change_posterior = self._change_posterior(context_state.pending_observations)
         return FeedbackAssessment(
             source=source,
             context=context,
@@ -195,6 +231,8 @@ class FeedbackTrustModel:
             source_posterior_mean=source_state.mean,
             context_observations=context_state.total_observations,
             pending_observations=context_state.pending_observations,
+            source_posterior_lower_bound=source_lower_bound,
+            change_posterior=change_posterior,
         )
 
     def pre_feedback_assessment(self, sample: BenchmarkSample) -> FeedbackAssessment:
@@ -222,10 +260,17 @@ class FeedbackTrustModel:
         return {
             "dynamic_enabled": self.dynamic_enabled,
             "change_min_span": self.change_min_span,
+            "posterior_gate_enabled": self.posterior_gate_enabled,
+            "cold_start_lcb_z": self.cold_start_lcb_z,
+            "change_prior_probability": self.change_prior_probability,
+            "change_null_repeat_probability": self.change_null_repeat_probability,
+            "change_alternative_repeat_probability": (self.change_alternative_repeat_probability),
+            "change_posterior_threshold": self.change_posterior_threshold,
             "tracked_sources": len(self._sources),
             "tracked_contexts": len(self._contexts),
             "confirmed_context_changes": self.confirmed_changes,
             "temporally_deferred_changes": self.temporally_deferred_changes,
+            "posterior_confirmed_changes": self.posterior_confirmed_changes,
             "low_trust_observations": self.low_trust_observations,
             "source_posteriors": {
                 source: {
@@ -275,7 +320,19 @@ class FeedbackTrustModel:
                 source.alpha += context.pending_observations
                 self._clear_pending(context)
                 return source.mean, "dynamic_initial_consensus"
-            return min(source.mean, self.cold_start_trust), "dynamic_cold_start"
+            cold_start_trust = (
+                self._cold_start_trust(self._source_lower_bound(source))
+                if self.posterior_gate_enabled
+                else min(source.mean, self.cold_start_trust)
+            )
+            return (
+                cold_start_trust,
+                (
+                    "dynamic_cold_start_posterior_lcb"
+                    if self.posterior_gate_enabled
+                    else "dynamic_cold_start"
+                ),
+            )
 
         if signal == context.committed_signal:
             if context.pending_observations:
@@ -286,7 +343,11 @@ class FeedbackTrustModel:
             return source.mean, "dynamic_consistent"
 
         self._advance_pending(context, signal, episode_index=episode_index)
-        if context.pending_observations >= self.min_consistent:
+        change_posterior = self._change_posterior(context.pending_observations)
+        posterior_ready = (
+            not self.posterior_gate_enabled or change_posterior >= self.change_posterior_threshold
+        )
+        if context.pending_observations >= self.min_consistent and posterior_ready:
             first_index = context.pending_first_index
             change_span = (
                 episode_index - first_index
@@ -301,8 +362,35 @@ class FeedbackTrustModel:
             source.alpha += context.pending_observations
             self._clear_pending(context)
             self.confirmed_changes += 1
+            if self.posterior_gate_enabled:
+                self.posterior_confirmed_changes += 1
+                return source.mean, "dynamic_confirmed_change_posterior"
             return source.mean, "dynamic_confirmed_change"
         return min(source.mean, self.conflict_trust), "dynamic_pending_change"
+
+    def _source_lower_bound(self, source: _SourceState) -> float:
+        """Conservative source-trust bound used only by the opt-in gate."""
+
+        if not self.posterior_gate_enabled:
+            return source.mean
+        total = source.alpha + source.beta
+        variance: float = source.alpha * source.beta / (total * total * (total + 1.0))
+        return max(0.0, min(1.0, source.mean - self.cold_start_lcb_z * math.sqrt(variance)))
+
+    def _cold_start_trust(self, source_lower_bound: float) -> float:
+        return min(1.0, max(self.cold_start_trust, source_lower_bound))
+
+    def _change_posterior(self, repetitions: int) -> float:
+        if repetitions <= 0:
+            return 0.0
+        if not self.posterior_gate_enabled:
+            return 0.0
+        prior_odds = self.change_prior_probability / (1.0 - self.change_prior_probability)
+        likelihood_ratio = (
+            self.change_alternative_repeat_probability / self.change_null_repeat_probability
+        ) ** repetitions
+        odds = prior_odds * likelihood_ratio
+        return odds / (1.0 + odds)
 
     @staticmethod
     def _advance_pending(
