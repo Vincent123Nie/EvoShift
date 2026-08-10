@@ -184,9 +184,8 @@ EvoShift, but its historical manifests are explicitly marked dirty.
 
 The pre-registered cold-start follow-up is recorded in
 [`experiment_change_point_confidence_gate.md`](docs/experiment_change_point_confidence_gate.md).
-Its candidate sweep specs are under
-`configs/sweeps/tau3_retail_policy_shift_live_change_point_*.yaml`; no candidate
-is enabled by default until the frozen adoption gates pass.
+Its live mini failed the primary and resource adoption gates, so the candidate
+remains default-off on its experiment branch and is not part of `main`.
 
 ## Frozen held-out audit
 
