@@ -340,6 +340,9 @@ dataset hash, and comparison artifact.
 - [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)
 - [Critic-paraphrase fixture preregistration](docs/experiment_critic_paraphrase_fixture.md)
 - [Critic-paraphrase fixture result](docs/results_critic_paraphrase_fixture.md)
+- [Real-model critic-paraphrase mini preregistration](docs/experiment_critic_paraphrase_live_mini.md)
+- [Real-model critic-paraphrase initial stop](docs/results_critic_paraphrase_live_mini.md)
+- [Real-model critic-paraphrase budget amendment](docs/experiment_critic_paraphrase_live_mini_v2.md)
 
 ## Security
 
