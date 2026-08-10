@@ -314,6 +314,7 @@ dataset hash, and comparison artifact.
 - [Dynamic-trust and future-audit experiment](docs/experiment_dynamic_trust_conflict_memory.md)
 - [Active-memory causal-governance experiment](docs/experiment_causal_memory_governance.md)
 - [Allowlisted LLM reranking experiment](docs/experiment_llm_rerank_paraphrase.md)
+- [Public-source policy-drift experiment](docs/experiment_public_policy_drift_real_model.md)
 - [Public LongMemEval retrieval experiment](docs/experiment_longmemeval_public_retrieval.md)
 - [Selective LongMemEval rank-fusion confirmation](docs/experiment_longmemeval_selective_rank_fusion.md)
 - [PolicyShift v1 frozen live comparison](docs/experiment_policyshift_v1_frozen.md)
