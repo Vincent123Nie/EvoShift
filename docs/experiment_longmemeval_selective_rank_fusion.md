@@ -64,6 +64,13 @@ The manifest reports `git_dirty=false`. The selection was the frozen first two
 non-abstention questions from each of the six question types (`n=12`), and the
 cache was disabled.
 
+The exact paired question IDs, in dataset order, are:
+
+```text
+e47becba, 118b2229, 0a995998, 6d550036, 8a2466db, 06878be2,
+gpt4_59149c77, gpt4_f49edff3, 6a1eabeb, 6aeb4375, 7161e7e2, c4f10528
+```
+
 | System | Recall-all@5 | Recall-all@10 | NDCG-any@5 | NDCG-any@10 | MRR |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | BM25 | 0.8333 | 0.8333 | 0.7471 | 0.7471 | 0.6931 |
