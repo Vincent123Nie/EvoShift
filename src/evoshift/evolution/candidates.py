@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterable
 
 from evoshift.schemas import MemoryItem
@@ -22,9 +22,42 @@ def candidate_signature(candidate: MemoryItem) -> str:
     return f"candidate-{digest}"
 
 
+def candidate_cluster_signature(candidate: MemoryItem) -> str:
+    """Return the opaque, code-derived observable anchor for a candidate.
+
+    Older/manual candidates do not carry an anchor; using their exact signature
+    preserves the pre-existing behavior while keeping the hierarchical path
+    opt-in and fail-closed.
+    """
+
+    return candidate.evidence_cluster_key or candidate_signature(candidate)
+
+
+def observable_candidate_cluster_key(
+    *,
+    domain: str,
+    feedback_source: str,
+    feedback_context: str,
+    feedback_signal: str,
+) -> str:
+    """Hash only learner-visible feedback anchors into an opaque key."""
+
+    payload = {
+        "domain": " ".join(str(domain).casefold().split()),
+        "feedback_source": " ".join(str(feedback_source).casefold().split()) or "unspecified",
+        "feedback_context": " ".join(str(feedback_context).casefold().split()),
+        "feedback_signal": " ".join(str(feedback_signal).casefold().split()),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"cluster-{digest}"
+
+
 @dataclass
 class CandidateEvidence:
     signature: str
+    cluster_signature: str
     candidate: MemoryItem
     observation_count: int
     first_episode_index: int
@@ -59,6 +92,22 @@ class CandidateEvidence:
         return self.shadow_observation_count > 0
 
 
+@dataclass
+class CandidateClusterEvidence:
+    signature: str
+    first_episode_index: int
+    last_episode_index: int
+    shadow_observation_count: int = 0
+    shadow_e_value: float = 1.0
+    shadow_eprocess_ready: bool = False
+    shadow_eprocess_opportunities_since_validation: int = 0
+    shadow_eprocess_crossings: int = 0
+    shadow_eprocess_resets: int = 0
+    accepted: bool = False
+    probationary: bool = False
+    member_signatures: set[str] = field(default_factory=set)
+
+
 class CandidateEvidencePool:
     """Aggregate identical proposals and schedule bounded replay attempts."""
 
@@ -73,6 +122,7 @@ class CandidateEvidencePool:
         shadow_eprocess_null_match_probability: float = 0.25,
         shadow_eprocess_alternative_match_probability: float = 0.75,
         shadow_eprocess_alpha: float = 0.05,
+        shadow_hierarchical_eprocess_enabled: bool = False,
     ) -> None:
         if not 0.0 < shadow_eprocess_alpha < 1.0:
             raise ValueError("shadow e-process alpha must be in (0, 1)")
@@ -90,6 +140,7 @@ class CandidateEvidencePool:
         self.min_new_observations = min_new_observations
         self.cooldown_episodes = cooldown_episodes
         self.shadow_eprocess_enabled = shadow_eprocess_enabled
+        self.shadow_hierarchical_eprocess_enabled = shadow_hierarchical_eprocess_enabled
         self.shadow_eprocess_null_match_probability = shadow_eprocess_null_match_probability
         self.shadow_eprocess_alternative_match_probability = (
             shadow_eprocess_alternative_match_probability
@@ -97,13 +148,28 @@ class CandidateEvidencePool:
         self.shadow_eprocess_threshold = 1.0 / shadow_eprocess_alpha
         self.shadow_eprocess_opportunities = 0
         self.shadow_eprocess_crossings = 0
+        self.shadow_cluster_eprocess_opportunities = 0
+        self.shadow_cluster_eprocess_crossings = 0
         self._items: Dict[str, CandidateEvidence] = {}
+        self._clusters: Dict[str, CandidateClusterEvidence] = {}
 
     def seed_accepted(self, memories: Iterable[MemoryItem]) -> None:
         for memory in memories:
             signature = candidate_signature(memory)
+            cluster_signature = candidate_cluster_signature(memory)
+            cluster = self._clusters.setdefault(
+                cluster_signature,
+                CandidateClusterEvidence(
+                    signature=cluster_signature,
+                    first_episode_index=-1,
+                    last_episode_index=-1,
+                    accepted=True,
+                ),
+            )
+            cluster.member_signatures.add(signature)
             self._items[signature] = CandidateEvidence(
                 signature=signature,
+                cluster_signature=cluster_signature,
                 candidate=memory,
                 observation_count=max(1, len(memory.provenance_episode_ids)),
                 first_episode_index=-1,
@@ -127,14 +193,40 @@ class CandidateEvidencePool:
         if not 0.0 <= trust <= 1.0:
             raise ValueError("candidate evidence trust must be in [0, 1]")
         signature = candidate_signature(candidate)
+        cluster_signature = candidate_cluster_signature(candidate)
+        cluster = self._clusters.get(cluster_signature)
+        if cluster is None:
+            cluster = CandidateClusterEvidence(
+                signature=cluster_signature,
+                first_episode_index=episode_index,
+                last_episode_index=episode_index,
+            )
+            self._clusters[cluster_signature] = cluster
+        cluster.member_signatures.add(signature)
+        cluster.last_episode_index = episode_index
         existing = self._items.get(signature)
         if not trusted and self.shadow_eprocess_enabled:
             for item in self._items.values():
                 if item.has_shadow_evidence and not item.accepted and not item.probationary:
                     self._update_shadow_eprocess(item, matched=item.signature == signature)
+            if self.shadow_hierarchical_eprocess_enabled:
+                for cluster_item in self._clusters.values():
+                    if (
+                        cluster_item.shadow_observation_count > 0
+                        and not cluster_item.accepted
+                        and not cluster_item.probationary
+                    ):
+                        self._update_cluster_eprocess(
+                            cluster_item,
+                            matched=cluster_item.signature == cluster_signature,
+                        )
+                cluster.shadow_observation_count += 1
+            else:
+                cluster.shadow_observation_count += 1
         if existing is None:
             evidence = CandidateEvidence(
                 signature=signature,
+                cluster_signature=cluster_signature,
                 candidate=candidate,
                 observation_count=1,
                 first_episode_index=episode_index,
@@ -200,12 +292,23 @@ class CandidateEvidencePool:
             return False, "duplicate_of_active_memory"
         if evidence.probationary:
             return False, "candidate_in_probation"
+        cluster = self._clusters.get(evidence.cluster_signature)
+        if not trusted and cluster is not None and cluster.accepted:
+            return False, "cluster_duplicate_of_active_memory"
+        if not trusted and cluster is not None and cluster.probationary:
+            return False, "cluster_in_probation"
         if evidence.observation_count < self.min_observations:
             return False, "insufficient_observations"
         if evidence.trusted_observation_count < self.min_trusted_observations:
             return False, "insufficient_trusted_observations"
         if not trusted and self.shadow_eprocess_enabled and not evidence.shadow_eprocess_ready:
-            return False, "shadow_eprocess_below_threshold"
+            cluster_ready = (
+                self.shadow_hierarchical_eprocess_enabled
+                and cluster is not None
+                and cluster.shadow_eprocess_ready
+            )
+            if not cluster_ready:
+                return False, "shadow_eprocess_below_threshold"
         observation_count = (
             evidence.trusted_observation_count if trusted else evidence.shadow_observation_count
         )
@@ -249,6 +352,12 @@ class CandidateEvidencePool:
                 evidence.shadow_eprocess_ready = False
                 evidence.shadow_eprocess_opportunities_since_validation = 0
                 evidence.shadow_eprocess_resets += 1
+                cluster = self._clusters.get(evidence.cluster_signature)
+                if cluster is not None:
+                    cluster.shadow_e_value = 1.0
+                    cluster.shadow_eprocess_ready = False
+                    cluster.shadow_eprocess_opportunities_since_validation = 0
+                    cluster.shadow_eprocess_resets += 1
 
     def shadow_cooldown_would_block(
         self,
@@ -286,28 +395,102 @@ class CandidateEvidencePool:
             evidence.shadow_eprocess_crossings += 1
             self.shadow_eprocess_crossings += 1
 
-    @staticmethod
-    def mark_accepted(evidence: CandidateEvidence) -> None:
+    def _update_cluster_eprocess(
+        self,
+        evidence: CandidateClusterEvidence,
+        *,
+        matched: bool,
+    ) -> None:
+        if evidence.shadow_eprocess_ready:
+            return
+        previous = evidence.shadow_e_value
+        if matched:
+            multiplier = (
+                self.shadow_eprocess_alternative_match_probability
+                / self.shadow_eprocess_null_match_probability
+            )
+        else:
+            multiplier = (1.0 - self.shadow_eprocess_alternative_match_probability) / (
+                1.0 - self.shadow_eprocess_null_match_probability
+            )
+        evidence.shadow_e_value *= multiplier
+        evidence.shadow_eprocess_opportunities_since_validation += 1
+        self.shadow_cluster_eprocess_opportunities += 1
+        if previous < self.shadow_eprocess_threshold <= evidence.shadow_e_value:
+            evidence.shadow_eprocess_ready = True
+            evidence.shadow_eprocess_crossings += 1
+            self.shadow_cluster_eprocess_crossings += 1
+
+    def mark_accepted(self, evidence: CandidateEvidence) -> None:
         evidence.accepted = True
         evidence.probationary = False
+        self._set_cluster_state(evidence, accepted=True, probationary=False)
 
-    @staticmethod
-    def mark_probation(evidence: CandidateEvidence) -> None:
+    def mark_probation(self, evidence: CandidateEvidence) -> None:
         evidence.probationary = True
+        self._set_cluster_state(evidence, accepted=False, probationary=True)
 
-    @staticmethod
-    def mark_rejected(evidence: CandidateEvidence) -> None:
+    def mark_rejected(self, evidence: CandidateEvidence) -> None:
         evidence.accepted = False
         evidence.probationary = False
+        cluster = self._clusters.get(evidence.cluster_signature)
+        if cluster is not None and not any(
+            item.cluster_signature == evidence.cluster_signature
+            and (item.accepted or item.probationary)
+            for item in self._items.values()
+        ):
+            cluster.accepted = False
+            cluster.probationary = False
+
+    def _set_cluster_state(
+        self,
+        evidence: CandidateEvidence,
+        *,
+        accepted: bool,
+        probationary: bool,
+    ) -> None:
+        cluster = self._clusters.get(evidence.cluster_signature)
+        if cluster is not None:
+            cluster.accepted = accepted
+            cluster.probationary = probationary
 
     def mark_memory_retired(self, memory: MemoryItem) -> None:
         evidence = self._items.get(candidate_signature(memory))
         if evidence is not None:
             self.mark_rejected(evidence)
 
+    def cluster_snapshot(self) -> dict[str, object]:
+        return {
+            "count": len(self._clusters),
+            "shadow_eprocess_opportunities": self.shadow_cluster_eprocess_opportunities,
+            "shadow_eprocess_crossings": self.shadow_cluster_eprocess_crossings,
+            "clusters": {
+                key: {
+                    "opportunities": value.shadow_eprocess_opportunities_since_validation,
+                    "crossings": value.shadow_eprocess_crossings,
+                    "shadow_e_value": value.shadow_e_value,
+                    "ready": value.shadow_eprocess_ready,
+                    "members": sorted(value.member_signatures),
+                    "accepted": value.accepted,
+                    "probationary": value.probationary,
+                }
+                for key, value in sorted(self._clusters.items())
+            },
+        }
+
+    def cluster_evidence(self, signature: str) -> CandidateClusterEvidence | None:
+        return self._clusters.get(signature)
+
+    def cluster_e_value(self, signature: str) -> float | None:
+        evidence = self._clusters.get(signature)
+        return evidence.shadow_e_value if evidence is not None else None
+
 
 __all__ = [
+    "CandidateClusterEvidence",
     "CandidateEvidence",
     "CandidateEvidencePool",
+    "candidate_cluster_signature",
     "candidate_signature",
+    "observable_candidate_cluster_key",
 ]

@@ -120,3 +120,26 @@ def test_historical_replay_anchors_require_at_least_one_exact_quota_slot() -> No
 def test_dynamic_feedback_context_rejects_oracle_metadata_fields(hidden_field: str) -> None:
     with pytest.raises(ValueError, match="typed learner-visible feedback_context"):
         EvolutionConfig(dynamic_feedback_context_field=hidden_field)
+
+
+def test_hierarchical_shadow_eprocess_requires_exact_shadow_lane() -> None:
+    with pytest.raises(ValueError, match="requires shadow candidate admission"):
+        EvolutionConfig(shadow_hierarchical_eprocess_enabled=True)
+
+    with pytest.raises(ValueError, match="requires the exact shadow e-process"):
+        EvolutionConfig(
+            shadow_candidate_enabled=True,
+            future_audit_enabled=True,
+            shadow_hierarchical_eprocess_enabled=True,
+        )
+
+
+def test_hierarchical_shadow_eprocess_can_be_enabled_with_dependencies() -> None:
+    config = EvolutionConfig(
+        shadow_candidate_enabled=True,
+        future_audit_enabled=True,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+    )
+
+    assert config.shadow_hierarchical_eprocess_enabled is True

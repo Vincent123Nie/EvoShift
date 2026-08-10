@@ -1,4 +1,8 @@
-from evoshift.evolution import CandidateEvidencePool, candidate_signature
+from evoshift.evolution import (
+    CandidateEvidencePool,
+    candidate_cluster_signature,
+    candidate_signature,
+)
 from evoshift.schemas import MemoryItem, MemoryStatus
 
 
@@ -20,6 +24,24 @@ def _different_candidate(episode_id: str = "e-other") -> MemoryItem:
         trigger="Premium refund after day fourteen",
         scope="customer_support/refund_policy",
         directive="Approve premium refunds through day thirty.",
+        provenance_episode_ids=[episode_id],
+        source_domains=["customer_support/refund_policy"],
+        confidence=0.9,
+    )
+
+
+def _cluster_candidate(
+    episode_id: str,
+    *,
+    directive: str,
+    cluster: str = "cluster-observable-anchor",
+) -> MemoryItem:
+    return MemoryItem(
+        memory_id="",
+        trigger="Refund after day seven",
+        scope="customer_support/refund_policy",
+        directive=directive,
+        evidence_cluster_key=cluster,
         provenance_episode_ids=[episode_id],
         source_domains=["customer_support/refund_policy"],
         confidence=0.9,
@@ -196,3 +218,102 @@ def test_trusted_lane_bypasses_shadow_cooldown_and_uses_trusted_start_index() ->
     assert evidence.first_trusted_episode_index == 2
     assert pool.shadow_cooldown_would_block(evidence, 2) is True
     assert pool.readiness(evidence, 2, trusted=True) == (True, "ready")
+
+
+def test_hierarchical_shadow_eprocess_reuses_observable_cluster_across_wording() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=4,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+    )
+
+    first = pool.observe(
+        _cluster_candidate("c1", directive="Approve eligible refunds through day fourteen."),
+        1,
+        trust=0.1,
+        trusted=False,
+    )
+    second = pool.observe(
+        _cluster_candidate("c2", directive="Allow qualifying refunds until day fourteen."),
+        2,
+        trust=0.1,
+        trusted=False,
+    )
+    third = pool.observe(
+        _cluster_candidate("c3", directive="Grant valid refunds up to day fourteen."),
+        3,
+        trust=0.1,
+        trusted=False,
+    )
+    fourth = pool.observe(
+        _cluster_candidate("c4", directive="Honor eligible refunds before day fifteen."),
+        4,
+        trust=0.1,
+        trusted=False,
+    )
+
+    assert len({first.signature, second.signature, third.signature, fourth.signature}) == 4
+    assert len({first.cluster_signature, second.cluster_signature, third.cluster_signature}) == 1
+    assert candidate_cluster_signature(first.candidate) == "cluster-observable-anchor"
+    assert pool.shadow_cluster_eprocess_crossings == 1
+    assert fourth.shadow_eprocess_ready is False
+    assert pool.readiness(fourth, 4, trusted=False) == (True, "ready")
+
+
+def test_hierarchical_shadow_eprocess_keeps_feedback_signals_separate() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=0,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+    )
+    allow = pool.observe(
+        _cluster_candidate("allow", directive="Allow", cluster="cluster-allow"),
+        1,
+        trust=0.1,
+        trusted=False,
+    )
+    deny = pool.observe(
+        _cluster_candidate("deny", directive="Deny", cluster="cluster-deny"),
+        2,
+        trust=0.1,
+        trusted=False,
+    )
+
+    assert allow.cluster_signature != deny.cluster_signature
+    assert pool.shadow_cluster_eprocess_opportunities == 1
+    assert pool.readiness(deny, 2, trusted=False) == (
+        False,
+        "shadow_eprocess_below_threshold",
+    )
+
+
+def test_trusted_lane_ignores_shadow_cluster_probation() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=0,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+    )
+    shadow = pool.observe(
+        _cluster_candidate("shadow", directive="Shadow rule"),
+        1,
+        trust=0.1,
+        trusted=False,
+    )
+    pool.mark_probation(shadow)
+    trusted = pool.observe(
+        _cluster_candidate("trusted", directive="Trusted wording"),
+        2,
+        trust=0.9,
+        trusted=True,
+    )
+
+    assert pool.readiness(trusted, 2, trusted=True) == (True, "ready")

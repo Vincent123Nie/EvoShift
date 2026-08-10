@@ -366,3 +366,55 @@ async def test_rerank_path_cannot_consume_hidden_protected_labels(tmp_path: Path
             result.metrics["audit"]["semantic_final_state_hash"]
             == baseline.metrics["audit"]["semantic_final_state_hash"]
         ), mode
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_hierarchical_cluster_key_cannot_consume_hidden_labels(tmp_path: Path) -> None:
+    config = load_config(Path("configs/experiments/policy_shift_hard_demo.yaml"))
+    config = config.model_copy(
+        update={
+            "storage": config.storage.model_copy(
+                update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+            ),
+            "evolution": config.evolution.model_copy(
+                update={
+                    "shadow_candidate_enabled": True,
+                    "min_feedback_trust_for_shadow_candidate": 0.10,
+                    "candidate_min_trusted_observations": 0,
+                    "shadow_eprocess_enabled": True,
+                    "shadow_hierarchical_eprocess_enabled": True,
+                }
+            ),
+        }
+    )
+    samples = create_benchmark(
+        config.benchmark,
+        root=Path.cwd(),
+        seed=config.evaluation.seed,
+    ).load()
+    labels = [bool(sample.metadata.get("protected")) for sample in samples]
+    baseline = await EvoShiftRunner(
+        config,
+        _FixedSamplesAdapter(_with_protected_labels(samples, labels)),
+        workdir=Path.cwd(),
+    ).run()
+    flipped = await EvoShiftRunner(
+        config.model_copy(
+            update={
+                "storage": config.storage.model_copy(
+                    update={"runs_dir": str(tmp_path / "flipped"), "cache_enabled": False}
+                )
+            }
+        ),
+        _FixedSamplesAdapter(_with_protected_labels(samples, [not value for value in labels])),
+        workdir=Path.cwd(),
+    ).run()
+
+    assert baseline.metrics["evolution"]["shadow_cluster_eprocess_opportunities"] >= 0
+    assert baseline.metrics["evolution"]["shadow_cluster_eprocess_crossings"] >= 0
+    assert [decision.model_dump(mode="json") for decision in flipped.decisions] == [
+        decision.model_dump(mode="json") for decision in baseline.decisions
+    ]
+    assert _canonical_metrics(flipped.metrics) == _canonical_metrics(baseline.metrics)
+    assert _canonical_event_rows(flipped) == _canonical_event_rows(baseline)

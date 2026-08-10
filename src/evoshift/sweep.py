@@ -48,6 +48,8 @@ _AGGREGATE_FIELDS = {
     "shadow_candidate_expirations": "shadow_candidate_expirations",
     "shadow_eprocess_opportunities": "shadow_eprocess_opportunities",
     "shadow_eprocess_crossings": "shadow_eprocess_crossings",
+    "shadow_cluster_eprocess_opportunities": "shadow_cluster_eprocess_opportunities",
+    "shadow_cluster_eprocess_crossings": "shadow_cluster_eprocess_crossings",
     "trusted_candidate_shadow_cooldown_bypasses": ("trusted_candidate_shadow_cooldown_bypasses"),
     "context_probation_interventions": "context_probation_interventions",
     "context_probation_paired_controls": "context_probation_paired_controls",
@@ -358,6 +360,12 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "shadow_candidate_expirations": evolution.get("shadow_candidate_expirations"),
                 "shadow_eprocess_opportunities": evolution.get("shadow_eprocess_opportunities"),
                 "shadow_eprocess_crossings": evolution.get("shadow_eprocess_crossings"),
+                "shadow_cluster_eprocess_opportunities": evolution.get(
+                    "shadow_cluster_eprocess_opportunities"
+                ),
+                "shadow_cluster_eprocess_crossings": evolution.get(
+                    "shadow_cluster_eprocess_crossings"
+                ),
                 "trusted_candidate_shadow_cooldown_bypasses": evolution.get(
                     "trusted_candidate_shadow_cooldown_bypasses"
                 ),
@@ -955,6 +963,8 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "shadow_candidate_expirations",
         "shadow_eprocess_opportunities",
         "shadow_eprocess_crossings",
+        "shadow_cluster_eprocess_opportunities",
+        "shadow_cluster_eprocess_crossings",
         "trusted_candidate_shadow_cooldown_bypasses",
         "context_probation_interventions",
         "context_probation_paired_controls",
@@ -1135,7 +1145,8 @@ def _write_sweep_markdown(
             "Invariant | Premature | Attack follow | Corrupt quarantine | Promotion precision | "
             "Replay-est. precision | Realized precision | Realized coverage | Audit rollback | "
             "Harmful promotion | False rollback | Harm exposure | Stale retention | Forget P | "
-            "Forget R | False retire | Reacquire | Recovery | Requests | Tokens |"
+            "Forget R | False retire | Reacquire | Recovery | Cluster opp | Cluster cross | "
+            "Requests | Tokens |"
         ),
         (
             "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
@@ -1172,6 +1183,8 @@ def _write_sweep_markdown(
                     _format_mean(item, "false_retirement"),
                     _format_mean(item, "correct_reacquisition"),
                     _format_mean(item, "mean_recovery_steps"),
+                    _format_mean(item, "shadow_cluster_eprocess_opportunities"),
+                    _format_mean(item, "shadow_cluster_eprocess_crossings"),
                     f"{item.get('total_requests_mean', 0.0):.1f}",
                     f"{item.get('total_tokens_mean', 0.0):.1f}",
                 ]
