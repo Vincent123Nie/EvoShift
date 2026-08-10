@@ -409,3 +409,75 @@ def test_demo_client_critic_and_self_refine_paths(monkeypatch: pytest.MonkeyPatc
         assert snapshot.total_tokens > 0
 
     run(exercise())
+
+
+def test_demo_critic_stable_paraphrases_change_only_memory_wording() -> None:
+    tasks = [
+        (f"Refund case: customer_tier=STANDARD; request_day={day}. Return APPROVE or DENY only.")
+        for day in range(8, 13)
+    ]
+
+    async def exercise() -> None:
+        default_client = HeuristicDemoClient(model="demo")
+        paraphrase_client = HeuristicDemoClient(
+            model="demo",
+            critic_paraphrase_mode="stable_cycle",
+        )
+        memories: list[dict[str, Any]] = []
+        for task in tasks:
+            response = await paraphrase_client.generate(
+                demo_request(
+                    "<EVOSHIFT_CRITIQUE>",
+                    {"task": task, "agent_answer": "DENY", "reward": 0.0},
+                    "experience_critic",
+                )
+            )
+            memories.append(json.loads(response.text)["memory"])
+
+        repeated = await paraphrase_client.generate(
+            demo_request(
+                "<EVOSHIFT_CRITIQUE>",
+                {"task": tasks[0], "agent_answer": "DENY", "reward": 0.0},
+                "experience_critic",
+            )
+        )
+        default = await default_client.generate(
+            demo_request(
+                "<EVOSHIFT_CRITIQUE>",
+                {"task": tasks[0], "agent_answer": "DENY", "reward": 0.0},
+                "experience_critic",
+            )
+        )
+
+        assert len({(item["trigger"], item["anti_pattern"]) for item in memories}) == 5
+        assert json.loads(repeated.text)["memory"] == memories[0]
+        assert {item["directive"] for item in memories} == {
+            json.loads(default.text)["memory"]["directive"]
+        }
+        assert {tuple(item["tags"]) for item in memories} == {
+            tuple(json.loads(default.text)["memory"]["tags"])
+        }
+        assert {item["scope"] for item in memories} == {json.loads(default.text)["memory"]["scope"]}
+
+        card = "[experience:mem-fixture@v1]\nWhen: fixture\nDo: " + memories[0]["directive"]
+        for client in (default_client, paraphrase_client):
+            solved = await client.generate(
+                demo_request(
+                    "<EVOSHIFT_TASK>",
+                    {"task": tasks[0], "experience_cards": card},
+                    "solve",
+                )
+            )
+            assert json.loads(solved.text)["answer"] == "APPROVE"
+
+        created = create_client(
+            ProviderConfig(
+                kind="demo",
+                model="demo",
+                demo_critic_paraphrase_mode="stable_cycle",
+            )
+        )
+        assert isinstance(created, HeuristicDemoClient)
+        assert created.critic_paraphrase_mode == "stable_cycle"
+
+    run(exercise())

@@ -2,6 +2,7 @@ import pytest
 
 from evoshift.config import EvolutionConfig, ProviderConfig
 from evoshift.evolution.critic import ExperienceCritic, extract_json_object
+from evoshift.providers.demo import HeuristicDemoClient
 from evoshift.schemas import (
     BenchmarkSample,
     Episode,
@@ -150,3 +151,71 @@ async def test_critic_cluster_key_ignores_model_tags_and_hidden_metadata() -> No
     assert second.proposed_memory is not None
     assert first.proposed_memory.evidence_cluster_key == second.proposed_memory.evidence_cluster_key
     assert first.proposed_memory.evidence_cluster_key != "model-chosen"
+
+
+@pytest.mark.asyncio
+async def test_demo_paraphrase_and_cluster_key_ignore_hidden_oracle_fields() -> None:
+    sample = BenchmarkSample(
+        sample_id="refund-fixture",
+        prompt=(
+            "Refund case: customer_tier=STANDARD; request_day=10. Return APPROVE or DENY only."
+        ),
+        reference="APPROVE",
+        domain="customer_support/refund_policy",
+        metadata={
+            "feedback_source": "customer_support_portal",
+            "feedback_context": "refund:any:days_8_14",
+            "feedback_reference": "APPROVE",
+            "policy_version": "v2",
+            "protected": False,
+            "valid_memory_tags": ["policy_v2"],
+        },
+    )
+    base = Episode(
+        episode_id="visible-base",
+        run_id="run",
+        index=0,
+        sample=sample,
+        output=SolverOutput(answer="DENY"),
+        score=ScoreBundle(primary=0.0, success=False),
+        feedback_score=ScoreBundle(primary=0.0, success=False),
+    )
+    hidden_mutation = base.model_copy(
+        update={
+            "episode_id": "visible-mutated",
+            "sample": sample.model_copy(
+                update={
+                    "reference": "DENY",
+                    "metadata": {
+                        **sample.metadata,
+                        "policy_version": "v99",
+                        "protected": True,
+                        "valid_memory_tags": ["hidden-malicious-tag"],
+                        "feedback_corrupted": True,
+                    },
+                }
+            ),
+        }
+    )
+    evolution = EvolutionConfig(
+        shadow_candidate_enabled=True,
+        future_audit_enabled=True,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+    )
+    critic = ExperienceCritic(
+        HeuristicDemoClient(model="demo", critic_paraphrase_mode="stable_cycle"),
+        ProviderConfig(model="demo"),
+        evolution,
+    )
+
+    first = await critic.analyze(base, [])
+    second = await critic.analyze(hidden_mutation, [])
+
+    assert first.proposed_memory is not None
+    assert second.proposed_memory is not None
+    assert first.proposed_memory.evidence_cluster_key
+    assert first.proposed_memory.evidence_cluster_key == second.proposed_memory.evidence_cluster_key
+    assert first.proposed_memory.trigger == second.proposed_memory.trigger
+    assert first.proposed_memory.directive == second.proposed_memory.directive
+    assert first.proposed_memory.anti_pattern == second.proposed_memory.anti_pattern

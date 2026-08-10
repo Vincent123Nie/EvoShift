@@ -23,5 +23,9 @@ def create_client(
     if kind in {"fake", "scripted"}:
         return FakeLLMClient(model=provider_config.resolved_model())
     if kind == "demo":
-        return HeuristicDemoClient(model=provider_config.resolved_model(), budget=budget)
+        return HeuristicDemoClient(
+            model=provider_config.resolved_model(),
+            budget=budget,
+            critic_paraphrase_mode=provider_config.demo_critic_paraphrase_mode,
+        )
     raise ConfigurationError(f"unsupported provider kind: {provider_config.kind}")

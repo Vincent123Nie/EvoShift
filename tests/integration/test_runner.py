@@ -9,7 +9,7 @@ from evoshift.benchmarks import create_benchmark
 from evoshift.benchmarks.base import BenchmarkAdapter, sample_fingerprint
 from evoshift.config import load_config
 from evoshift.runner import EvoShiftRunner
-from evoshift.schemas import BenchmarkSample
+from evoshift.schemas import BenchmarkSample, Episode
 
 
 class _MissingFeedbackReferenceAdapter(BenchmarkAdapter):
@@ -88,6 +88,100 @@ async def test_policy_shift_runner_keeps_oracle_and_feedback_channels_separate(
     assert result.metrics["feedback"]["oracle_success_agreement_rate"] == 0.0
     predictions = (result.run_dir / "predictions.jsonl").read_text(encoding="utf-8")
     assert '"feedback_score"' in predictions
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_critic_paraphrase_fixture_isolates_hierarchical_eprocess_gain(
+    tmp_path: Path,
+) -> None:
+    base = load_config(Path("configs/experiments/critic_paraphrase_fixture_demo.yaml"))
+
+    async def execute(name: str, *, hierarchical: bool):
+        config = base.model_copy(
+            update={
+                "storage": base.storage.model_copy(
+                    update={"runs_dir": str(tmp_path / name), "cache_enabled": False}
+                ),
+                "evolution": base.evolution.model_copy(
+                    update={"shadow_hierarchical_eprocess_enabled": hierarchical}
+                ),
+            }
+        )
+        adapter = create_benchmark(
+            config.benchmark,
+            root=Path.cwd(),
+            seed=config.evaluation.seed,
+        )
+        return await EvoShiftRunner(config, adapter, workdir=Path.cwd()).run()
+
+    exact = await execute("exact", hierarchical=False)
+    hierarchical = await execute("hierarchical", hierarchical=True)
+    exact_evolution = exact.metrics["evolution"]
+    hierarchical_evolution = hierarchical.metrics["evolution"]
+
+    assert exact.metrics["dataset_hash"] == hierarchical.metrics["dataset_hash"]
+    assert exact_evolution["shadow_eprocess_crossings"] == 0
+    assert exact_evolution["shadow_only_candidate_replay_attempts"] == 0
+    assert exact_evolution["shadow_candidate_probations"] == 0
+    assert hierarchical_evolution["shadow_cluster_eprocess_crossings"] >= 1
+    assert hierarchical_evolution["shadow_only_candidate_replay_attempts"] >= 1
+    assert hierarchical_evolution["shadow_candidate_probations"] >= 1
+    assert hierarchical_evolution["shadow_candidate_activations"] >= 1
+    assert hierarchical.metrics["future_audit"]["confirmed"] >= 1
+    assert hierarchical.metrics["future_audit"]["harmful_promotion_rate"] == 0.0
+    assert hierarchical.metrics["active_memory_governance"]["harmful_active_memory_exposure_n"] == 0
+    assert hierarchical.metrics["phases"]["fixture_safe_anchor"]["success_rate"] == 1.0
+    assert hierarchical.metrics["overall"]["mean_score"] > exact.metrics["overall"]["mean_score"]
+
+    exact_episodes = [
+        Episode.model_validate_json(line)
+        for line in (exact.run_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    hierarchical_episodes = [
+        Episode.model_validate_json(line)
+        for line in (hierarchical.run_dir / "predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    exact_change = {
+        episode.sample.sample_id: episode
+        for episode in exact_episodes
+        if episode.sample.phase == "fixture_policy_change"
+    }
+    hierarchical_change = {
+        episode.sample.sample_id: episode
+        for episode in hierarchical_episodes
+        if episode.sample.phase == "fixture_policy_change"
+    }
+    for sample_id in ("critic-paraphrase:change:05", "critic-paraphrase:change:06"):
+        assert exact_change[sample_id].score.success is False
+        assert hierarchical_change[sample_id].score.success is True
+
+    shadow_replay = next(
+        decision
+        for decision in hierarchical.decisions
+        if decision.result.candidate_type == "memory"
+    )
+    assert shadow_replay.promote is True
+    assert shadow_replay.result.mean_delta == 0.0
+    assert shadow_replay.result.protected_slice_regression == 0.0
+    future_confirmation = next(
+        decision
+        for decision in hierarchical.decisions
+        if decision.result.candidate_type == "memory_future_audit"
+    )
+    assert future_confirmation.promote is True
+    assert future_confirmation.result.mean_delta > 0.0
+    assert future_confirmation.result.oracle_mean_delta is not None
+    assert future_confirmation.result.oracle_mean_delta > 0.0
+
+    exact_costs = json.loads((exact.run_dir / "costs.json").read_text(encoding="utf-8"))
+    hierarchical_costs = json.loads(
+        (hierarchical.run_dir / "costs.json").read_text(encoding="utf-8")
+    )
+    assert hierarchical_costs["requests"] <= exact_costs["requests"]
+    assert hierarchical_costs["total_tokens"] <= exact_costs["total_tokens"]
 
 
 @pytest.mark.asyncio

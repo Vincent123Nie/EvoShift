@@ -1,0 +1,11 @@
+base_config: configs/experiments/critic_paraphrase_fixture_demo.yaml
+seeds: [42]
+algorithms:
+  - evoshift
+grid: {}
+variants:
+  exact_shadow_eprocess:
+    evolution.shadow_hierarchical_eprocess_enabled: false
+  hierarchical_shadow_eprocess:
+    evolution.shadow_hierarchical_eprocess_enabled: true
+max_runs: 2
