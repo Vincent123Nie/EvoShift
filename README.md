@@ -189,6 +189,16 @@ had zero paired uplift and zero cluster crossings, so the algorithm was not
 adopted. The negative result and next valid validation step are recorded in
 [`results_hierarchical_shadow_eprocess.md`](docs/results_hierarchical_shadow_eprocess.md).
 
+That next mechanism fixture is preregistered in
+[`experiment_critic_paraphrase_fixture.md`](docs/experiment_critic_paraphrase_fixture.md).
+With the same semantic lesson expressed by five deterministic critic paraphrases,
+the hierarchical path crossed once, entered shadow-derived probation, passed later
+counterfactual audit, and improved the 19-episode score from `0.6842` to `0.7895`
+without protected-slice or resource regression. The clean result is documented in
+[`results_critic_paraphrase_fixture.md`](docs/results_critic_paraphrase_fixture.md).
+It validates a narrow mechanism, not public-model quality or SOTA performance; the
+feature remains default-off pending a separately preregistered real-model mini.
+
 ## Frozen held-out audit
 
 After a completed EvoShift run, evaluate its final state on unseen BBH task
@@ -328,6 +338,12 @@ dataset hash, and comparison artifact.
 - [Prequential feedback firewall correction](docs/experiment_prequential_feedback_firewall.md)
 - [Recurrence-aware causal rollback experiment](docs/experiment_recurrence_aware_rollback.md)
 - [Contradiction-aware fast retirement confirmation](docs/experiment_fast_retirement_confirmation.md)
+- [Critic-paraphrase fixture preregistration](docs/experiment_critic_paraphrase_fixture.md)
+- [Critic-paraphrase fixture result](docs/results_critic_paraphrase_fixture.md)
+- [Real-model critic-paraphrase mini preregistration](docs/experiment_critic_paraphrase_live_mini.md)
+- [Real-model critic-paraphrase initial stop](docs/results_critic_paraphrase_live_mini.md)
+- [Real-model critic-paraphrase budget amendment](docs/experiment_critic_paraphrase_live_mini_v2.md)
+- [Real-model critic-paraphrase v2 result](docs/results_critic_paraphrase_live_mini_v2.md)
 
 ## Security
 

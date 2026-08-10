@@ -32,6 +32,7 @@ class ProviderConfig(ConfigModel):
     send_metadata: bool = False
     input_price_per_million: float = Field(default=0.0, ge=0.0)
     output_price_per_million: float = Field(default=0.0, ge=0.0)
+    demo_critic_paraphrase_mode: Literal["off", "stable_cycle"] = "off"
 
     def resolved_base_url(self) -> str:
         return os.getenv("EVOSHIFT_OPENAI_BASE_URL", self.base_url).rstrip("/")

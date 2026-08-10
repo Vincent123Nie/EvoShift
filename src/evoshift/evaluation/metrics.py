@@ -8,9 +8,47 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from typing import Any, Callable, Union
 
-from evoshift.schemas import Episode, PromotionDecision
+from evoshift.schemas import Episode, FailureRecord, PromotionDecision
 
 Number = Union[int, float]
+
+
+def _normalized_critic_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def critic_metrics(failures: Sequence[FailureRecord]) -> dict[str, int]:
+    """Summarize learner-visible critic output diversity and parse fallbacks."""
+
+    memories = [failure.proposed_memory for failure in failures if failure.proposed_memory]
+    return {
+        "records": len(failures),
+        "signature_unique": len(
+            {
+                normalized
+                for failure in failures
+                if (normalized := _normalized_critic_text(failure.signature))
+            }
+        ),
+        "memory_trigger_unique": len(
+            {
+                normalized
+                for memory in memories
+                if (normalized := _normalized_critic_text(memory.trigger))
+            }
+        ),
+        "memory_directive_unique": len(
+            {
+                normalized
+                for memory in memories
+                if (normalized := _normalized_critic_text(memory.directive))
+            }
+        ),
+        "structured_fallbacks": sum(
+            memory.evidence.startswith("Fallback because the critic response")
+            for memory in memories
+        ),
+    }
 
 
 def _validate_finite(values: Sequence[Number], name: str = "values") -> list[float]:
@@ -683,6 +721,7 @@ __all__ = [
     "auac",
     "backward_transfer",
     "compute_stream_metrics",
+    "critic_metrics",
     "cumulative_regret",
     "feedback_metrics",
     "forgetting",

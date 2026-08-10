@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from evoshift.config import EvolutionConfig, load_config
+from evoshift.config import EvolutionConfig, ProviderConfig, load_config
 from evoshift.sweep import expand_sweep, load_sweep_spec
 
 
@@ -17,6 +17,16 @@ def test_all_shipped_yaml_configs_parse() -> None:
             assert expand_sweep(load_sweep_spec(path, root))
         else:
             load_config(path)
+
+
+def test_demo_critic_paraphrase_mode_is_default_off_and_strict() -> None:
+    assert ProviderConfig().demo_critic_paraphrase_mode == "off"
+    assert (
+        ProviderConfig(demo_critic_paraphrase_mode="stable_cycle").demo_critic_paraphrase_mode
+        == "stable_cycle"
+    )
+    with pytest.raises(ValidationError):
+        ProviderConfig(demo_critic_paraphrase_mode="call_order")
 
 
 def test_retirement_context_bound_revival_requires_dormant_revival() -> None:

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from evoshift.errors import ProviderError
 from evoshift.providers.base import ModelT, validate_json_text
@@ -32,6 +33,43 @@ _REFUND_V2_DIRECTIVE = (
 _REFUND_V3_DIRECTIVE = (
     "For refund decisions, premium customers are approved through request_day 30, "
     "while the standard-customer limit remains 14 days."
+)
+
+_REFUND_TRIGGER_OPENERS = (
+    "When evaluating",
+    "For decisions involving",
+    "In the case of",
+    "When handling",
+)
+_REFUND_TRIGGER_SUBJECTS = (
+    "a qualifying refund claim",
+    "an eligible money-back request",
+    "a customer refund application",
+    "a refund eligibility review",
+)
+_REFUND_V2_WINDOWS = (
+    "submitted after day 7 and by day 14",
+    "filed during days 8 through 14",
+    "received in the second week after purchase",
+    "made no later than day 14 but beyond day 7",
+)
+_REFUND_V2_ANTI_PATTERNS = (
+    "Do not retain the obsolete seven-day cutoff.",
+    "Do not reject an otherwise eligible second-week request.",
+    "Avoid using the earlier day-7 boundary for this case.",
+    "Do not confuse the superseded first-week window with the current rule.",
+)
+_REFUND_V3_WINDOWS = (
+    "from a premium customer after day 14 and by day 30",
+    "for a premium member during days 15 through 30",
+    "under the premium extension before day 31",
+    "where premium eligibility extends beyond day 14 through day 30",
+)
+_REFUND_V3_ANTI_PATTERNS = (
+    "Do not impose the standard day-14 cutoff on premium customers.",
+    "Do not reject a qualifying premium request from days 15 through 30.",
+    "Avoid dropping the premium extension when applying the standard rule.",
+    "Do not treat premium and standard windows as identical after day 14.",
 )
 
 
@@ -96,9 +134,13 @@ class HeuristicDemoClient:
         *,
         model: str = "demo-heuristic",
         budget: BudgetLedger | None = None,
+        critic_paraphrase_mode: Literal["off", "stable_cycle"] = "off",
     ) -> None:
+        if critic_paraphrase_mode not in {"off", "stable_cycle"}:
+            raise ValueError("unsupported demo critic paraphrase mode")
         self.model = model
         self._budget = budget
+        self.critic_paraphrase_mode = critic_paraphrase_mode
         self.calls: list[GenerationRequest] = []
         self._closed = False
 
@@ -233,10 +275,9 @@ class HeuristicDemoClient:
             "applied_memory_ids": list(dict.fromkeys(applied)),
         }
 
-    @classmethod
-    def _refund_critic_output(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _refund_critic_output(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         task = str(payload.get("task", ""))
-        parsed = cls._parse_refund_task(task)
+        parsed = self._parse_refund_task(task)
         if parsed is None:
             raise ProviderError("demo refund critic received an invalid refund task")
         tier, request_day = parsed
@@ -259,6 +300,11 @@ class HeuristicDemoClient:
             tags = ["refund_policy", "expanded_window", "policy_v2"]
             signature = "refund_policy_expanded_window_not_applied"
             supersedes = []
+        if self.critic_paraphrase_mode == "stable_cycle":
+            trigger, anti_pattern = self._stable_refund_paraphrase(
+                task,
+                premium_exception=(tier == "premium" and request_day > 14),
+            )
         return {
             "failure_type": "reasoning_error",
             "signature": signature,
@@ -275,6 +321,26 @@ class HeuristicDemoClient:
                 "supersedes_memory_ids": supersedes,
             },
         }
+
+    @staticmethod
+    def _stable_refund_paraphrase(
+        task: str,
+        *,
+        premium_exception: bool,
+    ) -> tuple[str, str]:
+        """Choose semantic paraphrases from learner-visible task text only."""
+
+        normalized = " ".join(task.casefold().split()).encode("utf-8")
+        digest = hashlib.sha256(normalized).digest()
+        windows = _REFUND_V3_WINDOWS if premium_exception else _REFUND_V2_WINDOWS
+        anti_patterns = _REFUND_V3_ANTI_PATTERNS if premium_exception else _REFUND_V2_ANTI_PATTERNS
+        trigger = (
+            f"{_REFUND_TRIGGER_OPENERS[digest[0] % len(_REFUND_TRIGGER_OPENERS)]} "
+            f"{_REFUND_TRIGGER_SUBJECTS[digest[1] % len(_REFUND_TRIGGER_SUBJECTS)]} "
+            f"{windows[digest[2] % len(windows)]}."
+        )
+        anti_pattern = anti_patterns[digest[3] % len(anti_patterns)]
+        return trigger, anti_pattern
 
     @classmethod
     def _rerank_output(cls, payload: Mapping[str, Any]) -> dict[str, Any]:

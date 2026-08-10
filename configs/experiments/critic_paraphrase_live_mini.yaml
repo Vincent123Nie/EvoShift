@@ -1,0 +1,105 @@
+project: evoshift-critic-paraphrase-live-mini
+algorithm: evoshift
+
+provider:
+  kind: responses
+  # The default is the user's OpenAI-compatible reverse proxy. Override at
+  # runtime with EVOSHIFT_OPENAI_BASE_URL when using another gateway.
+  base_url: https://easyai123.shop/v1
+  api_key_env: LOCAL_OPENAI_GATEWAY_API_KEY
+  model: gpt-5.6
+  timeout_seconds: 120
+  max_retries: 2
+  max_output_tokens: 512
+  reasoning_effort: low
+  allow_sampling_params: false
+  send_metadata: false
+  input_price_per_million: 0.0
+  output_price_per_million: 0.0
+
+budget:
+  # This is a bounded diagnostic, not a population benchmark.
+  max_requests: 160
+  max_total_tokens: 180000
+  max_cost_usd: 0.0
+
+storage:
+  cache_enabled: false
+  isolate_runs: true
+  runs_dir: runs
+
+benchmark:
+  kind: jsonl
+  name: deterministic_critic_paraphrase_fixture_live_model
+  path: examples/critic_paraphrase_fixture.jsonl
+  protected_phases: [fixture_safe_anchor]
+
+shift:
+  enabled: false
+
+evolution:
+  enabled: true
+  validation_window: 4
+  min_validation_examples: 4
+  bootstrap_samples: 500
+  confidence_level: 0.90
+  min_mean_gain: 0.0
+  min_ci_lower_bound: 0.0
+  max_regression_rate: 0.0
+  max_protected_slice_regression: 0.0
+  max_cost_increase_ratio: 3.0
+  paired_replay: true
+  feedback_mode: reward_only
+  feedback_default_trust: 0.90
+  feedback_source_trust:
+    customer_support_portal: 0.90
+  dynamic_feedback_trust_enabled: true
+  dynamic_feedback_min_consistent_observations: 6
+  dynamic_feedback_change_min_span: 0
+  dynamic_feedback_cold_start_trust: 0.40
+  dynamic_feedback_conflict_trust: 0.10
+  dynamic_feedback_prior_strength: 8.0
+  min_feedback_trust_for_drift: 0.60
+  min_feedback_trust_for_memory_update: 0.60
+  min_feedback_trust_for_candidate: 0.60
+  shadow_candidate_enabled: true
+  min_feedback_trust_for_shadow_candidate: 0.10
+  shadow_eprocess_enabled: true
+  shadow_hierarchical_eprocess_enabled: false
+  shadow_eprocess_null_match_probability: 0.25
+  shadow_eprocess_alternative_match_probability: 0.75
+  shadow_eprocess_alpha: 0.05
+  min_feedback_trust_for_replay: 0.60
+  candidate_min_observations: 1
+  candidate_min_trusted_observations: 0
+  candidate_min_new_observations: 1
+  candidate_cooldown_episodes: 0
+  replay_current_regime_only: true
+  replay_historical_context_anchors_enabled: false
+  candidate_replay_since_first_evidence: true
+  policy_evolution_enabled: false
+  policy_evolve_on_shift: false
+  policy_evolve_if_memory_promoted: false
+  future_audit_enabled: true
+  future_audit_min_observations: 2
+  future_audit_max_observations: 2
+  future_audit_early_harm_observations: 1
+  context_local_probation_fast_path_enabled: false
+  active_audit_enabled: false
+  conflict_supersession_enabled: false
+
+evaluation:
+  seed: 42
+  bootstrap_samples: 1000
+  confidence_level: 0.95
+  recovery_fraction: 0.90
+
+policy:
+  top_k: 3
+  llm_rerank_enabled: false
+  memory_token_budget: 700
+  write_confidence_threshold: 0.50
+  dedup_similarity_threshold: 0.82
+  rollback_min_uses: 6
+  rollback_utility_threshold: 0.30
+  allow_cross_domain_transfer: false
