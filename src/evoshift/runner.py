@@ -16,6 +16,7 @@ from evoshift.benchmarks.base import BenchmarkAdapter, sample_fingerprint
 from evoshift.config import EvoShiftConfig
 from evoshift.evaluation import (
     compute_stream_metrics,
+    critic_metrics,
     promotion_precision,
     score_feedback_sample,
     score_sample,
@@ -3401,6 +3402,7 @@ class EvoShiftRunner:
                 recovery_fraction=self.config.evaluation.recovery_fraction,
                 promotions=replay_precision_inputs,
             )
+            metrics["critic"] = critic_metrics(failures)
             replay_estimated_precision = (
                 metrics.get("promotion_precision") if replay_memory_decisions else None
             )

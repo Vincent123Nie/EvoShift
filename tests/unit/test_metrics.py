@@ -9,6 +9,7 @@ from evoshift.evaluation import (
     backward_transfer,
     binary_choice_score,
     compute_stream_metrics,
+    critic_metrics,
     cumulative_regret,
     exact_match_score,
     feedback_metrics,
@@ -32,10 +33,47 @@ from evoshift.evaluation import (
 from evoshift.schemas import (
     BenchmarkSample,
     Episode,
+    FailureRecord,
     LLMUsage,
+    MemoryItem,
     ScoreBundle,
     SolverOutput,
 )
+
+
+def test_critic_metrics_report_exact_wording_diversity_and_fallbacks() -> None:
+    failures = [
+        FailureRecord(
+            failure_id="failure-1",
+            episode_id="episode-1",
+            signature="Policy window missed",
+            proposed_memory=MemoryItem(
+                memory_id="",
+                trigger="Second-week refund",
+                directive="Approve requests through day 14.",
+                evidence="model output",
+            ),
+        ),
+        FailureRecord(
+            failure_id="failure-2",
+            episode_id="episode-2",
+            signature="  policy WINDOW missed ",
+            proposed_memory=MemoryItem(
+                memory_id="",
+                trigger="Refund filed during days 8 through 14",
+                directive="Approve requests through day 14.",
+                evidence="Fallback because the critic response was not valid structured JSON.",
+            ),
+        ),
+    ]
+
+    assert critic_metrics(failures) == {
+        "records": 2,
+        "signature_unique": 1,
+        "memory_trigger_unique": 2,
+        "memory_directive_unique": 1,
+        "structured_fallbacks": 1,
+    }
 
 
 def _episode(
