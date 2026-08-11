@@ -107,7 +107,8 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
     }
     seeds = sorted({seed for variant, seed in grouped if variant in REQUIRED_VARIANTS})
     pairs: list[dict[str, Any]] = []
-    protocol_configs: set[str] = set()
+    pair_config_equal: list[bool] = []
+    pair_flag_assignments_valid: list[bool] = []
     commits: set[str] = set()
     datasets: set[str] = set()
     models: set[str] = set()
@@ -135,8 +136,16 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
                 raise ValueError("resolved config is missing storage")
             cache_enabled.append(bool(storage.get("cache_enabled")))
             cache_paths.add(str(storage.get("cache_path", "")))
-        protocol_configs.add(json.dumps(exact_config, sort_keys=True, separators=(",", ":")))
-        protocol_configs.add(json.dumps(hierarchical_config, sort_keys=True, separators=(",", ":")))
+        pair_config_equal.append(exact_config == hierarchical_config)
+        exact_raw_config = _resolved_config(exact_dir)
+        hierarchical_raw_config = _resolved_config(hierarchical_dir)
+        exact_flag = exact_raw_config.get("evolution", {}).get(
+            "shadow_hierarchical_eprocess_enabled"
+        )
+        hierarchical_flag = hierarchical_raw_config.get("evolution", {}).get(
+            "shadow_hierarchical_eprocess_enabled"
+        )
+        pair_flag_assignments_valid.append(exact_flag is False and hierarchical_flag is True)
         for manifest in (exact_manifest, hierarchical_manifest):
             commits.add(str(manifest.get("git_commit", "")))
             datasets.add(str(manifest.get("dataset_hash", "")))
@@ -155,6 +164,18 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
                     hierarchical_metrics.get("overall", {}).get("mean_score", 0.0) or 0.0
                 )
                 - (exact_metrics.get("overall", {}).get("mean_score", 0.0) or 0.0),
+                "exact_changed_score": exact_metrics.get("phases", {})
+                .get("fixture_policy_change", {})
+                .get("mean_score"),
+                "hierarchical_changed_score": hierarchical_metrics.get("phases", {})
+                .get("fixture_policy_change", {})
+                .get("mean_score"),
+                "exact_protected_score": exact_metrics.get("phases", {})
+                .get("fixture_safe_anchor", {})
+                .get("mean_score"),
+                "hierarchical_protected_score": hierarchical_metrics.get("phases", {})
+                .get("fixture_safe_anchor", {})
+                .get("mean_score"),
                 "exact_cluster_crossings": exact_metrics.get("evolution", {}).get(
                     "shadow_cluster_eprocess_crossings"
                 ),
@@ -170,6 +191,15 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
                 "hierarchical_activations": hierarchical_metrics.get("evolution", {}).get(
                     "shadow_candidate_activations"
                 ),
+                "hierarchical_rejections": hierarchical_metrics.get("evolution", {}).get(
+                    "shadow_candidate_rejections"
+                ),
+                "hierarchical_future_audit_confirmed": hierarchical_metrics.get(
+                    "future_audit", {}
+                ).get("confirmed"),
+                "hierarchical_future_audit_expired": hierarchical_metrics.get(
+                    "future_audit", {}
+                ).get("expired"),
                 "hierarchical_harmful_exposure": hierarchical_metrics.get(
                     "active_memory_governance", {}
                 ).get("harmful_active_memory_exposure_n"),
@@ -187,7 +217,8 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
         "same_clean_git_commit": len(commits) == 1 and "" not in commits and not any(dirty),
         "same_dataset": len(datasets) == 1 and "" not in datasets,
         "same_model": len(models) == 1 and "" not in models,
-        "only_hierarchical_flag_differs": len(protocol_configs) == 1,
+        "only_hierarchical_flag_differs": all(pair_config_equal),
+        "hierarchical_flag_assignment_valid": all(pair_flag_assignments_valid),
         "cache_enabled": bool(cache_enabled) and all(cache_enabled),
         "expected_cache_path": cache_paths == {EXPECTED_CACHE_PATH},
         "resource_claims_allowed": False,
@@ -209,12 +240,35 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
             "mean_score_delta": sum(float(pair["score_delta"]) for pair in pairs) / len(pairs)
             if pairs
             else 0.0,
+            "mean_changed_score_delta": sum(
+                float(pair["hierarchical_changed_score"] or 0.0)
+                - float(pair["exact_changed_score"] or 0.0)
+                for pair in pairs
+            )
+            / len(pairs)
+            if pairs
+            else 0.0,
+            "mean_protected_score_delta": sum(
+                float(pair["hierarchical_protected_score"] or 0.0)
+                - float(pair["exact_protected_score"] or 0.0)
+                for pair in pairs
+            )
+            / len(pairs)
+            if pairs
+            else 0.0,
             "cluster_crossings": sum(
                 int(pair["hierarchical_cluster_crossings"] or 0) for pair in pairs
             ),
             "shadow_replays": sum(int(pair["hierarchical_shadow_replays"] or 0) for pair in pairs),
             "probations": sum(int(pair["hierarchical_probations"] or 0) for pair in pairs),
             "activations": sum(int(pair["hierarchical_activations"] or 0) for pair in pairs),
+            "rejections": sum(int(pair["hierarchical_rejections"] or 0) for pair in pairs),
+            "future_audit_confirmed": sum(
+                int(pair["hierarchical_future_audit_confirmed"] or 0) for pair in pairs
+            ),
+            "future_audit_expired": sum(
+                int(pair["hierarchical_future_audit_expired"] or 0) for pair in pairs
+            ),
             "harmful_exposure": sum(
                 int(pair["hierarchical_harmful_exposure"] or 0) for pair in pairs
             ),
