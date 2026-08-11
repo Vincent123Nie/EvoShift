@@ -346,6 +346,7 @@ dataset hash, and comparison artifact.
 - [Real-model critic-paraphrase v2 result](docs/results_critic_paraphrase_live_mini_v2.md)
 - [Critic-paraphrase common-response preregistration](docs/experiment_critic_paraphrase_common_response.md)
 - [Critic-paraphrase common-response result](docs/results_critic_paraphrase_common_response.md)
+- [Tau3 hierarchical common-response preregistration](docs/experiment_tau3_hierarchical_common_response.md)
 
 ## Security
 

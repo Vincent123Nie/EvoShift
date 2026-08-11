@@ -48,6 +48,7 @@ packages = ["src/evoshift"]
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers --disable-warnings"
+pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
   "live: opt-in tests that call a paid external API",
