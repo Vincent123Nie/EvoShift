@@ -1,0 +1,37 @@
+base_config: configs/experiments/tau3_retail_policy_shift_live.yaml
+seeds: [11, 22, 33, 44, 55]
+algorithms:
+  - evoshift
+grid:
+  provider.base_url: [https://easyai123.shop/v1]
+  provider.api_key_env: [LOCAL_OPENAI_GATEWAY_API_KEY]
+  storage.cache_enabled: [true]
+  storage.cache_path: [data/llm_cache_tau3_hierarchical_common_response.sqlite3]
+  benchmark.phase_size: [24]
+  benchmark.policy_schedule: [[v1, v2, v3, v2]]
+  benchmark.coverage_balanced: [true]
+  benchmark.coverage_min_per_slice: [2]
+  benchmark.feedback_noise_rate: [0.0]
+  benchmark.feedback_attack_burst_length: [0]
+  evolution.dynamic_feedback_min_consistent_observations: [6]
+variants:
+  exact_shadow_eprocess:
+    evolution.shadow_candidate_enabled: true
+    evolution.min_feedback_trust_for_shadow_candidate: 0.10
+    evolution.candidate_min_trusted_observations: 0
+    evolution.shadow_eprocess_enabled: true
+    evolution.shadow_hierarchical_eprocess_enabled: false
+    evolution.shadow_eprocess_null_match_probability: 0.25
+    evolution.shadow_eprocess_alternative_match_probability: 0.75
+    evolution.shadow_eprocess_alpha: 0.05
+  hierarchical_shadow_eprocess:
+    evolution.shadow_candidate_enabled: true
+    evolution.min_feedback_trust_for_shadow_candidate: 0.10
+    evolution.candidate_min_trusted_observations: 0
+    evolution.shadow_eprocess_enabled: true
+    evolution.shadow_hierarchical_eprocess_enabled: true
+    evolution.shadow_eprocess_null_match_probability: 0.25
+    evolution.shadow_eprocess_alternative_match_probability: 0.75
+    evolution.shadow_eprocess_alpha: 0.05
+# Public-source capability control: 2 variants * 5 paired seeds = 10 runs.
+max_runs: 10
