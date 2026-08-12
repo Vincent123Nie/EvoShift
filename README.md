@@ -14,6 +14,8 @@ as a claim of state-of-the-art performance. Its emphasis is on non-stationary
 evaluation, falsifiable promotion decisions, rollback, cost accounting, and an
 immutable held-out audit path.
 
+Chinese project overview: [docs/project_overview_zh.md](docs/project_overview_zh.md).
+
 ## Core pipeline
 
 ```mermaid
@@ -280,10 +282,10 @@ python -m build
 python scripts/verify_bbh_manifest.py
 ```
 
-Verified locally on 2026-08-10:
+Verified locally on 2026-08-12:
 
-- 256 tests passed;
-- branch-aware coverage: 84.65% (`fail_under = 80`);
+- 284 tests passed;
+- branch-aware coverage: 84.85% (`fail_under = 80`);
 - LongMemEval retrieval targeted branch coverage: 92.46%;
 - Ruff and strict mypy passed over 58 source files;
 - source and wheel distributions built successfully;
