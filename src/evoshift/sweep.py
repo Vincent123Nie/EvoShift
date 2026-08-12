@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import itertools
 import json
 import statistics
@@ -50,6 +51,7 @@ _AGGREGATE_FIELDS = {
     "shadow_eprocess_crossings": "shadow_eprocess_crossings",
     "shadow_cluster_eprocess_opportunities": "shadow_cluster_eprocess_opportunities",
     "shadow_cluster_eprocess_crossings": "shadow_cluster_eprocess_crossings",
+    "shadow_cluster_eprocess_skipped_unrelated": ("shadow_cluster_eprocess_skipped_unrelated"),
     "trusted_candidate_shadow_cooldown_bypasses": ("trusted_candidate_shadow_cooldown_bypasses"),
     "context_probation_interventions": "context_probation_interventions",
     "context_probation_paired_controls": "context_probation_paired_controls",
@@ -273,12 +275,192 @@ def _read_total_budget(run_dir: Path) -> Dict[str, Any]:
     return {str(key): value for key, value in payload.items()}
 
 
-async def run_sweep(spec: SweepSpec, root: Path) -> Path:
-    sweep_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    destination = root / "runs" / "sweeps" / sweep_id
-    destination.mkdir(parents=True, exist_ok=False)
-    rows: List[Dict[str, Any]] = []
-    for assignment in expand_sweep(spec):
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sweep_fingerprint(spec: SweepSpec, assignments: Sequence[Mapping[str, Any]]) -> str:
+    base_config = spec.base_config.resolve()
+    payload = {
+        "base_config_sha256": hashlib.sha256(base_config.read_bytes()).hexdigest(),
+        "assignments": list(assignments),
+        "max_runs": spec.max_runs,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _new_sweep_state(
+    spec: SweepSpec,
+    assignments: Sequence[Mapping[str, Any]],
+    fingerprint: str,
+) -> Dict[str, Any]:
+    now = _utc_timestamp()
+    return {
+        "version": 1,
+        "status": "running",
+        "fingerprint": fingerprint,
+        "base_config": str(spec.base_config.resolve()),
+        "created_at": now,
+        "updated_at": now,
+        "completed_runs": 0,
+        "total_runs": len(assignments),
+        "assignments": [
+            {
+                "index": index,
+                "assignment": dict(assignment),
+                "status": "pending",
+                "attempts": [],
+                "row": None,
+            }
+            for index, assignment in enumerate(assignments)
+        ],
+    }
+
+
+def _load_sweep_state(
+    destination: Path,
+    assignments: Sequence[Mapping[str, Any]],
+    fingerprint: str,
+) -> Dict[str, Any]:
+    state_path = destination / "sweep_state.json"
+    if not state_path.is_file():
+        raise ValueError(f"resume directory is missing {state_path.name}: {destination}")
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise ValueError("unsupported or malformed sweep state")
+    if payload.get("fingerprint") != fingerprint:
+        raise ValueError("resume sweep spec fingerprint does not match the saved state")
+    entries = payload.get("assignments")
+    if not isinstance(entries, list) or len(entries) != len(assignments):
+        raise ValueError("resume sweep assignment count does not match the saved state")
+    for index, (entry, assignment) in enumerate(zip(entries, assignments)):
+        if not isinstance(entry, dict) or entry.get("assignment") != assignment:
+            raise ValueError(f"resume sweep assignment {index} does not match the saved state")
+        status = entry.get("status")
+        if status not in {"pending", "running", "failed", "completed"}:
+            raise ValueError(f"resume sweep assignment {index} has invalid status {status!r}")
+        attempts = entry.get("attempts")
+        if not isinstance(attempts, list):
+            raise ValueError(f"resume sweep assignment {index} has invalid attempt history")
+        if status == "completed" and not isinstance(entry.get("row"), dict):
+            raise ValueError(f"resume sweep assignment {index} is completed without a row")
+        if status == "running":
+            if attempts and isinstance(attempts[-1], dict):
+                attempts[-1].update(
+                    {
+                        "status": "interrupted",
+                        "completed_at": _utc_timestamp(),
+                        "error": "sweep resumed after an interrupted attempt",
+                    }
+                )
+            entry["status"] = "pending"
+    payload["status"] = "running"
+    payload["updated_at"] = _utc_timestamp()
+    payload["completed_runs"] = sum(
+        entry.get("status") == "completed" for entry in entries if isinstance(entry, dict)
+    )
+    return {str(key): value for key, value in payload.items()}
+
+
+def _run_directories(root: Path, runs_dir: str) -> set[Path]:
+    configured = Path(runs_dir).expanduser()
+    resolved = configured if configured.is_absolute() else root / configured
+    if not resolved.is_dir():
+        return set()
+    return {path.resolve() for path in resolved.iterdir() if path.is_dir()}
+
+
+def _write_sweep_outputs(
+    destination: Path,
+    rows: Sequence[Mapping[str, Any]],
+    spec: SweepSpec,
+    *,
+    complete: bool,
+) -> None:
+    aggregates = aggregate_sweep(rows)
+    comparisons: list[dict[str, Any]] = []
+    if complete:
+        analysis_config = load_config(spec.base_config)
+        comparisons = compare_sweep_runs(
+            rows,
+            samples=analysis_config.evaluation.bootstrap_samples,
+            confidence=analysis_config.evaluation.confidence_level,
+        )
+        comparisons.extend(
+            compare_sweep_variants(
+                rows,
+                variant_parameters=spec.variants,
+                samples=analysis_config.evaluation.bootstrap_samples,
+                confidence=analysis_config.evaluation.confidence_level,
+            )
+        )
+    _atomic_write_json(
+        destination / "matrix.json",
+        {
+            "complete": complete,
+            "completed_runs": len(rows),
+            "total_runs": len(expand_sweep(spec)),
+            "runs": list(rows),
+            "aggregates": aggregates,
+            "comparisons": comparisons,
+        },
+    )
+    _write_csv(destination / "matrix.csv", rows)
+    _write_comparison_csv(destination / "comparisons.csv", comparisons)
+    _write_sweep_markdown(destination / "report.md", aggregates, comparisons)
+
+
+async def run_sweep(spec: SweepSpec, root: Path, *, resume: Path | None = None) -> Path:
+    assignments = expand_sweep(spec)
+    fingerprint = _sweep_fingerprint(spec, assignments)
+    if resume is None:
+        sweep_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        destination = root / "runs" / "sweeps" / sweep_id
+        destination.mkdir(parents=True, exist_ok=False)
+        state = _new_sweep_state(spec, assignments, fingerprint)
+    else:
+        destination = resume.expanduser()
+        destination = destination if destination.is_absolute() else root / destination
+        destination = destination.resolve()
+        if not destination.is_dir():
+            raise ValueError(f"resume sweep directory does not exist: {destination}")
+        state = _load_sweep_state(destination, assignments, fingerprint)
+    state_path = destination / "sweep_state.json"
+    _atomic_write_json(state_path, state)
+    entries = state["assignments"]
+    rows: List[Dict[str, Any]] = [
+        dict(entry["row"])
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("status") == "completed"
+        and isinstance(entry.get("row"), dict)
+    ]
+    _write_sweep_outputs(destination, rows, spec, complete=len(rows) == len(assignments))
+    for index, assignment in enumerate(assignments):
+        entry = entries[index]
+        if entry["status"] == "completed":
+            continue
+        attempt: Dict[str, Any] = {
+            "attempt": len(entry["attempts"]) + 1,
+            "status": "running",
+            "started_at": _utc_timestamp(),
+            "run_dirs": [],
+        }
+        entry["attempts"].append(attempt)
+        entry["status"] = "running"
+        entry["row"] = None
+        state["updated_at"] = _utc_timestamp()
+        _atomic_write_json(state_path, state)
         overrides = [
             f"algorithm={assignment['algorithm']}",
             f"evaluation.seed={assignment['seed']}",
@@ -288,7 +470,25 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
         )
         config = load_config(spec.base_config, overrides)
         adapter = create_benchmark(config.benchmark, root=root, seed=config.evaluation.seed)
-        result = await EvoShiftRunner(config, adapter, workdir=root).run()
+        before_run_dirs = _run_directories(root, config.storage.runs_dir)
+        try:
+            result = await EvoShiftRunner(config, adapter, workdir=root).run()
+        except Exception as exc:
+            after_run_dirs = _run_directories(root, config.storage.runs_dir)
+            attempt.update(
+                {
+                    "status": "failed",
+                    "completed_at": _utc_timestamp(),
+                    "run_dirs": [str(path) for path in sorted(after_run_dirs - before_run_dirs)],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            entry["status"] = "failed"
+            state["status"] = "incomplete"
+            state["updated_at"] = _utc_timestamp()
+            _atomic_write_json(state_path, state)
+            _write_sweep_outputs(destination, rows, spec, complete=False)
+            raise
         budget = _read_total_budget(result.run_dir)
         policy_shift = result.metrics.get("policy_shift", {})
         feedback = result.metrics.get("feedback", {})
@@ -365,6 +565,9 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 ),
                 "shadow_cluster_eprocess_crossings": evolution.get(
                     "shadow_cluster_eprocess_crossings"
+                ),
+                "shadow_cluster_eprocess_skipped_unrelated": evolution.get(
+                    "shadow_cluster_eprocess_skipped_unrelated"
                 ),
                 "trusted_candidate_shadow_cooldown_bypasses": evolution.get(
                     "trusted_candidate_shadow_cooldown_bypasses"
@@ -562,32 +765,30 @@ async def run_sweep(spec: SweepSpec, root: Path) -> Path:
                 "temporally_deferred_changes": trust_model.get("temporally_deferred_changes"),
             }
         )
-    aggregates = aggregate_sweep(rows)
-    analysis_config = load_config(spec.base_config)
-    comparisons = compare_sweep_runs(
-        rows,
-        samples=analysis_config.evaluation.bootstrap_samples,
-        confidence=analysis_config.evaluation.confidence_level,
-    )
-    comparisons.extend(
-        compare_sweep_variants(
-            rows,
-            variant_parameters=spec.variants,
-            samples=analysis_config.evaluation.bootstrap_samples,
-            confidence=analysis_config.evaluation.confidence_level,
+        row = rows[-1]
+        attempt.update(
+            {
+                "status": "completed",
+                "completed_at": _utc_timestamp(),
+                "run_dirs": [str(result.run_dir.resolve())],
+            }
         )
-    )
-    (destination / "matrix.json").write_text(
-        json.dumps(
-            {"runs": rows, "aggregates": aggregates, "comparisons": comparisons},
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-    _write_csv(destination / "matrix.csv", rows)
-    _write_comparison_csv(destination / "comparisons.csv", comparisons)
-    _write_sweep_markdown(destination / "report.md", aggregates, comparisons)
+        entry["status"] = "completed"
+        entry["row"] = row
+        state["completed_runs"] = len(rows)
+        state["updated_at"] = _utc_timestamp()
+        _atomic_write_json(state_path, state)
+        _write_sweep_outputs(
+            destination,
+            rows,
+            spec,
+            complete=len(rows) == len(assignments),
+        )
+    state["status"] = "complete"
+    state["completed_runs"] = len(rows)
+    state["completed_at"] = _utc_timestamp()
+    state["updated_at"] = state["completed_at"]
+    _atomic_write_json(state_path, state)
     return destination
 
 
@@ -965,6 +1166,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "shadow_eprocess_crossings",
         "shadow_cluster_eprocess_opportunities",
         "shadow_cluster_eprocess_crossings",
+        "shadow_cluster_eprocess_skipped_unrelated",
         "trusted_candidate_shadow_cooldown_bypasses",
         "context_probation_interventions",
         "context_probation_paired_controls",

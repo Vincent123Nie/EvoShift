@@ -329,6 +329,9 @@ async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
     destination = await run_sweep(spec, tmp_path)
 
     matrix = json.loads((destination / "matrix.json").read_text(encoding="utf-8"))
+    state = json.loads((destination / "sweep_state.json").read_text(encoding="utf-8"))
+    assert matrix["complete"] is True
+    assert matrix["completed_runs"] == 1
     assert len(matrix["runs"]) == 1
     assert matrix["runs"][0]["parameters"] == {"policy.top_k": 2}
     assert matrix["runs"][0]["variant"] == "default"
@@ -344,3 +347,112 @@ async def test_run_sweep_writes_matrix_csv_and_report(tmp_path: Path) -> None:
     assert "Realized precision" in report
     assert "Lifecycle path diagnostics" in report
     assert "Only same-model" in report
+    assert state["status"] == "complete"
+    assert state["completed_runs"] == 1
+    assert state["assignments"][0]["status"] == "completed"
+    assert state["assignments"][0]["attempts"][0]["status"] == "completed"
+    assert not (destination / ".sweep_state.json.tmp").exists()
+
+
+@pytest.mark.asyncio
+async def test_run_sweep_resumes_failed_assignment_without_rerunning_completed_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "project: sweep-resume-test\n"
+        "algorithm: static\n"
+        "provider:\n  kind: demo\n  model: evoshift-demo\n  reasoning_effort: null\n"
+        "storage:\n  cache_enabled: false\n  isolate_runs: true\n"
+        "benchmark:\n  kind: synthetic_shift\n  path: null\n  phase_size: 1\n"
+        "evolution:\n  enabled: false\n",
+        encoding="utf-8",
+    )
+    spec = SweepSpec(
+        base_config=base,
+        algorithms=[Algorithm.STATIC],
+        seeds=[7, 8],
+        grid={},
+        max_runs=2,
+    )
+    from evoshift.runner import EvoShiftRunner as RealRunner
+
+    original_run = RealRunner.run
+    call_count = 0
+
+    async def fail_second_run(self: RealRunner):  # type: ignore[no-untyped-def]
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("injected interruption")
+        return await original_run(self)
+
+    monkeypatch.setattr("evoshift.sweep.EvoShiftRunner.run", fail_second_run)
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        await run_sweep(spec, tmp_path)
+
+    destination = next((tmp_path / "runs" / "sweeps").iterdir())
+    partial_matrix = json.loads((destination / "matrix.json").read_text(encoding="utf-8"))
+    partial_state = json.loads((destination / "sweep_state.json").read_text(encoding="utf-8"))
+    first_run_id = partial_matrix["runs"][0]["run_id"]
+    assert partial_matrix["complete"] is False
+    assert partial_matrix["completed_runs"] == 1
+    assert [entry["status"] for entry in partial_state["assignments"]] == [
+        "completed",
+        "failed",
+    ]
+    assert partial_state["assignments"][1]["attempts"][0]["error"].endswith("injected interruption")
+
+    resumed_calls = 0
+
+    async def count_resumed_run(self: RealRunner):  # type: ignore[no-untyped-def]
+        nonlocal resumed_calls
+        resumed_calls += 1
+        return await original_run(self)
+
+    monkeypatch.setattr("evoshift.sweep.EvoShiftRunner.run", count_resumed_run)
+    resumed = await run_sweep(spec, tmp_path, resume=destination)
+
+    matrix = json.loads((resumed / "matrix.json").read_text(encoding="utf-8"))
+    state = json.loads((resumed / "sweep_state.json").read_text(encoding="utf-8"))
+    assert resumed == destination
+    assert resumed_calls == 1
+    assert matrix["complete"] is True
+    assert matrix["completed_runs"] == 2
+    assert matrix["runs"][0]["run_id"] == first_run_id
+    assert state["status"] == "complete"
+    assert [entry["status"] for entry in state["assignments"]] == [
+        "completed",
+        "completed",
+    ]
+    assert [attempt["status"] for attempt in state["assignments"][1]["attempts"]] == [
+        "failed",
+        "completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_sweep_rejects_resume_when_spec_fingerprint_changes(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "project: sweep-fingerprint-test\n"
+        "algorithm: static\n"
+        "provider:\n  kind: demo\n  model: evoshift-demo\n  reasoning_effort: null\n"
+        "storage:\n  cache_enabled: false\n  isolate_runs: true\n"
+        "benchmark:\n  kind: synthetic_shift\n  path: null\n  phase_size: 1\n"
+        "evolution:\n  enabled: false\n",
+        encoding="utf-8",
+    )
+    original = SweepSpec(base, [Algorithm.STATIC], [7], {}, max_runs=1)
+    destination = await run_sweep(original, tmp_path)
+    changed = SweepSpec(
+        base,
+        [Algorithm.STATIC],
+        [7],
+        {"policy.top_k": [2]},
+        max_runs=1,
+    )
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        await run_sweep(changed, tmp_path, resume=destination)

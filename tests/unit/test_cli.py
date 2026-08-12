@@ -199,3 +199,44 @@ def test_sweep_cli_reports_bounded_run_count(
     assert result.exit_code == 0
     assert "Executing 1 bounded sweep runs" in result.stdout
     assert "Sweep complete" in result.stdout
+
+
+def test_sweep_cli_passes_resume_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text("placeholder: true\n", encoding="utf-8")
+    resume = tmp_path / "existing-sweep"
+    resume.mkdir()
+    spec = SweepSpec(
+        base_config=Path("unused.yaml"),
+        algorithms=[Algorithm.STATIC],
+        seeds=[1],
+        grid={},
+        max_runs=1,
+    )
+    received: dict[str, Path] = {}
+
+    monkeypatch.setattr("evoshift.sweep.load_sweep_spec", lambda *_args: spec)
+    monkeypatch.setattr("evoshift.sweep.expand_sweep", lambda _spec: [{}])
+
+    async def fake_run_sweep(
+        _spec: SweepSpec,
+        _root: Path,
+        *,
+        resume=None,
+    ) -> Path:
+        assert resume is not None
+        received["resume"] = resume
+        return resume
+
+    monkeypatch.setattr("evoshift.sweep.run_sweep", fake_run_sweep)
+    result = runner.invoke(
+        app,
+        ["sweep", "--spec", str(spec_path), "--resume", str(resume)],
+    )
+
+    assert result.exit_code == 0
+    assert "Resuming 1 bounded sweep runs" in result.stdout
+    assert received["resume"] == resume

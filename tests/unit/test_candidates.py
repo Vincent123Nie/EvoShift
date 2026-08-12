@@ -35,6 +35,7 @@ def _cluster_candidate(
     *,
     directive: str,
     cluster: str = "cluster-observable-anchor",
+    family: str = "family-observable-anchor",
 ) -> MemoryItem:
     return MemoryItem(
         memory_id="",
@@ -42,6 +43,7 @@ def _cluster_candidate(
         scope="customer_support/refund_policy",
         directive=directive,
         evidence_cluster_key=cluster,
+        evidence_family_key=family,
         provenance_episode_ids=[episode_id],
         source_domains=["customer_support/refund_policy"],
         confidence=0.9,
@@ -291,6 +293,125 @@ def test_hierarchical_shadow_eprocess_keeps_feedback_signals_separate() -> None:
         False,
         "shadow_eprocess_below_threshold",
     )
+
+
+def test_conditional_shadow_eprocess_skips_unrelated_families() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=0,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+        shadow_conditional_eprocess_enabled=True,
+    )
+    target = _cluster_candidate(
+        "target-1",
+        directive="Approve the target case.",
+        cluster="cluster-target-allow",
+        family="family-target",
+    )
+    unrelated = _cluster_candidate(
+        "unrelated-1",
+        directive="Deny the unrelated case.",
+        cluster="cluster-unrelated-deny",
+        family="family-unrelated",
+    )
+
+    target_evidence = pool.observe(target, 0, trust=0.4, trusted=False)
+    pool.observe(unrelated, 1, trust=0.4, trusted=False)
+
+    assert pool.cluster_e_value(target_evidence.cluster_signature) == 1.0
+    assert pool.shadow_cluster_eprocess_opportunities == 0
+    assert pool.shadow_cluster_eprocess_skipped_unrelated == 1
+
+
+def test_conditional_shadow_eprocess_crosses_with_interleaved_unrelated_events() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=0,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+        shadow_conditional_eprocess_enabled=True,
+    )
+    target = _cluster_candidate(
+        "target-1",
+        directive="Approve the target case.",
+        cluster="cluster-target-allow",
+        family="family-target",
+    )
+    unrelated = _cluster_candidate(
+        "unrelated-1",
+        directive="Deny the unrelated case.",
+        cluster="cluster-unrelated-deny",
+        family="family-unrelated",
+    )
+
+    evidence = pool.observe(target, 0, trust=0.4, trusted=False)
+    pool.observe(unrelated, 1, trust=0.4, trusted=False)
+    pool.observe(
+        target.model_copy(update={"provenance_episode_ids": ["target-2"]}),
+        2,
+        trust=0.4,
+        trusted=False,
+    )
+    pool.observe(
+        unrelated.model_copy(update={"provenance_episode_ids": ["unrelated-2"]}),
+        3,
+        trust=0.4,
+        trusted=False,
+    )
+    pool.observe(
+        target.model_copy(update={"provenance_episode_ids": ["target-3"]}),
+        4,
+        trust=0.4,
+        trusted=False,
+    )
+    pool.observe(
+        target.model_copy(update={"provenance_episode_ids": ["target-4"]}),
+        5,
+        trust=0.4,
+        trusted=False,
+    )
+
+    cluster = pool.cluster_evidence(evidence.cluster_signature)
+    assert cluster is not None
+    assert cluster.shadow_e_value == 27.0
+    assert cluster.shadow_eprocess_ready is True
+    assert pool.shadow_cluster_eprocess_crossings == 1
+
+
+def test_conditional_shadow_eprocess_counts_competing_signal_as_negative_evidence() -> None:
+    pool = CandidateEvidencePool(
+        min_observations=1,
+        min_trusted_observations=0,
+        min_new_observations=1,
+        cooldown_episodes=0,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+        shadow_conditional_eprocess_enabled=True,
+    )
+    allow = _cluster_candidate(
+        "allow-1",
+        directive="Approve the target case.",
+        cluster="cluster-target-allow",
+        family="family-target",
+    )
+    deny = _cluster_candidate(
+        "deny-1",
+        directive="Deny the target case.",
+        cluster="cluster-target-deny",
+        family="family-target",
+    )
+
+    evidence = pool.observe(allow, 0, trust=0.4, trusted=False)
+    pool.observe(deny, 1, trust=0.4, trusted=False)
+
+    assert pool.cluster_e_value(evidence.cluster_signature) == 1.0 / 3.0
+    assert pool.shadow_cluster_eprocess_opportunities == 1
+    assert pool.shadow_cluster_eprocess_skipped_unrelated == 0
 
 
 def test_trusted_lane_ignores_shadow_cluster_probation() -> None:

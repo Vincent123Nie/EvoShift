@@ -153,3 +153,25 @@ def test_hierarchical_shadow_eprocess_can_be_enabled_with_dependencies() -> None
     )
 
     assert config.shadow_hierarchical_eprocess_enabled is True
+
+
+def test_conditional_shadow_eprocess_requires_hierarchical_mode() -> None:
+    with pytest.raises(ValueError, match="requires the hierarchical e-process"):
+        EvolutionConfig(
+            shadow_candidate_enabled=True,
+            future_audit_enabled=True,
+            shadow_eprocess_enabled=True,
+            shadow_conditional_eprocess_enabled=True,
+        )
+
+
+def test_conditional_shadow_eprocess_can_be_enabled_with_dependencies() -> None:
+    config = EvolutionConfig(
+        shadow_candidate_enabled=True,
+        future_audit_enabled=True,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+        shadow_conditional_eprocess_enabled=True,
+    )
+
+    assert config.shadow_conditional_eprocess_enabled is True

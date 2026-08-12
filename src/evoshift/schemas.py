@@ -124,6 +124,12 @@ class MemoryItem(StrictModel):
         max_length=128,
         exclude_if=lambda value: value == "",
     )
+    # Code-derived observable family key; excludes the feedback signal.
+    evidence_family_key: str = Field(
+        default="",
+        max_length=128,
+        exclude_if=lambda value: value == "",
+    )
     supersedes_memory_ids: List[str] = Field(default_factory=list, max_length=20)
     valid_from_episode_id: str = ""
     valid_from_index: int = Field(default=0, ge=0)

@@ -95,6 +95,7 @@ class EvolutionConfig(ConfigModel):
     min_feedback_trust_for_shadow_candidate: float = Field(default=0.10, ge=0.0, le=1.0)
     shadow_eprocess_enabled: bool = False
     shadow_hierarchical_eprocess_enabled: bool = False
+    shadow_conditional_eprocess_enabled: bool = False
     shadow_eprocess_null_match_probability: float = Field(default=0.25, gt=0.0, lt=1.0)
     shadow_eprocess_alternative_match_probability: float = Field(default=0.75, gt=0.0, lt=1.0)
     shadow_eprocess_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
@@ -214,6 +215,11 @@ class EvolutionConfig(ConfigModel):
             raise ValueError("hierarchical shadow e-process requires shadow candidate admission")
         if self.shadow_hierarchical_eprocess_enabled and not self.shadow_eprocess_enabled:
             raise ValueError("hierarchical shadow e-process requires the exact shadow e-process")
+        if (
+            self.shadow_conditional_eprocess_enabled
+            and not self.shadow_hierarchical_eprocess_enabled
+        ):
+            raise ValueError("conditional shadow e-process requires the hierarchical e-process")
         if (
             self.shadow_eprocess_enabled
             and self.shadow_eprocess_alternative_match_probability

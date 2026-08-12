@@ -6,7 +6,10 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from evoshift.config import EvolutionConfig, ProviderConfig
-from evoshift.evolution.candidates import observable_candidate_cluster_key
+from evoshift.evolution.candidates import (
+    observable_candidate_cluster_key,
+    observable_candidate_family_key,
+)
 from evoshift.schemas import (
     Episode,
     FailureRecord,
@@ -180,6 +183,7 @@ class ExperienceCritic:
             source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
             evidence_cluster_key=self._cluster_key(episode),
+            evidence_family_key=self._family_key(episode),
             supersedes_memory_ids=[
                 str(memory_id)
                 for memory_id in memory_data.get("supersedes_memory_ids", [])[:20]
@@ -212,6 +216,7 @@ class ExperienceCritic:
             source_domains=[episode.sample.domain],
             provenance_episode_ids=[episode.episode_id],
             evidence_cluster_key=self._cluster_key(episode),
+            evidence_family_key=self._family_key(episode),
             valid_from_episode_id=episode.episode_id,
             valid_from_index=episode.index,
             confidence=0.2,
@@ -232,11 +237,8 @@ class ExperienceCritic:
         if not self.evolution.shadow_hierarchical_eprocess_enabled:
             return ""
 
+        source, context = self._observable_family(episode)
         metadata = episode.sample.metadata
-        source = str(metadata.get("feedback_source", "")).strip() or "unspecified"
-        context = str(metadata.get("feedback_context", "")).strip()
-        if not context:
-            context = " ".join(episode.sample.prompt.casefold().split())
         raw_signal = metadata.get(
             "feedback_reference",
             "success" if episode.adaptation_score.success else "failure",
@@ -256,3 +258,22 @@ class ExperienceCritic:
             feedback_context=context,
             feedback_signal=signal,
         )
+
+    def _family_key(self, episode: Episode) -> str:
+        if not self.evolution.shadow_conditional_eprocess_enabled:
+            return ""
+        source, context = self._observable_family(episode)
+        return observable_candidate_family_key(
+            domain=episode.sample.domain,
+            feedback_source=source,
+            feedback_context=context,
+        )
+
+    @staticmethod
+    def _observable_family(episode: Episode) -> tuple[str, str]:
+        metadata = episode.sample.metadata
+        source = str(metadata.get("feedback_source", "")).strip() or "unspecified"
+        context = str(metadata.get("feedback_context", "")).strip()
+        if not context:
+            context = " ".join(episode.sample.prompt.casefold().split())
+        return source, context

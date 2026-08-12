@@ -224,6 +224,9 @@ class EvoShiftRunner:
                 shadow_hierarchical_eprocess_enabled=(
                     self.config.evolution.shadow_hierarchical_eprocess_enabled
                 ),
+                shadow_conditional_eprocess_enabled=(
+                    self.config.evolution.shadow_conditional_eprocess_enabled
+                ),
             )
             candidate_pool.seed_accepted(memory.active())
             future_auditor = (
@@ -3504,6 +3507,9 @@ class EvoShiftRunner:
                     ),
                     "shadow_cluster_eprocess_crossings": (
                         candidate_pool.shadow_cluster_eprocess_crossings
+                    ),
+                    "shadow_cluster_eprocess_skipped_unrelated": (
+                        candidate_pool.shadow_cluster_eprocess_skipped_unrelated
                     ),
                     "shadow_cluster_eprocess": candidate_pool.cluster_snapshot(),
                 }

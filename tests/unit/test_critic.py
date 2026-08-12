@@ -142,15 +142,72 @@ async def test_critic_cluster_key_ignores_model_tags_and_hidden_metadata() -> No
             )
         }
     )
-    critic = ExperienceCritic(MaliciousClient(), ProviderConfig(model="fake"), EvolutionConfig())
+    evolution = EvolutionConfig(
+        shadow_candidate_enabled=True,
+        future_audit_enabled=True,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+        shadow_conditional_eprocess_enabled=True,
+    )
+    critic = ExperienceCritic(MaliciousClient(), ProviderConfig(model="fake"), evolution)
 
     first = await critic.analyze(base, [])
     second = await critic.analyze(flipped, [])
 
     assert first.proposed_memory is not None
     assert second.proposed_memory is not None
+    assert first.proposed_memory.evidence_cluster_key
     assert first.proposed_memory.evidence_cluster_key == second.proposed_memory.evidence_cluster_key
+    assert first.proposed_memory.evidence_family_key
+    assert first.proposed_memory.evidence_family_key == second.proposed_memory.evidence_family_key
     assert first.proposed_memory.evidence_cluster_key != "model-chosen"
+
+
+@pytest.mark.asyncio
+async def test_critic_conditional_keys_separate_signal_within_observable_family() -> None:
+    evolution = EvolutionConfig(
+        shadow_candidate_enabled=True,
+        future_audit_enabled=True,
+        shadow_eprocess_enabled=True,
+        shadow_hierarchical_eprocess_enabled=True,
+        shadow_conditional_eprocess_enabled=True,
+    )
+    critic = ExperienceCritic(StubClient(), ProviderConfig(model="fake"), evolution)
+    allow = _episode().model_copy(
+        update={
+            "sample": _episode().sample.model_copy(
+                update={
+                    "metadata": {
+                        "feedback_source": "grader-a",
+                        "feedback_context": "refund:any:days_8_14",
+                        "feedback_reference": "ALLOW",
+                    }
+                }
+            )
+        }
+    )
+    deny = allow.model_copy(
+        update={
+            "sample": allow.sample.model_copy(
+                update={"metadata": {**allow.sample.metadata, "feedback_reference": "DENY"}}
+            )
+        }
+    )
+
+    allow_result = await critic.analyze(allow, [])
+    deny_result = await critic.analyze(deny, [])
+
+    assert allow_result.proposed_memory is not None
+    assert deny_result.proposed_memory is not None
+    assert allow_result.proposed_memory.evidence_family_key
+    assert (
+        allow_result.proposed_memory.evidence_family_key
+        == deny_result.proposed_memory.evidence_family_key
+    )
+    assert (
+        allow_result.proposed_memory.evidence_cluster_key
+        != deny_result.proposed_memory.evidence_cluster_key
+    )
 
 
 @pytest.mark.asyncio
@@ -202,6 +259,7 @@ async def test_demo_paraphrase_and_cluster_key_ignore_hidden_oracle_fields() -> 
         future_audit_enabled=True,
         shadow_eprocess_enabled=True,
         shadow_hierarchical_eprocess_enabled=True,
+        shadow_conditional_eprocess_enabled=True,
     )
     critic = ExperienceCritic(
         HeuristicDemoClient(model="demo", critic_paraphrase_mode="stable_cycle"),
@@ -216,6 +274,8 @@ async def test_demo_paraphrase_and_cluster_key_ignore_hidden_oracle_fields() -> 
     assert second.proposed_memory is not None
     assert first.proposed_memory.evidence_cluster_key
     assert first.proposed_memory.evidence_cluster_key == second.proposed_memory.evidence_cluster_key
+    assert first.proposed_memory.evidence_family_key
+    assert first.proposed_memory.evidence_family_key == second.proposed_memory.evidence_family_key
     assert first.proposed_memory.trigger == second.proposed_memory.trigger
     assert first.proposed_memory.directive == second.proposed_memory.directive
     assert first.proposed_memory.anti_pattern == second.proposed_memory.anti_pattern

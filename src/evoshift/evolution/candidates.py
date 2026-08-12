@@ -33,6 +33,35 @@ def candidate_cluster_signature(candidate: MemoryItem) -> str:
     return candidate.evidence_cluster_key or candidate_signature(candidate)
 
 
+def candidate_family_signature(candidate: MemoryItem) -> str:
+    """Return the observable family key used for conditional evidence updates."""
+
+    return candidate.evidence_family_key or candidate_cluster_signature(candidate)
+
+
+def _observable_key(prefix: str, payload: dict[str, str]) -> str:
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"{prefix}-{digest}"
+
+
+def observable_candidate_family_key(
+    *,
+    domain: str,
+    feedback_source: str,
+    feedback_context: str,
+) -> str:
+    """Hash the learner-visible context that defines competing feedback signals."""
+
+    payload = {
+        "domain": " ".join(str(domain).casefold().split()),
+        "feedback_source": " ".join(str(feedback_source).casefold().split()) or "unspecified",
+        "feedback_context": " ".join(str(feedback_context).casefold().split()),
+    }
+    return _observable_key("family", payload)
+
+
 def observable_candidate_cluster_key(
     *,
     domain: str,
@@ -48,16 +77,14 @@ def observable_candidate_cluster_key(
         "feedback_context": " ".join(str(feedback_context).casefold().split()),
         "feedback_signal": " ".join(str(feedback_signal).casefold().split()),
     }
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    return f"cluster-{digest}"
+    return _observable_key("cluster", payload)
 
 
 @dataclass
 class CandidateEvidence:
     signature: str
     cluster_signature: str
+    family_signature: str
     candidate: MemoryItem
     observation_count: int
     first_episode_index: int
@@ -95,6 +122,7 @@ class CandidateEvidence:
 @dataclass
 class CandidateClusterEvidence:
     signature: str
+    family_signature: str
     first_episode_index: int
     last_episode_index: int
     shadow_observation_count: int = 0
@@ -123,6 +151,7 @@ class CandidateEvidencePool:
         shadow_eprocess_alternative_match_probability: float = 0.75,
         shadow_eprocess_alpha: float = 0.05,
         shadow_hierarchical_eprocess_enabled: bool = False,
+        shadow_conditional_eprocess_enabled: bool = False,
     ) -> None:
         if not 0.0 < shadow_eprocess_alpha < 1.0:
             raise ValueError("shadow e-process alpha must be in (0, 1)")
@@ -141,6 +170,7 @@ class CandidateEvidencePool:
         self.cooldown_episodes = cooldown_episodes
         self.shadow_eprocess_enabled = shadow_eprocess_enabled
         self.shadow_hierarchical_eprocess_enabled = shadow_hierarchical_eprocess_enabled
+        self.shadow_conditional_eprocess_enabled = shadow_conditional_eprocess_enabled
         self.shadow_eprocess_null_match_probability = shadow_eprocess_null_match_probability
         self.shadow_eprocess_alternative_match_probability = (
             shadow_eprocess_alternative_match_probability
@@ -150,6 +180,7 @@ class CandidateEvidencePool:
         self.shadow_eprocess_crossings = 0
         self.shadow_cluster_eprocess_opportunities = 0
         self.shadow_cluster_eprocess_crossings = 0
+        self.shadow_cluster_eprocess_skipped_unrelated = 0
         self._items: Dict[str, CandidateEvidence] = {}
         self._clusters: Dict[str, CandidateClusterEvidence] = {}
 
@@ -157,10 +188,12 @@ class CandidateEvidencePool:
         for memory in memories:
             signature = candidate_signature(memory)
             cluster_signature = candidate_cluster_signature(memory)
+            family_signature = candidate_family_signature(memory)
             cluster = self._clusters.setdefault(
                 cluster_signature,
                 CandidateClusterEvidence(
                     signature=cluster_signature,
+                    family_signature=family_signature,
                     first_episode_index=-1,
                     last_episode_index=-1,
                     accepted=True,
@@ -170,6 +203,7 @@ class CandidateEvidencePool:
             self._items[signature] = CandidateEvidence(
                 signature=signature,
                 cluster_signature=cluster_signature,
+                family_signature=family_signature,
                 candidate=memory,
                 observation_count=max(1, len(memory.provenance_episode_ids)),
                 first_episode_index=-1,
@@ -194,10 +228,12 @@ class CandidateEvidencePool:
             raise ValueError("candidate evidence trust must be in [0, 1]")
         signature = candidate_signature(candidate)
         cluster_signature = candidate_cluster_signature(candidate)
+        family_signature = candidate_family_signature(candidate)
         cluster = self._clusters.get(cluster_signature)
         if cluster is None:
             cluster = CandidateClusterEvidence(
                 signature=cluster_signature,
+                family_signature=family_signature,
                 first_episode_index=episode_index,
                 last_episode_index=episode_index,
             )
@@ -216,6 +252,12 @@ class CandidateEvidencePool:
                         and not cluster_item.accepted
                         and not cluster_item.probationary
                     ):
+                        if (
+                            self.shadow_conditional_eprocess_enabled
+                            and cluster_item.family_signature != family_signature
+                        ):
+                            self.shadow_cluster_eprocess_skipped_unrelated += 1
+                            continue
                         self._update_cluster_eprocess(
                             cluster_item,
                             matched=cluster_item.signature == cluster_signature,
@@ -227,6 +269,7 @@ class CandidateEvidencePool:
             evidence = CandidateEvidence(
                 signature=signature,
                 cluster_signature=cluster_signature,
+                family_signature=family_signature,
                 candidate=candidate,
                 observation_count=1,
                 first_episode_index=episode_index,
@@ -248,6 +291,7 @@ class CandidateEvidencePool:
             and not existing.probationary
         ):
             existing.cluster_signature = cluster_signature
+            existing.family_signature = family_signature
 
         provenance = list(
             dict.fromkeys(
@@ -471,8 +515,10 @@ class CandidateEvidencePool:
             "count": len(self._clusters),
             "shadow_eprocess_opportunities": self.shadow_cluster_eprocess_opportunities,
             "shadow_eprocess_crossings": self.shadow_cluster_eprocess_crossings,
+            "skipped_unrelated": self.shadow_cluster_eprocess_skipped_unrelated,
             "clusters": {
                 key: {
+                    "family_signature": value.family_signature,
                     "opportunities": value.shadow_eprocess_opportunities_since_validation,
                     "crossings": value.shadow_eprocess_crossings,
                     "shadow_e_value": value.shadow_e_value,
@@ -498,6 +544,8 @@ __all__ = [
     "CandidateEvidence",
     "CandidateEvidencePool",
     "candidate_cluster_signature",
+    "candidate_family_signature",
     "candidate_signature",
     "observable_candidate_cluster_key",
+    "observable_candidate_family_key",
 ]

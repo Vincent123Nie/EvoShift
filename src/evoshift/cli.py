@@ -455,6 +455,10 @@ def run_experiment_sweep(
     spec: Path = typer.Option(
         Path("configs/sweeps/demo_matrix.yaml"), help="Sweep specification YAML."
     ),
+    resume: Optional[Path] = typer.Option(
+        None,
+        help="Resume an existing runs/sweeps/<id> directory.",
+    ),
 ) -> None:
     """Run a bounded algorithm/seed/hyperparameter matrix sequentially."""
 
@@ -463,8 +467,12 @@ def run_experiment_sweep(
 
         resolved = load_sweep_spec(spec, Path.cwd())
         run_count = len(expand_sweep(resolved))
-        console.print(f"Executing {run_count} bounded sweep runs...")
-        destination = await run_sweep(resolved, Path.cwd())
+        action = "Resuming" if resume is not None else "Executing"
+        console.print(f"{action} {run_count} bounded sweep runs...")
+        if resume is None:
+            destination = await run_sweep(resolved, Path.cwd())
+        else:
+            destination = await run_sweep(resolved, Path.cwd(), resume=resume)
         console.print(f"[green]Sweep complete:[/green] {destination}")
 
     try:
