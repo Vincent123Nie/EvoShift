@@ -170,6 +170,20 @@ quarantine, recovery, shift events, memory promotions, complete requests, and
 complete tokens. `matrix.json` is the machine-readable source; `report.md` is a
 compact review surface.
 
+Sweeps checkpoint each assignment atomically in `sweep_state.json`. A failed or
+interrupted matrix can resume without rerunning completed assignments, provided
+the base-config content and ordered assignments still match the saved
+fingerprint:
+
+```bash
+evoshift sweep --spec <same-spec.yaml> --resume runs/sweeps/<sweep-id>
+```
+
+The partial `matrix.json`, `matrix.csv`, and `report.md` are refreshed after
+every completed assignment. Only a fully completed matrix is marked
+`"complete": true`; failed and interrupted attempt histories retain their run
+directories for audit.
+
 The demo provider is still deterministic scaffolding, not model-quality
 evidence. Its purpose is to expose whether the state machine accepts true
 updates, follows corrupted feedback, or incorrectly protects superseded rules.

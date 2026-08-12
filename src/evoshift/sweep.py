@@ -489,6 +489,9 @@ async def run_sweep(spec: SweepSpec, root: Path, *, resume: Path | None = None) 
             _atomic_write_json(state_path, state)
             _write_sweep_outputs(destination, rows, spec, complete=False)
             raise
+        attempt["run_dirs"] = [str(result.run_dir.resolve())]
+        state["updated_at"] = _utc_timestamp()
+        _atomic_write_json(state_path, state)
         budget = _read_total_budget(result.run_dir)
         policy_shift = result.metrics.get("policy_shift", {})
         feedback = result.metrics.get("feedback", {})
@@ -770,7 +773,6 @@ async def run_sweep(spec: SweepSpec, root: Path, *, resume: Path | None = None) 
             {
                 "status": "completed",
                 "completed_at": _utc_timestamp(),
-                "run_dirs": [str(result.run_dir.resolve())],
             }
         )
         entry["status"] = "completed"
