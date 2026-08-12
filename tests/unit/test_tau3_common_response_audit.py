@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.audit_tau3_hierarchical_common_response import _paired_alignment
+from scripts.audit_tau3_hierarchical_common_response import (
+    _cluster_diagnostics,
+    _paired_alignment,
+    _paired_dataset_hashes_match,
+)
 
 
 def _write_predictions(run_dir: Path, rows: list[dict[str, object]]) -> None:
@@ -70,3 +74,35 @@ def test_paired_alignment_rejects_different_stream_lengths(tmp_path: Path) -> No
     assert report["exact_n"] == 1
     assert report["hierarchical_n"] == 0
     assert report["first_divergence_index"] == 0
+
+
+def test_paired_dataset_hashes_match_allows_different_hashes_across_seeds() -> None:
+    assert _paired_dataset_hashes_match(
+        {"dataset_hash": "seed-11-stream"},
+        {"dataset_hash": "seed-11-stream"},
+    )
+    assert not _paired_dataset_hashes_match(
+        {"dataset_hash": "seed-11-stream"},
+        {"dataset_hash": "seed-22-stream"},
+    )
+    assert not _paired_dataset_hashes_match({}, {})
+
+
+def test_cluster_diagnostics_reconstructs_binary_match_rate() -> None:
+    report = _cluster_diagnostics(
+        {
+            "shadow_cluster_eprocess": {
+                "clusters": {
+                    "one": {"opportunities": 4, "shadow_e_value": 1.0 / 9.0},
+                    "two": {"opportunities": 3, "shadow_e_value": 3.0},
+                }
+            }
+        }
+    )
+
+    assert report["cluster_n"] == 2
+    assert report["opportunity_n"] == 7
+    assert report["inferred_match_n"] == 3.0
+    assert report["inferred_match_rate"] == 3.0 / 7.0
+    assert report["min_e_value"] == 1.0 / 9.0
+    assert report["max_e_value"] == 3.0

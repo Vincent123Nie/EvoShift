@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -93,19 +94,48 @@ def _metric(comparison: dict[str, Any], name: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _paired_dataset_hashes_match(
+    exact_manifest: dict[str, Any], hierarchical_manifest: dict[str, Any]
+) -> bool:
+    exact_hash = str(exact_manifest.get("dataset_hash", ""))
+    hierarchical_hash = str(hierarchical_manifest.get("dataset_hash", ""))
+    return bool(exact_hash) and exact_hash == hierarchical_hash
+
+
+def _cluster_diagnostics(evolution: dict[str, Any]) -> dict[str, Any]:
+    snapshot = evolution.get("shadow_cluster_eprocess", {})
+    clusters = snapshot.get("clusters", {}) if isinstance(snapshot, dict) else {}
+    rows = [row for row in clusters.values() if isinstance(row, dict)]
+    opportunity_n = sum(int(row.get("opportunities", 0) or 0) for row in rows)
+    e_values = [float(row["shadow_e_value"]) for row in rows if row.get("shadow_e_value")]
+    inferred_match_n = sum(
+        (int(row.get("opportunities", 0) or 0) + math.log(float(row["shadow_e_value"]), 3)) / 2.0
+        for row in rows
+        if row.get("shadow_e_value")
+    )
+    return {
+        "cluster_n": len(rows),
+        "opportunity_n": opportunity_n,
+        "inferred_match_n": inferred_match_n,
+        "inferred_match_rate": inferred_match_n / opportunity_n if opportunity_n else None,
+        "min_e_value": min(e_values) if e_values else None,
+        "max_e_value": max(e_values) if e_values else None,
+    }
+
+
 def audit(sweep_dir: Path) -> dict[str, Any]:
     matrix = _json_object(sweep_dir / "matrix.json")
     rows = [row for row in matrix.get("runs", []) if isinstance(row, dict)]
     grouped = {(str(row.get("variant")), int(row.get("seed", 0))): row for row in rows}
     pairs: list[dict[str, Any]] = []
     commits: set[str] = set()
-    datasets: set[str] = set()
     models: set[str] = set()
     dirty: list[bool] = []
     cache_paths: set[str] = set()
     cache_enabled: list[bool] = []
     pair_configs_equal: list[bool] = []
     pair_flags_valid: list[bool] = []
+    pair_datasets_equal: list[bool] = []
     for seed in sorted(EXPECTED_SEEDS):
         exact_row = grouped.get((VARIANTS[0], seed))
         hierarchical_row = grouped.get((VARIANTS[1], seed))
@@ -128,9 +158,11 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
             and hierarchical_config.get("evolution", {}).get("shadow_hierarchical_eprocess_enabled")
             is True
         )
+        pair_datasets_equal.append(
+            _paired_dataset_hashes_match(exact_manifest, hierarchical_manifest)
+        )
         for manifest in (exact_manifest, hierarchical_manifest):
             commits.add(str(manifest.get("git_commit", "")))
-            datasets.add(str(manifest.get("dataset_hash", "")))
             models.add(str(manifest.get("model", "")))
             dirty.append(bool(manifest.get("git_dirty", True)))
         for config in (exact_config, hierarchical_config):
@@ -139,6 +171,7 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
             cache_enabled.append(bool(storage.get("cache_enabled")))
         evolution = hierarchical_metrics.get("evolution", {})
         safety = hierarchical_metrics.get("active_memory_governance", {})
+        cluster_diagnostics = _cluster_diagnostics(evolution)
         pairs.append(
             {
                 "seed": seed,
@@ -154,6 +187,10 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
                     "changed_case_success_rate"
                 ),
                 "cluster_crossings": evolution.get("shadow_cluster_eprocess_crossings"),
+                "exact_opportunities": evolution.get("shadow_eprocess_opportunities"),
+                "cluster_opportunities": evolution.get("shadow_cluster_eprocess_opportunities"),
+                "shadow_failure_extractions": evolution.get("shadow_failure_extractions"),
+                "cluster_diagnostics": cluster_diagnostics,
                 "shadow_replays": evolution.get("shadow_only_candidate_replay_attempts"),
                 "probations": evolution.get("shadow_candidate_probations"),
                 "activations": evolution.get("shadow_candidate_activations"),
@@ -177,7 +214,7 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
         "all_pairs_completed": len(pairs) == len(EXPECTED_SEEDS),
         "all_samples_aligned": all(pair["alignment"].get("aligned") for pair in pairs),
         "same_clean_git_commit": len(commits) == 1 and "" not in commits and not any(dirty),
-        "same_dataset": len(datasets) == 1 and "" not in datasets,
+        "paired_dataset_hashes_match": all(pair_datasets_equal),
         "same_model": len(models) == 1 and "" not in models,
         "only_hierarchical_flag_differs": all(pair_configs_equal),
         "hierarchical_flag_assignment_valid": all(pair_flags_valid),
@@ -192,6 +229,19 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
     ) and protocol["completed_pair_n"] == len(EXPECTED_SEEDS)
     total_crossings = sum(int(pair["cluster_crossings"] or 0) for pair in pairs)
     total_replays = sum(int(pair["shadow_replays"] or 0) for pair in pairs)
+    total_cluster_opportunities = sum(int(pair["cluster_opportunities"] or 0) for pair in pairs)
+    total_inferred_matches = sum(
+        float(pair["cluster_diagnostics"]["inferred_match_n"] or 0.0) for pair in pairs
+    )
+    cluster_e_values = [
+        float(value)
+        for pair in pairs
+        for value in (
+            pair["cluster_diagnostics"]["min_e_value"],
+            pair["cluster_diagnostics"]["max_e_value"],
+        )
+        if value is not None
+    ]
     gates = {
         "score": float(score.get("delta_mean", 0.0)) >= 0.03
         and float(score.get("ci_low", -1.0)) >= 0.0,
@@ -217,6 +267,22 @@ def audit(sweep_dir: Path) -> dict[str, Any]:
         "comparison": comparison,
         "pairs": pairs,
         "mechanism": {
+            "shadow_failure_extractions": sum(
+                int(pair["shadow_failure_extractions"] or 0) for pair in pairs
+            ),
+            "exact_opportunities": sum(int(pair["exact_opportunities"] or 0) for pair in pairs),
+            "cluster_opportunities": total_cluster_opportunities,
+            "cluster_count": sum(
+                int(pair["cluster_diagnostics"]["cluster_n"] or 0) for pair in pairs
+            ),
+            "inferred_cluster_matches": total_inferred_matches,
+            "inferred_cluster_match_rate": (
+                total_inferred_matches / total_cluster_opportunities
+                if total_cluster_opportunities
+                else None
+            ),
+            "min_cluster_e_value": min(cluster_e_values) if cluster_e_values else None,
+            "max_cluster_e_value": max(cluster_e_values) if cluster_e_values else None,
             "cluster_crossings": total_crossings,
             "shadow_replays": total_replays,
             "probations": sum(int(pair["probations"] or 0) for pair in pairs),

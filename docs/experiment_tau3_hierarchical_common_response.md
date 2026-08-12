@@ -43,8 +43,8 @@ probation, activation, rejection, and future audit.
 
 The candidate passes this confirmation only if:
 
-1. all five pairs use aligned samples, the same clean commit/model/dataset/cache,
-   and differ only in the hierarchical flag;
+1. all five pairs use aligned samples, the same clean commit/model/cache, matching
+   within-pair dataset hashes, and differ only in the hierarchical flag;
 2. mean overall score improves by at least `+0.03` with paired hierarchical 95%
    interval lower bound at least `0`;
 3. changed-case success improves by at least `+0.03` with interval lower bound
