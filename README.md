@@ -18,6 +18,11 @@ Chinese documentation:
 
 - [Project overview](docs/project_overview_zh.md)
 - [Modules, fast/slow loops, and workflows](docs/modules_and_workflow_zh.md)
+- [Algorithm](docs/algorithm_zh.md)
+- [Architecture](docs/architecture_zh.md)
+- [Evaluation protocol](docs/evaluation_zh.md)
+- [Limitations](docs/limitations_zh.md)
+- [Interview notes](docs/interview_notes_zh.md)
 
 ## Core pipeline
 

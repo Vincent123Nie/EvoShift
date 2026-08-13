@@ -1,5 +1,7 @@
 # EvoShift evaluation protocol
 
+中文版本：[evaluation_zh.md](evaluation_zh.md)
+
 This document specifies how to evaluate VERA without turning online adaptation
 into test-set leakage. It is a protocol, not a result report. No number in this
 document is an empirical claim.

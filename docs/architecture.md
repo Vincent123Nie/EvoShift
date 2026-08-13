@@ -1,5 +1,7 @@
 # EvoShift architecture
 
+中文版本：[architecture_zh.md](architecture_zh.md)
+
 EvoShift is an API-only agent runtime for studying test-time adaptation under a
 non-stationary task stream. Its unit of evolution is external, typed state:
 procedural experience cards and a bounded retrieval policy. The project never

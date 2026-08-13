@@ -1,5 +1,7 @@
 # Limitations and non-goals
 
+中文版本：[limitations_zh.md](limitations_zh.md)
+
 This document is intentionally explicit. A strong interview answer should state
 which risks the system controls, which it merely measures, and which remain
 open research problems.

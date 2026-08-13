@@ -1,5 +1,7 @@
 # VERA algorithm
 
+中文版本：[algorithm_zh.md](algorithm_zh.md)
+
 VERA stands for **Verified Experience Replay and Adaptation**. It is EvoShift's
 two-time-scale test-time learning algorithm. The language model remains fixed;
 the evolving state consists of external procedural memories and an explicitly

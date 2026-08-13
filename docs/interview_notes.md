@@ -1,5 +1,7 @@
 # Interview notes
 
+中文版本：[interview_notes_zh.md](interview_notes_zh.md)
+
 This document is a defense guide for the engineering and research choices in
 EvoShift. It is not a script for claiming results that have not been measured.
 Replace every result placeholder with an artifact-backed number from a

@@ -89,4 +89,4 @@ NDCG-any@10 的配对 bootstrap 95% CI 为 `[+0.0513, +0.2704]`。LLM 只能重�
 
 > 我实现了一个 API-only 的自进化记忆 Agent。它不直接相信 LLM 生成的反思或单次反馈，而是把经验放入影子区，用同题 champion/challenger replay、试用期和后续 memory-on/off 反事实审计决定是否生效。系统将隐藏标签和当前反馈隔离于当前决策，并对每次状态变化保存版本、证据和成本。公开 LongMemEval_S 的受保护检索实验把 NDCG-any@10 从 0.7471 提升到 0.9047；在真实 policy-drift 流上我也保留了 Full EvoShift 未胜过 Reflexion 的负结果，并定位到保守信任门带来的适应延迟。
 
-更详细的算法、架构、实验协议和限制见 [algorithm.md](algorithm.md)、[architecture.md](architecture.md)、[evaluation.md](evaluation.md)、[limitations.md](limitations.md) 与 [interview_notes.md](interview_notes.md)。
+更详细内容见[算法说明](algorithm_zh.md)、[系统架构](architecture_zh.md)、[评估协议](evaluation_zh.md)、[限制与非目标](limitations_zh.md)和[面试准备手册](interview_notes_zh.md)。对应英文原文仍保留在同名无 `_zh` 后缀文件中。
