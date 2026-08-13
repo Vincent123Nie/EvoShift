@@ -14,7 +14,10 @@ as a claim of state-of-the-art performance. Its emphasis is on non-stationary
 evaluation, falsifiable promotion decisions, rollback, cost accounting, and an
 immutable held-out audit path.
 
-Chinese project overview: [docs/project_overview_zh.md](docs/project_overview_zh.md).
+Chinese documentation:
+
+- [Project overview](docs/project_overview_zh.md)
+- [Modules, fast/slow loops, and workflows](docs/modules_and_workflow_zh.md)
 
 ## Core pipeline
 

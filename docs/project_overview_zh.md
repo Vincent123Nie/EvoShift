@@ -17,6 +17,8 @@ EvoShift 把“从反馈学习”拆成受验证的状态迁移，目标是在**
 
 ## 核心流程
 
+详细模块图、快慢双环、单轮时序和记忆状态机见 [modules_and_workflow_zh.md](modules_and_workflow_zh.md)。
+
 ```text
 任务 -> 检索已激活记忆 -> 冻结 LLM 作答 -> 环境评分
      -> 评估反馈源/上下文是否可信 -> 生成候选经验
@@ -41,6 +43,13 @@ EvoShift 把“从反馈学习”拆成受验证的状态迁移，目标是在**
 | 可审计性 | SQLite 状态、不可变运行产物、预算账本、冻结 held-out audit | 实验不可复现或事后挑选结果 |
 
 项目还实现了 OpenAI-compatible `/responses` 客户端、重试/缓存/预算控制、假模型离线测试、公开数据下载与 SHA-256 固定、可恢复 sweep，以及 Static、Self-Refine、Reflexion-style、Replay-only、Full EvoShift 等可比基线。
+
+### 快环与慢环
+
+- **快环**按 episode 处理局部问题：从可信失败生成候选经验，经过 Shadow Replay、Probation 和 Future Audit 后，决定激活或回滚一条记忆。
+- **慢环**只在持续漂移报警后处理全局问题：生成受白名单限制的检索/写入策略补丁，并通过同样的保护性 replay 决定是否切换策略版本。
+
+快环改变“这类任务以后怎么做”，慢环改变“系统以后怎么检索和学习”；二者都不修改 LLM 参数。
 
 ## 已验证的结果
 
