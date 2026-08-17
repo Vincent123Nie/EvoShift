@@ -164,4 +164,120 @@ class ContextLocalProbation:
         }
 
 
-__all__ = ["ContextLocalProbation", "ContextProbationLease", "ObservableContext"]
+class ContextLocalProvisionalLane(ContextLocalProbation):
+    """Issue leases for a confirmed, source-stable context change.
+
+    The lane deliberately keeps the candidate outside ``MemoryManager`` until
+    future counterfactual audit confirms it.  It therefore cannot enter the
+    ordinary global retriever or mutate the committed trust model.
+    """
+
+    def __init__(self, config: EvolutionConfig):
+        super().__init__(config.model_copy(
+            update={
+                "context_local_probation_fast_path_max_age": (
+                    config.context_local_provisional_lane_max_age
+                ),
+                "context_local_probation_fast_path_max_uses": (
+                    config.context_local_provisional_lane_max_uses
+                ),
+                "context_local_probation_fast_path_min_trust": (
+                    config.context_local_provisional_lane_min_trust
+                ),
+            }
+        ))
+        self.min_source_trust = config.context_local_provisional_lane_min_source_trust
+        self.min_context_observations = (
+            config.context_local_provisional_lane_min_context_observations
+        )
+        self.match_attempts = 0
+        self.match_hits = 0
+        self.discard_calls = 0
+        self.discarded_leases = 0
+
+    def discard(self, memory_id: str) -> None:
+        before = len(self.pending())
+        super().discard(memory_id)
+        self.discard_calls += 1
+        self.discarded_leases += int(len(self.pending()) < before)
+
+    def match(
+        self,
+        *,
+        source: str,
+        context: str,
+        signal: str,
+        context_observations: int,
+        episode_index: int,
+    ) -> ContextProbationLease | None:
+        self.match_attempts += 1
+        lease = super().match(
+            source=source,
+            context=context,
+            signal=signal,
+            context_observations=context_observations,
+            episode_index=episode_index,
+        )
+        self.match_hits += int(lease is not None)
+        return lease
+
+    def register_from_assessment(
+        self,
+        memory: MemoryItem,
+        *,
+        source: str,
+        context: str,
+        signal: str,
+        source_posterior_mean: float,
+        context_observations: int,
+        pending_observations: int,
+        reason: str,
+        episode_index: int,
+        registered_context_observations: int | None = None,
+    ) -> ContextProbationLease | None:
+        """Register only a confirmed change from a mature source.
+
+        A pending contradiction remains quarantined because it may still be
+        transient noise. The lane becomes eligible only after the feedback
+        model commits the new signal.
+        """
+
+        if source_posterior_mean < self.min_source_trust:
+            return None
+        if context_observations < self.min_context_observations:
+            return None
+        if pending_observations != 0:
+            return None
+        if reason != "dynamic_confirmed_change":
+            return None
+        return self.register(
+            memory,
+            source=source,
+            context=context,
+            signal=signal,
+            context_observations=(
+                context_observations
+                if registered_context_observations is None
+                else registered_context_observations
+            ),
+            episode_index=episode_index,
+        )
+
+    def snapshot(self) -> dict[str, int | float | bool]:
+        return {
+            **super().snapshot(),
+            "min_source_trust": self.min_source_trust,
+            "min_context_observations": self.min_context_observations,
+            "match_attempts": self.match_attempts,
+            "match_hits": self.match_hits,
+            "discard_calls": self.discard_calls,
+            "discarded_leases": self.discarded_leases,
+        }
+
+
+__all__ = [
+    "ContextLocalProbation",
+    "ContextLocalProvisionalLane",
+    "ContextProbationLease",
+    "ObservableContext",
+]

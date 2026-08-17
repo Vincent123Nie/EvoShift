@@ -41,6 +41,19 @@ def _context_probation_payloads(run_dir: Path) -> list[dict[str, object]]:
     return [json.loads(row[0]) for row in events]
 
 
+def _event_payloads(run_dir: Path, event_type: str) -> list[dict[str, object]]:
+    connection = sqlite3.connect(run_dir / "state.sqlite3")
+    try:
+        events = connection.execute(
+            "SELECT payload_json FROM evolution_events "
+            "WHERE event_type=? ORDER BY event_id",
+            (event_type,),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [json.loads(row[0]) for row in events]
+
+
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_context_local_probation_uses_only_historical_feedback_for_intervention(
@@ -157,3 +170,52 @@ async def test_context_local_probation_uses_only_historical_feedback_for_interve
         "pre_predict_reason",
     ):
         assert flipped_target[key] == payloads[0][key]
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_provisional_lane_is_confirmed_and_additive(tmp_path: Path) -> None:
+    base = load_config(Path("configs/experiments/policy_shift_hard_demo.yaml"))
+    common = {
+        "storage": base.storage.model_copy(
+            update={"runs_dir": str(tmp_path / "runs"), "cache_enabled": False}
+        ),
+        "evaluation": base.evaluation.model_copy(update={"seed": 42}),
+        "policy": base.policy.model_copy(update={"top_k": 3}),
+    }
+    control_config = base.model_copy(update=common)
+    lane_config = control_config.model_copy(
+        update={
+            "evolution": control_config.evolution.model_copy(
+                update={
+                    "context_local_provisional_lane_enabled": True,
+                    "context_local_provisional_lane_min_trust": 0.10,
+                }
+            )
+        }
+    )
+    control = await EvoShiftRunner(
+        control_config,
+        create_benchmark(control_config.benchmark, root=Path.cwd(), seed=42),
+        workdir=Path.cwd(),
+    ).run()
+    lane = await EvoShiftRunner(
+        lane_config,
+        create_benchmark(lane_config.benchmark, root=Path.cwd(), seed=42),
+        workdir=Path.cwd(),
+    ).run()
+
+    assert lane.metrics["overall"] == control.metrics["overall"]
+    assert lane.metrics["policy_shift"] == control.metrics["policy_shift"]
+    evolution = lane.metrics["evolution"]
+    assert evolution["context_provisional_interventions"] >= 1
+    assert evolution["context_provisional_low_trust_interventions"] == 0
+    registrations = _event_payloads(
+        lane.run_dir,
+        "context_local_provisional_registered",
+    )
+    assert registrations
+    assert all(item["pending_observations"] == 0 for item in registrations)
+    probes = _event_payloads(lane.run_dir, "context_local_provisional_probe")
+    assert probes
+    assert any(item["feedback_success"] for item in probes)

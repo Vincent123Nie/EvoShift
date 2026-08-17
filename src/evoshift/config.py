@@ -128,6 +128,25 @@ class EvolutionConfig(ConfigModel):
         ge=0.0,
         le=1.0,
     )
+    context_local_provisional_lane_enabled: bool = False
+    context_local_provisional_lane_max_age: int = Field(default=4, ge=1, le=10000)
+    context_local_provisional_lane_max_uses: int = Field(default=2, ge=1, le=100)
+    context_local_provisional_lane_min_trust: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+    )
+    context_local_provisional_lane_min_source_trust: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+    )
+    context_local_provisional_lane_min_context_observations: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+    )
+    context_local_provisional_lane_current_feedback_probe_enabled: bool = True
     active_audit_enabled: bool = False
     active_audit_max_per_episode: int = Field(default=1, ge=1, le=20)
     active_audit_min_observations: int = Field(default=2, ge=1, le=100)
@@ -252,6 +271,15 @@ class EvolutionConfig(ConfigModel):
             if not self.dynamic_feedback_trust_enabled:
                 raise ValueError(
                     "context-local probation fast path requires dynamic feedback trust"
+                )
+        if self.context_local_provisional_lane_enabled:
+            if not self.future_audit_enabled:
+                raise ValueError("context-local provisional lane requires future audit")
+            if not self.paired_replay:
+                raise ValueError("context-local provisional lane requires paired replay")
+            if not self.dynamic_feedback_trust_enabled:
+                raise ValueError(
+                    "context-local provisional lane requires dynamic feedback trust"
                 )
         if self.active_audit_min_negative_observations > self.active_audit_min_observations:
             raise ValueError(

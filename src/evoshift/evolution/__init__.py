@@ -10,6 +10,7 @@ from evoshift.evolution.candidates import (
 from evoshift.evolution.circuit_breaker import CausalCircuitBreaker, PendingCausalCanary
 from evoshift.evolution.context_probation import (
     ContextLocalProbation,
+    ContextLocalProvisionalLane,
     ContextProbationLease,
     ObservableContext,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "CandidateEvidencePool",
     "CausalCircuitBreaker",
     "ContextLocalProbation",
+    "ContextLocalProvisionalLane",
     "ContextProbationLease",
     "DormantMemoryRevival",
     "ExperienceCritic",

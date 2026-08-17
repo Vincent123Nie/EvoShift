@@ -27,6 +27,7 @@ from evoshift.evolution import (
     CandidateEvidencePool,
     CausalCircuitBreaker,
     ContextLocalProbation,
+    ContextLocalProvisionalLane,
     ContextProbationLease,
     DormantMemoryRevival,
     ExperienceCritic,
@@ -37,6 +38,7 @@ from evoshift.evolution import (
     PendingCausalCanary,
     PendingRetirement,
     RetirementProbation,
+    candidate_signature,
     dormant_candidate_keys,
     order_semantic_dormant_candidates,
 )
@@ -279,6 +281,16 @@ class EvoShiftRunner:
                 )
                 else None
             )
+            context_local_provisional_lane = (
+                ContextLocalProvisionalLane(self.config.evolution)
+                if (
+                    self.config.evolution.context_local_provisional_lane_enabled
+                    and future_auditor is not None
+                    and behavior.use_memory
+                    and not self.frozen_audit
+                )
+                else None
+            )
             episodes: List[Episode] = []
             failures: List[FailureRecord] = []
             decisions: List[PromotionDecision] = []
@@ -313,6 +325,11 @@ class EvoShiftRunner:
             context_probation_expired = 0
             context_probation_retrieval_hit_bypasses = 0
             context_probation_low_trust_interventions = 0
+            context_provisional_interventions = 0
+            context_provisional_paired_controls = 0
+            context_provisional_forced_applications = 0
+            context_provisional_expired = 0
+            context_provisional_low_trust_interventions = 0
             audit_evidence: Dict[str, CandidateEvidence] = {}
             active_audit_eligible = 0
             active_audit_observations = 0
@@ -492,6 +509,8 @@ class EvoShiftRunner:
                 candidate = current or outcome.audit.memory
                 if context_local_probation is not None:
                     context_local_probation.discard(candidate.memory_id)
+                if context_local_provisional_lane is not None:
+                    context_local_provisional_lane.discard(candidate.memory_id)
                 evidence = audit_evidence.pop(candidate.memory_id, None)
                 shadow_derived = bool(evidence and evidence.has_shadow_evidence)
                 if outcome.completion_reason == "stream_end":
@@ -1260,6 +1279,8 @@ class EvoShiftRunner:
                         )
                 if context_local_probation is not None:
                     context_probation_expired += context_local_probation.expire(index)
+                if context_local_provisional_lane is not None:
+                    context_provisional_expired += context_local_provisional_lane.expire(index)
                 active_before = memory.active()
                 active_before_keys = {(item.memory_id, item.version) for item in active_before}
                 grace_episodes = self.config.evolution.active_audit_reactivation_grace_episodes
@@ -1513,10 +1534,35 @@ class EvoShiftRunner:
                         stale_active_memory_opportunities += 1
                         stale_pair_first_active_index.setdefault(pair, index)
                 pre_predict_assessment = trust_model.pre_predict(sample)
+                context_provisional_intervention: ContextProbationLease | None = None
+                context_provisional_control_prediction: Any = None
+                context_provisional_eligible = (
+                    context_local_provisional_lane is not None
+                    and pre_predict_assessment.trust
+                    >= max(
+                        context_local_provisional_lane.min_trust,
+                        self.config.evolution.min_feedback_trust_for_replay,
+                    )
+                    and pre_predict_assessment.pending_observations == 0
+                    and pre_predict_assessment.reason == "dynamic_pre_predict_consistent"
+                    and circuit_intervention is None
+                    and retirement_intervention is None
+                    and revival_intervention is None
+                )
+                if context_provisional_eligible:
+                    assert context_local_provisional_lane is not None
+                    context_provisional_intervention = context_local_provisional_lane.match(
+                        source=observable_source,
+                        context=observable_context,
+                        signal=pre_predict_assessment.signal,
+                        context_observations=pre_predict_assessment.context_observations,
+                        episode_index=index,
+                    )
                 context_probation_intervention: ContextProbationLease | None = None
                 context_probation_control_prediction: Any = None
                 context_probation_eligible = (
                     context_local_probation is not None
+                    and context_provisional_intervention is None
                     and pre_predict_assessment.trust >= context_local_probation.min_trust
                     and circuit_intervention is None
                     and retirement_intervention is None
@@ -1544,7 +1590,70 @@ class EvoShiftRunner:
                         if context_probation_intervention.memory_key in normal_keys:
                             context_probation_retrieval_hit_bypasses += 1
                             context_probation_intervention = None
-                if context_probation_intervention is not None:
+                if context_provisional_intervention is not None:
+                    assert context_local_provisional_lane is not None
+                    context_provisional_control_prediction = await agent.solve(
+                        sample,
+                        policy,
+                        use_memory=behavior.use_memory,
+                        self_refine=behavior.self_refine,
+                    )
+                    prediction = await agent.solve(
+                        sample,
+                        policy,
+                        extra_memories=[context_provisional_intervention.memory],
+                        use_memory=behavior.use_memory,
+                        self_refine=behavior.self_refine,
+                    )
+                    context_local_provisional_lane.consume(context_provisional_intervention)
+                    context_provisional_interventions += 1
+                    context_provisional_paired_controls += 1
+                    context_provisional_low_trust_interventions += int(
+                        pre_predict_assessment.trust
+                        < self.config.evolution.min_feedback_trust_for_replay
+                    )
+                    context_provisional_forced_applications += int(
+                        context_provisional_intervention.memory.memory_id
+                        in prediction.output.applied_memory_ids
+                    )
+                    store.record_event(
+                        run_id,
+                        "context_local_provisional_intervention",
+                        (
+                            f"{context_provisional_intervention.memory.memory_id}"
+                            f"@v{context_provisional_intervention.memory.version}"
+                        ),
+                        {
+                            "episode_index": index,
+                            "source": observable_source,
+                            "context": observable_context,
+                            "registered_index": context_provisional_intervention.registered_index,
+                            "registered_context_observations": (
+                                context_provisional_intervention.registered_context_observations
+                            ),
+                            "pre_predict_context_observations": (
+                                pre_predict_assessment.context_observations
+                            ),
+                            "expires_after_index": (
+                                context_provisional_intervention.expires_after_index
+                            ),
+                            "use_number": context_provisional_intervention.uses + 1,
+                            "max_uses": context_provisional_intervention.max_uses,
+                            "pre_predict_trust": pre_predict_assessment.trust,
+                            "pre_predict_source_posterior_mean": (
+                                pre_predict_assessment.source_posterior_mean
+                            ),
+                            "pre_predict_signal": pre_predict_assessment.signal,
+                            "pre_predict_reason": pre_predict_assessment.reason,
+                            "paired_control": True,
+                            "candidate_only": True,
+                            "retrieval_miss_rescue": True,
+                            "persistent_state_changed": False,
+                            "online_decision_uses": "learner_visible_feedback_only",
+                            "oracle_metrics_are_post_hoc_only": True,
+                        },
+                    )
+                elif context_probation_intervention is not None:
                     assert context_local_probation is not None
                     context_probation_control_prediction = await agent.solve(
                         sample,
@@ -1753,13 +1862,31 @@ class EvoShiftRunner:
                     and assessment.trust >= self.config.evolution.min_feedback_trust_for_replay
                 ):
                     for audit in future_auditor.pending_for(prediction.output.applied_memory_ids):
+                        intervention_memory_id: str | None = None
+                        intervention_control_prediction: Any = None
                         if (
                             context_probation_intervention is not None
                             and context_probation_control_prediction is not None
-                            and audit.memory.memory_id
-                            == context_probation_intervention.memory.memory_id
                         ):
-                            control_prediction = context_probation_control_prediction
+                            intervention_memory_id = (
+                                context_probation_intervention.memory.memory_id
+                            )
+                            intervention_control_prediction = (
+                                context_probation_control_prediction
+                            )
+                        elif (
+                            context_provisional_intervention is not None
+                            and context_provisional_control_prediction is not None
+                        ):
+                            intervention_memory_id = (
+                                context_provisional_intervention.memory.memory_id
+                            )
+                            intervention_control_prediction = (
+                                context_provisional_control_prediction
+                            )
+                        if intervention_memory_id == audit.memory.memory_id:
+                            assert intervention_control_prediction is not None
+                            control_prediction = intervention_control_prediction
                         else:
                             control_prediction = await agent.solve(
                                 sample,
@@ -2875,6 +3002,145 @@ class EvoShiftRunner:
                         },
                     )
                     if failure.proposed_memory is not None:
+                        provisional_lease = None
+                        if context_local_provisional_lane is not None:
+                            proposed = failure.proposed_memory
+                            active_signatures = {
+                                candidate_signature(item) for item in memory.active()
+                            }
+                            if (
+                                proposed.confidence >= policy.write_confidence_threshold
+                                and candidate_signature(proposed) not in active_signatures
+                                and assessment.source_posterior_mean
+                                >= context_local_provisional_lane.min_source_trust
+                                and assessment.context_observations
+                                >= context_local_provisional_lane.min_context_observations
+                                and assessment.pending_observations == 0
+                                and assessment.reason == "dynamic_confirmed_change"
+                            ):
+                                existing_versions = [
+                                    item.version
+                                    for item in store.list_memories()
+                                    if item.memory_id
+                                    == (
+                                        "prov-"
+                                        + memory.stable_memory_id(
+                                            proposed.trigger,
+                                            proposed.directive,
+                                        )
+                                    )
+                                ]
+                                provisional_candidate = proposed.model_copy(
+                                    update={
+                                        "memory_id": (
+                                            "prov-"
+                                            + memory.stable_memory_id(
+                                                proposed.trigger,
+                                                proposed.directive,
+                                            )
+                                        ),
+                                        "version": max(existing_versions, default=0) + 1,
+                                        "status": MemoryStatus.PROBATION,
+                                    }
+                                )
+                                provisional_lease = None
+                                probe_passed = True
+                                if (
+                                    self.config.evolution
+                                    .context_local_provisional_lane_current_feedback_probe_enabled
+                                ):
+                                    probe_prediction = await agent.solve(
+                                        sample,
+                                        policy,
+                                        extra_memories=[provisional_candidate],
+                                        use_memory=False,
+                                        self_refine=behavior.self_refine,
+                                    )
+                                    probe_score = score_feedback_sample(
+                                        sample,
+                                        probe_prediction.output.answer,
+                                    )
+                                    probe_passed = probe_score.success
+                                    store.record_event(
+                                        run_id,
+                                        "context_local_provisional_probe",
+                                        f"{provisional_candidate.memory_id}@v{provisional_candidate.version}",
+                                        {
+                                            "episode_index": index,
+                                            "feedback_success": probe_score.success,
+                                            "feedback_primary": probe_score.primary,
+                                            "persistent_state_changed": False,
+                                            "online_decision_uses": (
+                                                "learner_visible_feedback_only"
+                                            ),
+                                        },
+                                    )
+                                if probe_passed:
+                                    provisional_lease = (
+                                        context_local_provisional_lane.register_from_assessment(
+                                            provisional_candidate,
+                                            source=observable_source,
+                                            context=observable_context,
+                                            signal=assessment.signal,
+                                            source_posterior_mean=(
+                                                assessment.source_posterior_mean
+                                            ),
+                                            context_observations=assessment.context_observations,
+                                            pending_observations=assessment.pending_observations,
+                                            reason=assessment.reason,
+                                            episode_index=index,
+                                            registered_context_observations=(
+                                                pre_predict_assessment.context_observations
+                                            ),
+                                        )
+                                    )
+                                if provisional_lease is not None:
+                                    assert future_auditor is not None
+                                    if future_auditor.is_pending(
+                                        provisional_candidate.memory_id
+                                    ):
+                                        context_local_provisional_lane.discard(
+                                            provisional_candidate.memory_id
+                                        )
+                                        provisional_lease = None
+                                    else:
+                                        future_auditor.register(
+                                            provisional_candidate,
+                                            evidence_signature=(
+                                                f"provisional:{failure.failure_id}"
+                                            ),
+                                            start_index=index,
+                                        )
+                                        future_audit_registered += 1
+                                        store.record_event(
+                                            run_id,
+                                            "context_local_provisional_registered",
+                                            (
+                                                f"{provisional_candidate.memory_id}"
+                                                f"@v{provisional_candidate.version}"
+                                            ),
+                                            {
+                                                "episode_index": index,
+                                                "source": observable_source,
+                                                "context": observable_context,
+                                                "signal": assessment.signal,
+                                                "source_posterior_mean": (
+                                                    assessment.source_posterior_mean
+                                                ),
+                                                "context_observations": (
+                                                    assessment.context_observations
+                                                ),
+                                                "pending_observations": (
+                                                    assessment.pending_observations
+                                                ),
+                                                "candidate_only": True,
+                                                "persistent_state_changed": False,
+                                                "online_decision_uses": (
+                                                    "learner_visible_feedback_only"
+                                                ),
+                                                "oracle_metrics_are_post_hoc_only": True,
+                                            },
+                                        )
                         if not behavior.verify_before_promotion:
                             candidate = memory.stage(failure.proposed_memory, policy)
                             store.record_event(
@@ -3342,6 +3608,8 @@ class EvoShiftRunner:
 
             if context_local_probation is not None:
                 context_probation_expired += context_local_probation.expire_all()
+            if context_local_provisional_lane is not None:
+                context_provisional_expired += context_local_provisional_lane.expire_all()
 
             final_memories = tuple(memory.active())
             final_state_hash = state_fingerprint(policy, final_memories)
@@ -3594,6 +3862,30 @@ class EvoShiftRunner:
                         ),
                         "context_probation_low_trust_interventions": (
                             context_probation_low_trust_interventions
+                        ),
+                        "context_local_provisional_lane": (
+                            context_local_provisional_lane.snapshot()
+                            if context_local_provisional_lane is not None
+                            else {
+                                "enabled": False,
+                                "registrations": 0,
+                                "interventions": 0,
+                                "paired_controls": 0,
+                                "forced_applications": 0,
+                                "expirations": 0,
+                                "pending": 0,
+                            }
+                        ),
+                        "context_provisional_interventions": context_provisional_interventions,
+                        "context_provisional_paired_controls": (
+                            context_provisional_paired_controls
+                        ),
+                        "context_provisional_forced_applications": (
+                            context_provisional_forced_applications
+                        ),
+                        "context_provisional_expired": context_provisional_expired,
+                        "context_provisional_low_trust_interventions": (
+                            context_provisional_low_trust_interventions
                         ),
                         "feedback_quarantined": feedback_quarantined,
                         "detector_domains": len(detectors),

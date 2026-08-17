@@ -1,7 +1,7 @@
 import pytest
 
 from evoshift.config import EvolutionConfig
-from evoshift.evolution import ContextLocalProbation
+from evoshift.evolution import ContextLocalProbation, ContextLocalProvisionalLane
 from evoshift.schemas import MemoryItem
 
 
@@ -171,3 +171,80 @@ def test_context_probation_rejects_empty_signal_instead_of_creating_wildcard() -
         is None
     )
     assert probation.snapshot()["registrations"] == 0
+
+
+def test_provisional_lane_requires_mature_source_and_confirmed_change() -> None:
+    lane = ContextLocalProvisionalLane(
+        _config(
+            context_local_provisional_lane_enabled=True,
+            context_local_provisional_lane_min_source_trust=0.8,
+            context_local_provisional_lane_min_context_observations=3,
+        )
+    )
+    memory = _memory()
+    common = {
+        "source": "portal",
+        "context": "case",
+        "signal": "deny",
+        "source_posterior_mean": 0.9,
+        "context_observations": 3,
+        "pending_observations": 0,
+        "reason": "dynamic_confirmed_change",
+        "episode_index": 10,
+    }
+    assert (
+        lane.register_from_assessment(
+            memory, **{**common, "source_posterior_mean": 0.79}
+        )
+        is None
+    )
+    assert lane.register_from_assessment(
+        memory,
+        **{
+            **common,
+            "pending_observations": 1,
+            "reason": "dynamic_pending_change",
+        },
+    ) is None
+    assert (
+        lane.register_from_assessment(memory, **{**common, "context_observations": 2}) is None
+    )
+    lease = lane.register_from_assessment(memory, **common)
+    assert lease is not None
+    assert lane.match(
+        source="portal",
+        context="case",
+        signal="deny",
+        context_observations=4,
+        episode_index=11,
+    ) == lease
+
+
+def test_provisional_lane_is_bounded_and_discardable() -> None:
+    lane = ContextLocalProvisionalLane(
+        _config(
+            context_local_provisional_lane_max_age=1,
+            context_local_provisional_lane_max_uses=1,
+        )
+    )
+    lease = lane.register_from_assessment(
+        _memory(),
+        source="portal",
+        context="case",
+        signal="deny",
+        source_posterior_mean=0.9,
+        context_observations=2,
+        pending_observations=0,
+        reason="dynamic_confirmed_change",
+        episode_index=10,
+    )
+    assert lease is not None
+    lane.consume(lease)
+    assert lane.match(
+        source="portal",
+        context="case",
+        signal="deny",
+        context_observations=3,
+        episode_index=11,
+    ) is None
+    assert lane.snapshot()["exhaustions"] == 1
